@@ -11,8 +11,13 @@ Put a legally dumped ISO in `games/` or pass one explicitly to the extractor.
 python tools/openratchet.py self-test
 python tools/openratchet.py extract --iso games\Ratchet.iso
 python tools/native.py build
+python tools/native.py smoke --seconds 15
 python tools/native.py run
 ```
+
+Pass `--iso path\to\game.iso` when the dump is not the only `.iso` in
+`games/`. The runner receives the image directly for CDVD reads; it does not
+copy the disc into the repository.
 
 `tools/native.py` drives PS2Recomp, generates the stripped-ELF function map,
 copies the generated C++ into the PS2 runtime, and builds

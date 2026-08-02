@@ -6,9 +6,10 @@ This file is the project memory. Update the checkbox and status after each meani
 
 ## Current status
 
-- Current phase: Milestone 4 — correct CPU/control flow.
+- Current phase: Milestones 4/6/7 — CPU control flow, CDVD, and asset bring-up.
 - Native runner builds and opens a Windows OpenGL/audio window.
 - The current test runner survives startup without fatal or missing-target errors during short runs.
+- Latest smoke result: `python tools/native.py smoke --seconds 15` stayed alive until timeout with `cd_image_status=present` and `diagnostic_errors=0`.
 - The game is not playable yet.
 - Weapons do not need to be manually rewritten; translated original game logic should drive them.
 
@@ -62,7 +63,7 @@ Acceptance: the native runner starts without immediately crashing or entering a 
 - [ ] Replace heuristic exceptions with a proper Ghidra/exported function map.
 - [ ] Validate MIPS delay slots and indirect calls across the startup path.
 - [ ] Remove remaining missing-target errors during longer runs.
-- [ ] Add a repeatable startup smoke test with captured error output.
+- [x] Add a repeatable startup smoke test with captured error output.
 
 Acceptance: startup runs for an extended test period with no missing guest targets, fatal runtime errors, or uncontrolled dispatch loops.
 
@@ -76,20 +77,22 @@ Acceptance: startup runs for an extended test period with no missing guest targe
 
 Acceptance: game initialization completes consistently without state corruption from host stubs.
 
-### 6. CDVD and virtual filesystem — TODO
+### 6. CDVD and virtual filesystem — ACTIVE
 
-- [ ] Expose the user-provided ISO as a virtual CDVD device.
-- [ ] Implement file open/read/seek/close behavior used by the game.
+- [x] Expose the user-provided ISO as a virtual CDVD device.
+- [x] Implement the initial file open/read/seek/close behavior used by the game.
 - [ ] Implement directory and overlay lookup.
 - [ ] Support loading the first real game asset from the ISO.
 
 Acceptance: original game code loads an asset and an executable overlay through the native CDVD layer.
 
-### 7. Ratchet & Clank asset pipeline — TODO
+### 7. Ratchet & Clank asset pipeline — ACTIVE
 
-- [ ] Build/use Wrench for R&C1 asset inspection.
-- [ ] Unpack textures, levels, meshes, overlays, and executable packs as needed.
-- [ ] Identify the minimum runtime asset formats required for the first level.
+- [x] Build/use Wrench for R&C1 asset inspection.
+- [x] Unpack real global textures and level WAD containers.
+- [x] Identify the first-level WAD header, texture tables, moby/tie/shrub classes, collision, and overlay payloads.
+- [x] Decode one first-level moby mesh to GLB and round-trip overlay/collision binaries.
+- [ ] Unpack meshes and the first level into a runtime-sized asset set.
 - [ ] Add native asset loading without duplicating the whole disc unnecessarily.
 
 Acceptance: one known level’s real assets can be identified, decoded, and loaded by the native runtime.
@@ -271,7 +274,13 @@ Run the same command after extraction. A successful build ends with a linked `ps
 
 **Codex test**
 
-Launch the runner as a child process for a fixed interval, capture stderr, and assert:
+Run the built-in smoke test:
+
+```powershell
+python tools/native.py smoke --seconds 15
+```
+
+The test launches the runner as a child process, captures stderr, and asserts:
 
 - process stays alive for the interval;
 - OpenGL initializes;
@@ -292,7 +301,13 @@ Confirm a native window opens and remains responsive for at least one minute. At
 
 **Codex test**
 
-Run the startup smoke test repeatedly with a longer timeout and collect every guest-PC diagnostic. Verify that known entries such as `0x11DC18` and `0x1E9658` are present in the generated output. Fail the test on any missing target or dispatch loop.
+Run the startup smoke test repeatedly with a longer timeout and collect every guest-PC diagnostic:
+
+```powershell
+python tools/native.py smoke --seconds 60
+```
+
+Verify that known entries such as `0x11DC18` and `0x1E9658` are present in the generated output. Fail the test on any missing target or dispatch loop.
 
 ```powershell
 Select-String data\analysis\rc1.toml -Pattern ghidra_output
@@ -318,7 +333,12 @@ Let the game run through its longest available initialization path. Confirm it d
 
 **Codex test**
 
-Create a virtual-disc test that opens, reads, seeks, and closes known files from the ISO. Compare returned bytes and sizes against direct ISO extraction. Then enable a load trace and assert that the game requests are satisfied without host-file fallbacks.
+Run `python tools/native.py smoke --seconds 15`. It must report
+`cd_image_status=present`, stay alive until the timeout, and report zero
+diagnostic errors. Then add the direct virtual-disc test: open, read, seek,
+and close known ISO files, compare bytes and sizes against
+`tools/openratchet.py` extraction, and assert that the load trace has no host-
+file fallback.
 
 **User test**
 
@@ -328,7 +348,14 @@ Start from the user-provided ISO and watch the load path. The native runner must
 
 **Codex test**
 
-Use Wrench to unpack one known R&C1 texture, mesh, level file, and overlay. Repack or round-trip each asset where supported, then compare metadata and dimensions. Add a native loader test for those same files.
+Run Wrench `inspect_iso` on the ISO, `unpack_globals` for global textures,
+`unpack_level_wads` for level containers, and `unpack_binaries` on
+`levels/0_veldin_tutorial/level.wad`. Run `wrenchbuild test` on the global
+asset bank. The first-level binary output must contain the WAD header,
+collision, texture tables, moby/tie/shrub classes, and overlay payload. Run
+`extract_moby` on one `moby_classes/*/core.bin` and verify a non-empty GLB.
+Run Wrench `test` with `-f overlay` and `-f collision`; both must report
+`ALL TESTS HAPPY`. Add a native loader test for those same files.
 
 **User test**
 

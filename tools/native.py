@@ -44,9 +44,21 @@ def cmake(command: list[str]) -> None:
         run(command)
 
 
-def extract_if_needed() -> None:
+def locate_iso(requested: Path | None) -> Path:
+    if requested:
+        iso = requested if requested.is_absolute() else ROOT / requested
+        if not iso.is_file():
+            raise SystemExit(f"missing ISO: {iso}")
+        return iso
+    candidates = sorted((ROOT / "games").glob("*.iso"))
+    if len(candidates) != 1:
+        raise SystemExit("pass --iso; expected exactly one ISO in games/")
+    return candidates[0]
+
+
+def extract_if_needed(iso: Path) -> None:
     if not BOOT.is_file():
-        run([sys.executable, str(ROOT / "tools" / "openratchet.py"), "extract"])
+        run([sys.executable, str(ROOT / "tools" / "openratchet.py"), "extract", "--iso", str(iso)])
 
 
 def write_auto_config(path: Path) -> None:
@@ -109,8 +121,8 @@ def clean_generated() -> None:
     (ANALYSIS / "output").mkdir(parents=True)
 
 
-def build() -> Path:
-    extract_if_needed()
+def build(iso: Path) -> Path:
+    extract_if_needed(iso)
     for executable in (
         BUILD / "ps2xAnalyzer" / "ps2_analyzer.exe",
         BUILD / "ps2xRecomp" / "ps2_recomp.exe",
@@ -170,15 +182,61 @@ def build() -> Path:
     return ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
 
 
+def smoke(seconds: int, iso: Path) -> None:
+    runner = ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
+    if not runner.is_file():
+        runner = build(iso)
+
+    process = subprocess.Popen(
+        [str(runner), str(BOOT), str(iso)],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=seconds)
+        timed_out = False
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        stdout, stderr = process.communicate()
+        timed_out = True
+        stdout = (error.stdout or "") + stdout
+        stderr = (error.stderr or "") + stderr
+
+    errors = [
+        line
+        for line in stderr.splitlines()
+        if re.search(r"guest-|missing|fatal|unimplemented|no exact|error:", line, re.IGNORECASE)
+    ]
+    cd_image_seen = "Using argv CD image:" in stdout
+    print(f"smoke_seconds={seconds}")
+    print(f"process_status={'alive_until_timeout' if timed_out else process.returncode}")
+    print(f"cd_image_status={'present' if cd_image_seen else 'missing'}")
+    print(f"diagnostic_errors={len(errors)}")
+    for line in errors[-10:]:
+        print(line)
+    if not timed_out or not cd_image_seen or errors:
+        raise SystemExit(1)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("build", "run"))
+    parser.add_argument("command", choices=("build", "run", "smoke"))
+    parser.add_argument("--seconds", type=int, default=5)
+    parser.add_argument("--iso", type=Path)
     args = parser.parse_args()
-    runner = build() if args.command == "build" else ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
+    iso = locate_iso(args.iso)
+    if args.command == "smoke":
+        extract_if_needed(iso)
+        smoke(args.seconds, iso)
+        return 0
+
+    runner = build(iso) if args.command == "build" else ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
     if args.command == "run":
         if not runner.is_file():
-            runner = build()
-        subprocess.run([str(runner), str(BOOT)], cwd=ROOT, check=False)
+            runner = build(iso)
+        subprocess.run([str(runner), str(BOOT), str(iso)], cwd=ROOT, check=False)
     return 0
 
 
