@@ -9,7 +9,8 @@ This file is the project memory. Update the checkbox and status after each meani
 - Current phase: Milestones 4/6/7 — CPU control flow, CDVD, and asset bring-up.
 - Native runner builds and opens a Windows OpenGL/audio window.
 - The current test runner survives startup without fatal or missing-target errors during short runs.
-- Latest smoke result: `python tools/native.py smoke --seconds 15` stayed alive until timeout with `cd_image_status=present` and `diagnostic_errors=0`.
+- Latest smoke result: `python tools/native.py smoke --seconds 60` stayed alive until timeout with `cd_image_status=present` and `diagnostic_errors=0`.
+- CDVD now resolves ISO9660 paths, R&C1 raw-sector level ranges, and the standard disk-ready RPC.
 - The game is not playable yet.
 - Weapons do not need to be manually rewritten; translated original game logic should drive them.
 
@@ -20,7 +21,7 @@ This file is the project memory. Update the checkbox and status after each meani
 - [x] Keep the user ISO out of commits with `.gitignore`.
 - [x] Keep extracted data, saves, builds, logs, and generated sources out of commits.
 - [x] Keep PS2Recomp and Wrench as Git submodules rather than vendoring their source.
-- [ ] Document that users must provide their own legally dumped ISO.
+- [x] Document that users must provide their own legally dumped ISO.
 
 Acceptance: the main repository contains source/scripts/docs and submodule pointers, not the ISO or generated output.
 
@@ -62,7 +63,7 @@ Acceptance: the native runner starts without immediately crashing or entering a 
 - [x] Add the indirect/jump-table entry at `0x1E9658`.
 - [ ] Replace heuristic exceptions with a proper Ghidra/exported function map.
 - [ ] Validate MIPS delay slots and indirect calls across the startup path.
-- [ ] Remove remaining missing-target errors during longer runs.
+- [x] Remove remaining missing-target errors during longer runs.
 - [x] Add a repeatable startup smoke test with captured error output.
 
 Acceptance: startup runs for an extended test period with no missing guest targets, fatal runtime errors, or uncontrolled dispatch loops.
@@ -81,7 +82,9 @@ Acceptance: game initialization completes consistently without state corruption 
 
 - [x] Expose the user-provided ISO as a virtual CDVD device.
 - [x] Implement the initial file open/read/seek/close behavior used by the game.
-- [ ] Implement directory and overlay lookup.
+- [x] Implement ISO9660 directory lookup from the mounted image.
+- [x] Implement raw-sector level-range lookup from the R&C1 table of contents.
+- [x] Resolve and read the first real level range from the mounted ISO.
 - [ ] Support loading the first real game asset from the ISO.
 
 Acceptance: original game code loads an asset and an executable overlay through the native CDVD layer.

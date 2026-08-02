@@ -207,7 +207,7 @@ def smoke(seconds: int, iso: Path) -> None:
     errors = [
         line
         for line in stderr.splitlines()
-        if re.search(r"guest-|missing|fatal|unimplemented|no exact|error:", line, re.IGNORECASE)
+        if re.search(r"guest-|missing|fatal|unimplemented|no exact|unhandled|error:", line, re.IGNORECASE)
     ]
     cd_image_seen = "Using argv CD image:" in stdout
     print(f"smoke_seconds={seconds}")
@@ -222,9 +222,10 @@ def smoke(seconds: int, iso: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("build", "run", "smoke"))
+    parser.add_argument("command", choices=("build", "run", "smoke", "probe"))
     parser.add_argument("--seconds", type=int, default=5)
     parser.add_argument("--iso", type=Path)
+    parser.add_argument("--cd-path", default="levels/0/level.wad")
     args = parser.parse_args()
     iso = locate_iso(args.iso)
     if args.command == "smoke":
@@ -233,6 +234,11 @@ def main() -> int:
         return 0
 
     runner = build(iso) if args.command == "build" else ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
+    if args.command == "probe":
+        if not runner.is_file():
+            runner = build(iso)
+        subprocess.run([str(runner), str(BOOT), str(iso), "--probe-cd", args.cd_path], cwd=ROOT, check=True)
+        return 0
     if args.command == "run":
         if not runner.is_file():
             runner = build(iso)

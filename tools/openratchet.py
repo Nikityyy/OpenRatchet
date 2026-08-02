@@ -16,6 +16,9 @@ from pathlib import Path
 
 SECTOR_SIZE = 2048
 BOOT_ELF = "SCUS_971.99"
+RAC1_TOC_LSN = 1500
+RAC1_TOC_MAX_BYTES = 0x200000
+RAC1_HEADER_BYTES = 0x2434
 
 
 @dataclass(frozen=True)
@@ -217,6 +220,50 @@ def verify(data_dir: Path) -> None:
     print(f"segments:  {len(segments)}")
 
 
+def rac1_levels(iso: ISO9660) -> list[tuple[int, int, int]]:
+    prefix = iso.read(RAC1_TOC_LSN * SECTOR_SIZE, 8)
+    magic, toc_size = struct.unpack("<II", prefix)
+    if magic != 1 or not 0 < toc_size <= RAC1_TOC_MAX_BYTES:
+        raise ValueError("invalid R&C1 table of contents")
+
+    toc = iso.read(RAC1_TOC_LSN * SECTOR_SIZE, toc_size)
+    levels = []
+    seen = set()
+    for offset in range(8, len(toc) - 7, 8):
+        header_lsn, header_sectors = struct.unpack_from("<II", toc, offset)
+        if not header_sectors:
+            continue
+        try:
+            header = iso.read(header_lsn * SECTOR_SIZE, RAC1_HEADER_BYTES)
+        except ValueError:
+            continue
+        if struct.unpack_from("<I", header, 4)[0] != RAC1_HEADER_BYTES:
+            continue
+
+        ranges = [struct.unpack_from("<II", header, field) for field in (8, 16, 24, 32)]
+        ranges = [(start, size) for start, size in ranges if size]
+        if not ranges:
+            continue
+        low = min(start for start, _ in ranges)
+        high = max(start + size for start, size in ranges)
+        level = (struct.unpack_from("<i", header, 0)[0], low, high)
+        if level not in seen:
+            seen.add(level)
+            levels.append(level)
+    return levels
+
+
+def toc(iso_path: Path) -> None:
+    with ISO9660(iso_path) as iso:
+        levels = rac1_levels(iso)
+    if not levels:
+        raise ValueError("R&C1 table of contents contains no level ranges")
+    print(f"rac1_toc_lsn: {RAC1_TOC_LSN}")
+    print(f"rac1_levels: {len(levels)}")
+    for level_id, low, high in levels[:5]:
+        print(f"level: id={level_id} lsn={low} sectors={high - low}")
+
+
 def self_test() -> None:
     sample = bytearray(52 + 32)
     sample[:4] = b"\x7fELF"
@@ -247,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_verify = sub.add_parser("verify", help="verify extracted boot data")
     p_verify.add_argument("--data", type=Path, default=Path("data"))
+    p_toc = sub.add_parser("toc", help="validate the R&C1 raw-sector table of contents")
+    p_toc.add_argument("--iso", type=Path)
     sub.add_parser("self-test", help="run the extractor self-check")
     args = parser.parse_args(argv)
 
@@ -255,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
             extract(locate_iso(args.iso), args.out, args.all)
         elif args.command == "verify":
             verify(args.data)
+        elif args.command == "toc":
+            toc(locate_iso(args.iso))
         else:
             self_test()
         return 0
