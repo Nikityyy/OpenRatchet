@@ -1,0 +1,39 @@
+# Game dumps and generated runtime data
+/games/*.iso
+/data/
+/mc0/
+/mc1/
+/imgui.ini
+
+# Native build output
+**/build/
+**/bin/
+**/out/
+**/cmake-build-*/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/build.ninja
+**/.ninja_deps
+**/.ninja_log
+**/Testing/
+
+# Visual Studio
+/.vs/
+*.sln
+*.vcxproj*
+*.user
+
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs and OS noise
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
