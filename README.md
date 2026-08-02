@@ -21,9 +21,9 @@ copy the disc into the repository.
 
 `tools/native.py` drives PS2Recomp, generates the stripped-ELF function map,
 copies the generated C++ into the PS2 runtime, and builds
-`build/ps2recomp-ninja/ps2xRuntime/ps2EntryRunner.exe`. Build dependencies are
-expected under `third_party/PS2Recomp`; generated extraction and recompilation
-files stay under ignored `data/`.
+`build/ps2recomp-patched/ps2xRuntime/ps2EntryRunner.exe`. OpenRatchet-specific
+PS2Recomp changes live in `patches/PS2Recomp/` and are applied to an ignored
+build copy; `third_party/PS2Recomp` remains a clean pinned submodule.
 
 The current milestone is a native executable that initializes the PS2 runtime,
 opens a Windows OpenGL window, and stays alive through the game startup path.

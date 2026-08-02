@@ -1,0 +1,479 @@
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
+index 9228e83..e47f3dd 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
+@@ -47,6 +47,23 @@ namespace ps2_stubs
+         return snapshot;
+     }
+ 
++    bool probeCdFile(const std::string &path)
++    {
++        CdFileEntry entry{};
++        if (!registerCdFile(path, entry) || entry.sectors == 0u)
++        {
++            return false;
++        }
++
++        if (cdStreamingEndLbnForStart(entry.baseLbn) <= entry.baseLbn)
++        {
++            return false;
++        }
++
++        std::array<uint8_t, kCdSectorSize> sector{};
++        return readCdSectors(entry.baseLbn, 1u, sector.data(), sector.size());
++    }
++
+     void sceCdRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         const uint32_t a0 = getRegU32(ctx, 4); // usually lbn
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.h b/ps2xRuntime/src/lib/Kernel/Stubs/CD.h
+index dd5bae9..9074ff9 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/CD.h
+@@ -40,6 +40,7 @@ namespace ps2_stubs
+     };
+ 
+     CdDebugSnapshot getCdDebugSnapshot();
++    bool probeCdFile(const std::string &path);
+     void sceCdRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdSync(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdGetError(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+index 52fa84a..300ee5a 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+@@ -1,10 +1,14 @@
+ #include <algorithm>
+ #include <cctype>
++#include <limits>
+ 
+ namespace
+ {
+     constexpr uint32_t kCdSectorSize = 2048;
+     constexpr uint32_t kCdPseudoLbnStart = 0x00100000;
++    constexpr uint32_t kRac1TableOfContentsLbn = 1500;
++    constexpr uint32_t kRac1TableOfContentsMaxBytes = 0x200000;
++    constexpr uint32_t kRac1AmalgamatedHeaderBytes = 0x2434;
+ 
+     struct CdFileEntry
+     {
+@@ -12,13 +16,18 @@ namespace
+         uint32_t sizeBytes = 0;
+         uint32_t baseLbn = 0;
+         uint32_t sectors = 0;
++        bool imageBacked = false;
+     };
+ 
+     std::unordered_map<std::string, CdFileEntry> g_cdFilesByKey;
++    std::unordered_map<std::string, CdFileEntry> g_cdImageFilesByKey;
++    std::vector<std::pair<uint32_t, uint32_t>> g_cdImageRanges;
+     std::unordered_map<std::string, std::filesystem::path> g_cdLeafIndex;
+     std::unordered_map<std::string, std::filesystem::path> g_cdLoosePathIndex;
+     std::filesystem::path g_cdLeafIndexRoot;
+     bool g_cdLeafIndexBuilt = false;
++    std::filesystem::path g_cdImageIndexPath;
++    bool g_cdImageIndexBuilt = false;
+     uint32_t g_nextPseudoLbn = kCdPseudoLbnStart;
+     std::filesystem::path g_cdImageSizePath;
+     uint64_t g_cdImageSizeBytes = 0;
+@@ -232,6 +241,247 @@ namespace
+         return resolved.lexically_normal();
+     }
+ 
++    void indexCdImageDirectory(std::ifstream &image,
++                               uint32_t lbn,
++                               uint32_t byteCount,
++                               const std::string &parent,
++                               std::unordered_set<uint64_t> &visited)
++    {
++        const auto readLe32 = [](const uint8_t *bytes)
++        {
++            uint32_t value = 0;
++            std::memcpy(&value, bytes, sizeof(value));
++            return value;
++        };
++
++        if (byteCount == 0 || byteCount > 64u * 1024u * 1024u)
++        {
++            return;
++        }
++
++        const uint64_t visitKey = (static_cast<uint64_t>(lbn) << 32) | byteCount;
++        if (!visited.insert(visitKey).second)
++        {
++            return;
++        }
++
++        std::vector<uint8_t> data(byteCount);
++        image.seekg(static_cast<std::streamoff>(lbn) * kCdSectorSize, std::ios::beg);
++        image.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size()));
++        if (!image)
++        {
++            image.clear();
++            return;
++        }
++
++        for (uint32_t offset = 0; offset < byteCount;)
++        {
++            const uint8_t recordLength = data[offset];
++            if (recordLength == 0)
++            {
++                offset = ((offset / kCdSectorSize) + 1u) * kCdSectorSize;
++                continue;
++            }
++            if (recordLength < 34u || offset + recordLength > byteCount)
++            {
++                break;
++            }
++
++            const uint8_t *record = data.data() + offset;
++            offset += recordLength;
++            const uint8_t nameLength = record[32];
++            if (33u + nameLength > recordLength || nameLength == 0u || nameLength == 1u)
++            {
++                continue;
++            }
++
++            std::string name(reinterpret_cast<const char *>(record + 33), nameLength);
++            name = normalizeCdPathNoPrefix(std::move(name));
++            if (name.empty())
++            {
++                continue;
++            }
++
++            const std::string relative = parent.empty() ? name : parent + "/" + name;
++            const uint32_t childLbn = readLe32(record + 2);
++            const uint32_t childSize = readLe32(record + 10);
++            if ((record[25] & 2u) != 0u)
++            {
++                indexCdImageDirectory(image, childLbn, childSize, relative, visited);
++                continue;
++            }
++
++            CdFileEntry entry;
++            entry.sizeBytes = childSize;
++            entry.baseLbn = childLbn;
++            entry.sectors = sectorsForBytes(childSize);
++            entry.imageBacked = true;
++            g_cdImageFilesByKey[cdPathKey(relative)] = entry;
++        }
++    }
++
++    void indexRac1TableOfContents(std::ifstream &image)
++    {
++        uint64_t totalSectors = 0;
++        if (!tryGetCdImageTotalSectors(totalSectors) ||
++            totalSectors <= kRac1TableOfContentsLbn)
++        {
++            return;
++        }
++
++        const auto readLe32 = [](const uint8_t *bytes)
++        {
++            uint32_t value = 0;
++            std::memcpy(&value, bytes, sizeof(value));
++            return value;
++        };
++        const auto readImage = [&](uint64_t offset, uint8_t *dst, size_t size)
++        {
++            image.clear();
++            image.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
++            image.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(size));
++            return image && static_cast<size_t>(image.gcount()) == size;
++        };
++
++        std::array<uint8_t, 8> prefix{};
++        if (!readImage(static_cast<uint64_t>(kRac1TableOfContentsLbn) * kCdSectorSize,
++                       prefix.data(), prefix.size()) ||
++            readLe32(prefix.data()) != 1u)
++        {
++            return;
++        }
++
++        const uint32_t tocBytes = readLe32(prefix.data() + 4);
++        const uint64_t tocOffset = static_cast<uint64_t>(kRac1TableOfContentsLbn) * kCdSectorSize;
++        if (tocBytes == 0u || tocBytes > kRac1TableOfContentsMaxBytes ||
++            tocBytes > (totalSectors * kCdSectorSize) - tocOffset)
++        {
++            return;
++        }
++
++        std::vector<uint8_t> toc(tocBytes);
++        if (!readImage(tocOffset, toc.data(), toc.size()))
++        {
++            return;
++        }
++
++        for (size_t offset = 8; offset + 8 <= toc.size(); offset += 8)
++        {
++            const uint32_t headerLbn = readLe32(toc.data() + offset);
++            const uint32_t headerSectors = readLe32(toc.data() + offset + 4);
++            if (headerSectors == 0u || headerLbn >= totalSectors ||
++                headerSectors > totalSectors - headerLbn)
++            {
++                continue;
++            }
++
++            std::vector<uint8_t> header(kRac1AmalgamatedHeaderBytes);
++            if (!readImage(static_cast<uint64_t>(headerLbn) * kCdSectorSize,
++                           header.data(), header.size()) ||
++                readLe32(header.data() + 4) != kRac1AmalgamatedHeaderBytes)
++            {
++                continue;
++            }
++
++            uint32_t lowLbn = std::numeric_limits<uint32_t>::max();
++            uint32_t highLbn = 0u;
++            for (size_t rangeOffset : {size_t(8), size_t(16), size_t(24), size_t(32)})
++            {
++                const uint32_t rangeLbn = readLe32(header.data() + rangeOffset);
++                const uint32_t rangeSectors = readLe32(header.data() + rangeOffset + 4);
++                if (rangeSectors == 0u || rangeLbn >= totalSectors ||
++                    rangeSectors > totalSectors - rangeLbn)
++                {
++                    continue;
++                }
++                lowLbn = std::min(lowLbn, rangeLbn);
++                highLbn = std::max(highLbn, rangeLbn + rangeSectors);
++            }
++            if (lowLbn == std::numeric_limits<uint32_t>::max() || highLbn <= lowLbn)
++            {
++                continue;
++            }
++
++            const std::string prefix = "levels/" + std::to_string(static_cast<int32_t>(readLe32(header.data()))) + "/";
++            CdFileEntry level;
++            level.baseLbn = lowLbn;
++            level.sectors = highLbn - lowLbn;
++            level.sizeBytes = level.sectors * kCdSectorSize;
++            level.imageBacked = true;
++            g_cdImageRanges.emplace_back(level.baseLbn, level.baseLbn + level.sectors);
++            g_cdImageFilesByKey[cdPathKey(prefix + "level.wad")] = level;
++
++            const std::array<std::pair<const char *, size_t>, 4> ranges = {{
++                {"data.bin", 8},
++                {"gameplay_ntsc.bin", 16},
++                {"gameplay_pal.bin", 24},
++                {"occlusion.bin", 32},
++            }};
++            for (const auto &[name, rangeOffset] : ranges)
++            {
++                const uint32_t rangeLbn = readLe32(header.data() + rangeOffset);
++                const uint32_t rangeSectors = readLe32(header.data() + rangeOffset + 4);
++                if (rangeSectors == 0u || rangeLbn >= totalSectors ||
++                    rangeSectors > totalSectors - rangeLbn)
++                {
++                    continue;
++                }
++                CdFileEntry part = level;
++                part.baseLbn = rangeLbn;
++                part.sectors = rangeSectors;
++                part.sizeBytes = rangeSectors * kCdSectorSize;
++                g_cdImageRanges.emplace_back(part.baseLbn, part.baseLbn + part.sectors);
++                g_cdImageFilesByKey[cdPathKey(prefix + name)] = part;
++            }
++        }
++    }
++
++    void ensureCdImageIndex()
++    {
++        const std::filesystem::path imagePath = getCdImagePath();
++        if (g_cdImageIndexBuilt && g_cdImageIndexPath == imagePath)
++        {
++            return;
++        }
++
++        g_cdImageFilesByKey.clear();
++        g_cdImageRanges.clear();
++        g_cdImageIndexPath = imagePath;
++        g_cdImageIndexBuilt = true;
++        if (imagePath.empty())
++        {
++            return;
++        }
++
++        std::ifstream image(imagePath, std::ios::binary);
++        if (!image)
++        {
++            return;
++        }
++
++        std::array<uint8_t, kCdSectorSize> pvd{};
++        image.seekg(static_cast<std::streamoff>(16u) * kCdSectorSize, std::ios::beg);
++        image.read(reinterpret_cast<char *>(pvd.data()), static_cast<std::streamsize>(pvd.size()));
++        if (!image || pvd[0] != 1u || std::memcmp(pvd.data() + 1, "CD001", 5) != 0 || pvd[6] != 1u)
++        {
++            return;
++        }
++
++        const uint8_t *root = pvd.data() + 156;
++        if (root[0] < 34u)
++        {
++            return;
++        }
++
++        uint32_t rootLbn = 0;
++        uint32_t rootSize = 0;
++        std::memcpy(&rootLbn, root + 2, sizeof(rootLbn));
++        std::memcpy(&rootSize, root + 10, sizeof(rootSize));
++        std::unordered_set<uint64_t> visited;
++        indexCdImageDirectory(image, rootLbn, rootSize, "", visited);
++        indexRac1TableOfContents(image);
++    }
++
+     bool resolveCaseInsensitivePath(const std::filesystem::path &root,
+                                     const std::filesystem::path &relative,
+                                     std::filesystem::path &resolvedOut)
+@@ -377,13 +627,28 @@ namespace
+                     }
+                     else
+                     {
+-                        g_lastCdError = -1;
+-                        return false;
++                        ec = std::make_error_code(std::errc::no_such_file_or_directory);
+                     }
+                 }
+             }
+         }
+ 
++        if (!std::filesystem::exists(path, ec) || ec || !std::filesystem::is_regular_file(path, ec))
++        {
++            ensureCdImageIndex();
++            auto imageIt = g_cdImageFilesByKey.find(key);
++            if (imageIt != g_cdImageFilesByKey.end())
++            {
++                entryOut = imageIt->second;
++                g_cdFilesByKey.emplace(key, entryOut);
++                g_lastCdError = 0;
++                return true;
++            }
++
++            g_lastCdError = -1;
++            return false;
++        }
++
+         const uint64_t sizeBytes = std::filesystem::file_size(path, ec);
+         if (ec)
+         {
+@@ -433,8 +698,9 @@ namespace
+         }
+ 
+         file.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(byteCount));
+-        g_lastCdError = 0;
+-        return true;
++        const bool complete = static_cast<size_t>(file.gcount()) == byteCount;
++        g_lastCdError = complete ? 0 : -1;
++        return complete;
+     }
+ 
+     bool readCdSectors(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount)
+@@ -447,9 +713,13 @@ namespace
+                 continue;
+             }
+ 
++            if (entry.imageBacked)
++            {
++                return readHostRange(getCdImagePath(), static_cast<uint64_t>(lbn) * kCdSectorSize, dst, byteCount);
++            }
++
+             const uint64_t relativeLbn = static_cast<uint64_t>(lbn - entry.baseLbn);
+-            const uint64_t offset = relativeLbn * kCdSectorSize;
+-            return readHostRange(entry.hostPath, offset, dst, byteCount);
++            return readHostRange(entry.hostPath, relativeLbn * kCdSectorSize, dst, byteCount);
+         }
+ 
+         const std::filesystem::path cdImage = getCdImagePath();
+@@ -514,12 +784,22 @@ namespace
+ 
+     uint32_t cdStreamingEndLbnForStart(uint32_t lbn)
+     {
++        uint32_t bestEndLbn = 0xFFFFFFFFu;
+         CdFileEntry entry{};
+         if (findRegisteredCdFileForLbn(lbn, entry))
+         {
+-            return entry.baseLbn + entry.sectors;
++            bestEndLbn = entry.baseLbn + entry.sectors;
++        }
++
++        ensureCdImageIndex();
++        for (const auto &[startLbn, endLbn] : g_cdImageRanges)
++        {
++            if (lbn >= startLbn && lbn < endLbn)
++            {
++                bestEndLbn = std::min(bestEndLbn, endLbn);
++            }
+         }
+-        return 0xFFFFFFFFu;
++        return bestEndLbn;
+     }
+ 
+     bool writeCdSearchResult(uint8_t *rdram, uint32_t fileAddr, const std::string &ps2Path, const CdFileEntry &entry)
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+index 4aeb00f..aea08d7 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+@@ -568,7 +568,24 @@ namespace ps2_syscalls
+             request.endFunction = endFunction;
+             request.endParameter = endParameter;
+ 
+-            iopResult = PS2IopTransport::handleRpc(runtime, rdram, ctx, request);
++            // CDVDFSV's disk-ready server is a BIOS service, not a game profile.
++            // CD_SERVER_DISKREADY (0x8000059A), function 0, returns the ready state.
++            if (sid == 0x8000059Au && rpcNum == 0u)
++            {
++                iopResult.handled = true;
++                iopResult.resultAddress = receiveBuffer;
++                if (receiveBuffer != 0u && receiveSize >= sizeof(uint32_t))
++                {
++                    if (uint32_t *result = reinterpret_cast<uint32_t *>(getMemPtr(rdram, receiveBuffer)); result)
++                    {
++                        *result = 2u;
++                    }
++                }
++            }
++            else
++            {
++                iopResult = PS2IopTransport::handleRpc(runtime, rdram, ctx, request);
++            }
+             handled = iopResult.handled;
+             handledByIop = iopResult.handled;
+             resultPointer = iopResult.resultAddress;
+diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
+index e2c08b5..fdc6eb5 100644
+--- a/ps2xRuntime/src/main.cpp
++++ b/ps2xRuntime/src/main.cpp
+@@ -1,5 +1,6 @@
+ #include "ps2_runtime.h"
+ #include "games_database.h"
++#include "Stubs/CD.h"
+ #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
+ #include "ps2_debug_panel.h"
+ #endif
+@@ -183,6 +184,21 @@ int main(int argc, char *argv[])
+             },
+             &debugPanel);
+ #endif
++        if (argc >= 3 && argv[2] && argv[2][0] != '\0')
++        {
++            PS2Runtime::IoPaths ioPaths = PS2Runtime::getIoPaths();
++            ioPaths.cdImage = std::filesystem::path(argv[2]);
++            runtime.setIoPaths(ioPaths);
++            std::cout << "Using argv CD image: " << ioPaths.cdImage << std::endl;
++        }
++
++        if (argc >= 5 && std::string(argv[3]) == "--probe-cd")
++        {
++            const bool found = ps2_stubs::probeCdFile(argv[4]);
++            std::cout << "CD probe " << (found ? "ok: " : "missing: ") << argv[4] << std::endl;
++            return found ? 0 : 1;
++        }
++
+         if (!runtime.initialize(windowTitle.c_str()))
+         {
+             std::cerr << "Failed to initialize PS2 runtime" << std::endl;
+warning: in the working copy of 'ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ps2xRuntime/src/lib/Kernel/Stubs/CD.h', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ps2xRuntime/src/main.cpp', LF will be replaced by CRLF the next time Git touches it
+

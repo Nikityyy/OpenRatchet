@@ -11,6 +11,7 @@ This file is the project memory. Update the checkbox and status after each meani
 - The current test runner survives startup without fatal or missing-target errors during short runs.
 - Latest smoke result: `python tools/native.py smoke --seconds 60` stayed alive until timeout with `cd_image_status=present` and `diagnostic_errors=0`.
 - CDVD now resolves ISO9660 paths, R&C1 raw-sector level ranges, and the standard disk-ready RPC.
+- CD streaming boundaries now follow registered files and discovered R&C1 raw ranges.
 - The game is not playable yet.
 - Weapons do not need to be manually rewritten; translated original game logic should drive them.
 
@@ -85,6 +86,7 @@ Acceptance: game initialization completes consistently without state corruption 
 - [x] Implement ISO9660 directory lookup from the mounted image.
 - [x] Implement raw-sector level-range lookup from the R&C1 table of contents.
 - [x] Resolve and read the first real level range from the mounted ISO.
+- [x] Bound native CD streaming to the discovered level ranges.
 - [ ] Support loading the first real game asset from the ISO.
 
 Acceptance: original game code loads an asset and an executable overlay through the native CDVD layer.

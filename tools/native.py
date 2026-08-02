@@ -16,12 +16,15 @@ DATA = ROOT / "data"
 BOOT = DATA / "raw" / "SCUS_971.99"
 ANALYSIS = DATA / "analysis"
 RECOMP = ROOT / "third_party" / "PS2Recomp"
+RECOMP_PATCHES = ROOT / "patches" / "PS2Recomp"
+PATCHED_RECOMP = ROOT / "build" / "ps2recomp-source"
 BUILD = ROOT / "build" / "ps2recomp-ninja"
+RUNTIME_BUILD = ROOT / "build" / "ps2recomp-patched"
 
 
-def run(command: list[str]) -> None:
+def run(command: list[str], cwd: Path = ROOT) -> None:
     print("+", " ".join(command))
-    subprocess.run(command, cwd=ROOT, check=True)
+    subprocess.run(command, cwd=cwd, check=True)
 
 
 def cmake(command: list[str]) -> None:
@@ -121,6 +124,36 @@ def clean_generated() -> None:
     (ANALYSIS / "output").mkdir(parents=True)
 
 
+def prepare_recomp_source() -> Path:
+    if PATCHED_RECOMP.exists():
+        shutil.rmtree(PATCHED_RECOMP)
+    shutil.copytree(RECOMP, PATCHED_RECOMP, ignore=shutil.ignore_patterns(".git"))
+    patches = sorted(RECOMP_PATCHES.glob("*.patch"))
+    if not patches:
+        raise SystemExit(f"missing OpenRatchet patches: {RECOMP_PATCHES}")
+    for patch in patches:
+        run(
+            [
+                "git",
+                "apply",
+                "--whitespace=nowarn",
+                f"--directory={PATCHED_RECOMP.relative_to(ROOT).as_posix()}",
+                str(patch),
+            ]
+        )
+    return PATCHED_RECOMP
+
+
+def prepare_runtime_dependencies() -> None:
+    source = BUILD / "ThirdParty"
+    destination = RUNTIME_BUILD / "ThirdParty"
+    if not source.is_dir():
+        return
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
+
+
 def build(iso: Path) -> Path:
     extract_if_needed(iso)
     for executable in (
@@ -132,6 +165,7 @@ def build(iso: Path) -> Path:
 
     ANALYSIS.mkdir(parents=True, exist_ok=True)
     clean_generated()
+    recomp = prepare_recomp_source()
     config = ANALYSIS / "rc1.toml"
     auto_config = ANALYSIS / "rc1-auto.toml"
     function_map = ANALYSIS / "auto-map.csv"
@@ -143,8 +177,8 @@ def build(iso: Path) -> Path:
     prepare_config(config)
     run([str(BUILD / "ps2xRecomp" / "ps2_recomp.exe"), str(config)])
 
-    runner_source = RECOMP / "ps2xRuntime" / "src" / "runner"
-    runner_include = RECOMP / "ps2xRuntime" / "include"
+    runner_source = recomp / "ps2xRuntime" / "src" / "runner"
+    runner_include = recomp / "ps2xRuntime" / "include"
     for source in runner_source.glob("*.cpp"):
         source.unlink()
     for header in runner_include.glob("ps2_recompiled_*.h"):
@@ -154,36 +188,39 @@ def build(iso: Path) -> Path:
     for header in (ANALYSIS / "output").glob("*.h"):
         shutil.copy2(header, runner_include / header.name)
 
+    prepare_runtime_dependencies()
     cmake(
         [
             "cmake",
             "-S",
-            str(RECOMP),
+            str(recomp),
             "-B",
-            str(ROOT / "build" / "ps2recomp-ninja"),
+            str(RUNTIME_BUILD),
             "-G",
             "Ninja",
             "-DPS2X_BUILD_STUDIO=OFF",
             "-DPS2X_BUILD_TEST=OFF",
             "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+            f"-DFETCHCONTENT_BASE_DIR={BUILD / '_deps'}",
+            "-DPS2X_ENABLE_FFMPEG=OFF",
         ]
     )
     cmake(
         [
             "cmake",
             "--build",
-            str(ROOT / "build" / "ps2recomp-ninja"),
+            str(RUNTIME_BUILD),
             "--target",
             "ps2EntryRunner",
             "-j",
             "8",
         ]
     )
-    return ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
+    return RUNTIME_BUILD / "ps2xRuntime" / "ps2EntryRunner.exe"
 
 
 def smoke(seconds: int, iso: Path) -> None:
-    runner = ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
+    runner = RUNTIME_BUILD / "ps2xRuntime" / "ps2EntryRunner.exe"
     if not runner.is_file():
         runner = build(iso)
 
@@ -233,7 +270,7 @@ def main() -> int:
         smoke(args.seconds, iso)
         return 0
 
-    runner = build(iso) if args.command == "build" else ROOT / "build" / "ps2recomp-ninja" / "ps2xRuntime" / "ps2EntryRunner.exe"
+    runner = build(iso) if args.command == "build" else RUNTIME_BUILD / "ps2xRuntime" / "ps2EntryRunner.exe"
     if args.command == "probe":
         if not runner.is_file():
             runner = build(iso)
