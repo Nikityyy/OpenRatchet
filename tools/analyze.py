@@ -55,17 +55,11 @@ def run_ps2xanalyzer(analyzer_path, elf_path, output_dir):
     print(f"Running ps2xAnalyzer: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True)
-    except FileNotFoundError:
-        print(f"Warning: {analyzer_path} not found. Ensure it is built or available in PATH.")
-        # We'll create a dummy TOML for now to allow the script to proceed if analyzer is missing
-        with open(toml_path, 'w', encoding='utf-8') as f:
-            f.write('[general]\n')
-            f.write(f'input = "{elf_path.replace("\\\\", "/")}"\n')
-            f.write(f'output = "{output_dir.replace("\\\\", "/")}/output/"\n')
-            f.write('single_file_output = false\n')
-            f.write('patch_syscalls = false\n')
-            f.write('patch_cop0 = true\n')
-            f.write('patch_cache = true\n')
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"ps2xAnalyzer was not found: {analyzer_path}. "
+            "Install/build PS2Recomp or pass --analyzer PATH."
+        ) from exc
 
     return toml_path
 

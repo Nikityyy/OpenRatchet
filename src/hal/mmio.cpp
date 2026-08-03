@@ -1,4 +1,5 @@
 #include "openratchet/mmio.h"
+#include <vector>
 #include <unordered_map>
 #include <iostream>
 #include <iomanip>
@@ -6,66 +7,65 @@
 struct MMIORange {
     uint32_t start;
     uint32_t end;
-    const char* name;
+    MMIO_Handler* handler;
 };
 
-static const MMIORange MMIO_RANGES[] = {
-    {0x10000000, 0x100003FF, "Timers"},
-    {0x10000800, 0x10000BFF, "IPU"},
-    {0x10001000, 0x10001FFF, "GIF"},
-    {0x10002000, 0x100023FF, "Reserved"},
-    {0x10003000, 0x100037FF, "VIF0"},
-    {0x10003800, 0x10003FFF, "VIF1"},
-    {0x10004000, 0x10007FFF, "VU0/VU1 Mem"},
-    {0x10008000, 0x1000DFFF, "DMA Channels"},
-    {0x1000E000, 0x1000EFFF, "DMA Control"},
-    {0x1000F000, 0x1000F5FF, "INTC/SBUS/Timer Ctrl"}
-};
-
-class DummyHandler : public MMIO_Handler {
+class RegisterHandler final : public MMIO_Handler {
     const char* name;
+    std::unordered_map<uint32_t, uint32_t> values;
 public:
-    DummyHandler(const char* n) : name(n) {}
+    explicit RegisterHandler(const char* n) : name(n) {}
     
     uint32_t Read32(uint32_t addr) override {
-        // std::cout << "[MMIO READ] " << name << " at 0x" << std::hex << addr << std::dec << std::endl;
-        return 0;
+        const auto it = values.find(addr & ~3u);
+        const uint32_t value = it == values.end() ? 0u : it->second;
+        std::clog << "[MMIO READ] " << name << " 0x" << std::hex << addr
+                  << " -> 0x" << value << std::dec << '\n';
+        return value;
     }
     void Write32(uint32_t addr, uint32_t val) override {
-        // std::cout << "[MMIO WRITE] " << name << " at 0x" << std::hex << addr << " = 0x" << val << std::dec << std::endl;
+        values[addr & ~3u] = val;
+        std::clog << "[MMIO WRITE] " << name << " 0x" << std::hex << addr
+                  << " = 0x" << val << std::dec << '\n';
     }
 };
 
-static DummyHandler timer_handler("Timers");
-static DummyHandler ipu_handler("IPU");
-static DummyHandler gif_handler("GIF");
-static DummyHandler vif0_handler("VIF0");
-static DummyHandler vif1_handler("VIF1");
-static DummyHandler vu_handler("VU0/VU1 Mem");
-static DummyHandler dma_ch_handler("DMA Channels");
-static DummyHandler dma_ctrl_handler("DMA Control");
-static DummyHandler intc_handler("INTC/SBUS/Timer Ctrl");
-static DummyHandler default_handler("Unknown MMIO");
+static RegisterHandler timer_handler("Timers");
+static RegisterHandler ipu_handler("IPU");
+static RegisterHandler gif_handler("GIF");
+static RegisterHandler vif0_handler("VIF0");
+static RegisterHandler vif1_handler("VIF1");
+static RegisterHandler vu_handler("VU0/VU1 Mem");
+static RegisterHandler dma_ch_handler("DMA Channels");
+static RegisterHandler dma_ctrl_handler("DMA Control");
+static RegisterHandler intc_handler("INTC/SBUS/Timer Ctrl");
+static RegisterHandler default_handler("Unknown MMIO");
+static std::vector<MMIORange> handlers;
 
 static MMIO_Handler* GetHandler(uint32_t addr) {
-    for (const auto& range : MMIO_RANGES) {
-        if (addr >= range.start && addr <= range.end) {
-            if (addr <= 0x100003FF) return &timer_handler;
-            if (addr >= 0x10000800 && addr <= 0x10000BFF) return &ipu_handler;
-            if (addr >= 0x10001000 && addr <= 0x10001FFF) return &gif_handler;
-            if (addr >= 0x10003000 && addr <= 0x100037FF) return &vif0_handler;
-            if (addr >= 0x10003800 && addr <= 0x10003FFF) return &vif1_handler;
-            if (addr >= 0x10004000 && addr <= 0x10007FFF) return &vu_handler;
-            if (addr >= 0x10008000 && addr <= 0x1000DFFF) return &dma_ch_handler;
-            if (addr >= 0x1000E000 && addr <= 0x1000EFFF) return &dma_ctrl_handler;
-            if (addr >= 0x1000F000 && addr <= 0x1000F5FF) return &intc_handler;
-        }
+    for (const auto& range : handlers) {
+        if (addr >= range.start && addr <= range.end) return range.handler;
     }
     return &default_handler;
 }
 
 void RegisterMMIOHandlers() {
-    // Future: specific subclasses for each subsystem.
+    if (!handlers.empty()) return;
+    InstallMMIOHandler(0x10000000, 0x100003FF, &timer_handler);
+    InstallMMIOHandler(0x10000800, 0x10000BFF, &ipu_handler);
+    InstallMMIOHandler(0x10001000, 0x10001FFF, &gif_handler);
+    InstallMMIOHandler(0x10002000, 0x100023FF, &default_handler);
+    InstallMMIOHandler(0x10003000, 0x100037FF, &vif0_handler);
+    InstallMMIOHandler(0x10003800, 0x10003FFF, &vif1_handler);
+    InstallMMIOHandler(0x10004000, 0x10007FFF, &vu_handler);
+    InstallMMIOHandler(0x10008000, 0x1000DFFF, &dma_ch_handler);
+    InstallMMIOHandler(0x1000E000, 0x1000EFFF, &dma_ctrl_handler);
+    InstallMMIOHandler(0x1000F000, 0x1000F5FF, &intc_handler);
+}
+
+void InstallMMIOHandler(uint32_t start, uint32_t end, MMIO_Handler* handler) {
+    if (!handler || start > end) return;
+    handlers.push_back({start, end, handler});
 }
 
 uint32_t ReadMMIOWord(uint32_t addr) {

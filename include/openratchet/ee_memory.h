@@ -84,6 +84,14 @@ public:
         return nullptr;
     }
 
+    bool IsValidRange(uint32_t addr, size_t size) {
+        addr = TranslateAddress(addr);
+        if (addr < EE_MAIN_RAM_SIZE) return size <= EE_MAIN_RAM_SIZE - addr;
+        if (addr >= 0x70000000 && addr < 0x70000000 + EE_SCRATCHPAD_SIZE)
+            return size <= EE_SCRATCHPAD_SIZE - (addr - 0x70000000);
+        return false;
+    }
+
 private:
     std::vector<uint8_t> main_ram;
     std::vector<uint8_t> scratchpad;

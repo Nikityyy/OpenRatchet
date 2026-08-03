@@ -7,8 +7,8 @@ EE_Memory::EE_Memory() {
 }
 
 void EE_Memory::Init() {
-    main_ram.resize(EE_MAIN_RAM_SIZE, 0);
-    scratchpad.resize(EE_SCRATCHPAD_SIZE, 0);
+    main_ram.assign(EE_MAIN_RAM_SIZE, 0);
+    scratchpad.assign(EE_SCRATCHPAD_SIZE, 0);
     RegisterMMIOHandlers();
 }
 
@@ -54,12 +54,13 @@ template<>
 void EE_Memory::WriteMMIO<uint16_t>(uint32_t addr, uint16_t val) {
     // In practice, PS2 hardware often ignores sub-word writes to MMIO or they work identically.
     // For now, redirect to Write32 with 0 padding for simplicity, though real hardware behavior varies.
-    WriteMMIOWord(addr & ~3, val); 
+    const uint32_t shift = (addr & 2u) * 8u;
+    WriteMMIOWord(addr & ~3u, static_cast<uint32_t>(val) << shift);
 }
 
 template<>
 void EE_Memory::WriteMMIO<uint8_t>(uint32_t addr, uint8_t val) {
-    WriteMMIOWord(addr & ~3, val);
+    WriteMMIOWord(addr & ~3u, static_cast<uint32_t>(val) << ((addr & 3u) * 8u));
 }
 
 template<>

@@ -88,7 +88,9 @@ class ISO9660:
         self.copy_range(record.lsn, record.size, dest_path)
 
     def copy_range(self, lsn: int, size: int, dest_path: str):
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        parent = os.path.dirname(dest_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self.f.seek(lsn * SECTOR_SIZE)
         bytes_left = size
         with open(dest_path, 'wb') as out:
@@ -257,6 +259,9 @@ def do_extract(args):
             
             for name, start, count in files:
                 rel_start = start - low
+                subrange_path = os.path.join(lvl_dir, name)
+                print(f"  Extracting {name} -> {subrange_path}")
+                iso.copy_range(start, count * SECTOR_SIZE, subrange_path)
                 manifest_files.append((f"levels/{lvl_id}/{name}", start, count * SECTOR_SIZE))
                 
     iso.close()

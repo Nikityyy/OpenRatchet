@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <cstdint>
 
 class MMIO_Handler {
 public:
@@ -10,5 +11,6 @@ public:
 };
 
 void RegisterMMIOHandlers();
+void InstallMMIOHandler(uint32_t start, uint32_t end, MMIO_Handler* handler);
 uint32_t ReadMMIOWord(uint32_t addr);
 void WriteMMIOWord(uint32_t addr, uint32_t val);
