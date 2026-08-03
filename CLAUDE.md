@@ -382,7 +382,7 @@ The generated code lives in `data/analysis/output/` (ignored by git). We copy it
 
 #### Tasks
 
-- [ ] **3.1** Create `tools/build.py` — the master build script:
+- [x] **3.1** Create `tools/build.py` — the master build script:
   - Step 1: Ensure extraction is done (call `tools/extract.py extract --all` if needed)
   - Step 2: Ensure analysis is done (call `tools/analyze.py` if needed)
   - Step 3: Run `ps2xRecomp` with the prepared TOML config:
@@ -393,13 +393,13 @@ The generated code lives in `data/analysis/output/` (ignored by git). We copy it
   - Step 5: Configure and build the native executable with CMake
   - Accept `--ps2recomp-dir PATH` to locate pre-built ps2xRecomp tools
 
-- [ ] **3.2** Update the root `CMakeLists.txt`:
+- [x] **3.2** Update the root `CMakeLists.txt`:
   - Add `src/recompiled/` as a source directory
   - Create library `openratchet_recompiled` from all `.cpp` files in `src/recompiled/`
   - Link it against `openratchet_hal` (for memory access macros and context struct)
   - Add include path for generated headers
 
-- [ ] **3.3** Create the context header `include/openratchet/ee_context.h`:
+- [x] **3.3** Create the context header `include/openratchet/ee_context.h`:
   ```cpp
   #pragma once
   #include <cstdint>
@@ -422,18 +422,18 @@ The generated code lives in `data/analysis/output/` (ignored by git). We copy it
   };
   ```
 
-- [ ] **3.4** Create `include/openratchet/ee_memory.h` — the memory interface header that generated code will use. This must match the API that PS2Recomp's generated code expects:
+- [x] **3.4** Create `include/openratchet/ee_memory.h` — the memory interface header that generated code will use. This must match the API that PS2Recomp's generated code expects:
   - `template<typename T> T MEM_READ(MIPS_EE_Context* ctx, uint32_t addr)`
   - `template<typename T> void MEM_WRITE(MIPS_EE_Context* ctx, uint32_t addr, T val)`
   - For now, these can be thin wrappers around the `EE_Memory` class
 
-- [ ] **3.5** Verify that the recompiled sources compile:
+- [x] **3.5** Verify that the recompiled sources compile:
   ```powershell
   python tools/build.py --ps2recomp-dir third_party/PS2Recomp
   # Should produce build/openratchet.exe
   ```
 
-- [ ] **3.6** Create a `tools/smoke_test.py` that:
+- [x] **3.6** Create a `tools/smoke_test.py` that:
   - Launches the built executable
   - Waits N seconds (default 5)
   - Checks it doesn't crash immediately
@@ -457,7 +457,7 @@ python tools/smoke_test.py --seconds 5       # Survives without crash
 
 #### Tasks
 
-- [ ] **4.1** Implement `src/hal/ee_memory.cpp` and `include/openratchet/ee_memory.h`:
+- [x] **4.1** Implement `src/hal/ee_memory.cpp` and `include/openratchet/ee_memory.h`:
   - Allocate 32 MB contiguous array for main RAM (`0x00000000` – `0x01FFFFFF`)
   - Allocate 16 KB scratchpad (`0x70000000` – `0x70003FFF`)
   - Implement address translation: strip KSEG0/KSEG1 bits with `address & 0x1FFFFFFF`
@@ -465,7 +465,7 @@ python tools/smoke_test.py --seconds 5       # Survives without crash
   - MMIO region detection: `0x10000000` – `0x1000FFFF` → route to MMIO handlers
   - GS region detection: `0x12000000` – `0x12001FFF` → route to GS handlers
 
-- [ ] **4.2** Implement the MMIO register dispatch table in `src/hal/mmio.cpp`:
+- [x] **4.2** Implement the MMIO register dispatch table in `src/hal/mmio.cpp`:
   - Create an `MMIO_Handler` interface: `virtual void Write32(uint32_t addr, uint32_t val)`, `virtual uint32_t Read32(uint32_t addr)`
   - Register handlers by address range:
     - `0x10000000` – `0x100003FF`: Timer registers (EE Timer 0–3)
@@ -480,20 +480,20 @@ python tools/smoke_test.py --seconds 5       # Survives without crash
     - `0x1000F000` – `0x1000F5FF`: INTC, SBUS, timer control
   - For now, handlers log accesses and return safe defaults (0 or ignored writes)
 
-- [ ] **4.3** Implement ELF loading in `src/hal/elf_loader.cpp`:
+- [x] **4.3** Implement ELF loading in `src/hal/elf_loader.cpp`:
   - Parse the ELF header (same logic as the Python version)
   - Load each `PT_LOAD` segment into guest EE memory at the correct virtual address
   - Set the initial program counter from the ELF entry point
   - Initialize `$r0 = 0` (hardwired), `$sp` to top of RAM (`0x01FFFFF0`), `$gp` to a sensible default
 
-- [ ] **4.4** Write unit tests in `tests/test_memory.cpp`:
+- [x] **4.4** Write unit tests in `tests/test_memory.cpp`:
   - Test read/write to main RAM
   - Test scratchpad access
   - Test KSEG0/KSEG1 address translation
   - Test that MMIO writes are routed to handlers
   - Test ELF loading with a synthetic MIPS ELF
 
-- [ ] **4.5** Set up the PS2 floating-point mode:
+- [x] **4.5** Set up the PS2 floating-point mode:
   - Create `src/hal/float_mode.cpp` with `InitPS2FloatMode()` and `ClampPS2Float()`
   - Call `InitPS2FloatMode()` at the start of `main()` and at the entry of any new thread
 

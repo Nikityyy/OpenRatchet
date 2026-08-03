@@ -1,21 +1,113 @@
 #pragma once
 #include <cstdint>
+#include <vector>
+#include <cstring>
+#include <iostream>
 #include "ee_context.h"
+#include "mmio.h"
 
-// Forward declaration of the actual memory manager class
+// 32 MB Main RAM
+constexpr uint32_t EE_MAIN_RAM_SIZE = 32 * 1024 * 1024;
+// 16 KB Scratchpad
+constexpr uint32_t EE_SCRATCHPAD_SIZE = 16 * 1024;
+
 class EE_Memory {
 public:
-    template<typename T>
-    T Read(uint32_t addr) { return 0; }
+    EE_Memory();
+    ~EE_Memory() = default;
+
+    void Init();
 
     template<typename T>
-    void Write(uint32_t addr, T val) {}
+    T Read(uint32_t addr) {
+        addr = TranslateAddress(addr);
+
+        if (addr < EE_MAIN_RAM_SIZE) {
+            if (addr + sizeof(T) > EE_MAIN_RAM_SIZE) return 0; // Out of bounds
+            T val;
+            std::memcpy(&val, &main_ram[addr], sizeof(T));
+            return val;
+        }
+        else if (addr >= 0x70000000 && addr < 0x70000000 + EE_SCRATCHPAD_SIZE) {
+            uint32_t offset = addr - 0x70000000;
+            if (offset + sizeof(T) > EE_SCRATCHPAD_SIZE) return 0;
+            T val;
+            std::memcpy(&val, &scratchpad[offset], sizeof(T));
+            return val;
+        }
+        else if (addr >= 0x10000000 && addr <= 0x1000FFFF) {
+            // MMIO Region
+            return ReadMMIO<T>(addr);
+        }
+        else if (addr >= 0x12000000 && addr <= 0x12001FFF) {
+            // GS Region
+            return ReadGS<T>(addr);
+        }
+        else if (addr >= 0x1FC00000 && addr < 0x20000000) {
+            // BIOS ROM region (just return 0 for now)
+            return 0;
+        }
+
+        // Unmapped memory
+        return 0;
+    }
+
+    template<typename T>
+    void Write(uint32_t addr, T val) {
+        addr = TranslateAddress(addr);
+
+        if (addr < EE_MAIN_RAM_SIZE) {
+            if (addr + sizeof(T) > EE_MAIN_RAM_SIZE) return; // Out of bounds
+            std::memcpy(&main_ram[addr], &val, sizeof(T));
+        }
+        else if (addr >= 0x70000000 && addr < 0x70000000 + EE_SCRATCHPAD_SIZE) {
+            uint32_t offset = addr - 0x70000000;
+            if (offset + sizeof(T) > EE_SCRATCHPAD_SIZE) return;
+            std::memcpy(&scratchpad[offset], &val, sizeof(T));
+        }
+        else if (addr >= 0x10000000 && addr <= 0x1000FFFF) {
+            // MMIO Region
+            WriteMMIO<T>(addr, val);
+        }
+        else if (addr >= 0x12000000 && addr <= 0x12001FFF) {
+            // GS Region
+            WriteGS<T>(addr, val);
+        }
+    }
+
+    uint8_t* GetRamPointer(uint32_t addr) {
+        addr = TranslateAddress(addr);
+        if (addr < EE_MAIN_RAM_SIZE) return &main_ram[addr];
+        if (addr >= 0x70000000 && addr < 0x70000000 + EE_SCRATCHPAD_SIZE) {
+            return &scratchpad[addr - 0x70000000];
+        }
+        return nullptr;
+    }
+
+private:
+    std::vector<uint8_t> main_ram;
+    std::vector<uint8_t> scratchpad;
+
+    uint32_t TranslateAddress(uint32_t addr) {
+        // Strip KSEG0/KSEG1 bits
+        // KSEG0: 0x80000000 - 0x9FFFFFFF -> 0x00000000 - 0x1FFFFFFF
+        // KSEG1: 0xA0000000 - 0xBFFFFFFF -> 0x00000000 - 0x1FFFFFFF
+        // We can just mask with 0x1FFFFFFF, though scratchpad is at 0x70000000
+        if (addr >= 0x80000000 && addr < 0xC0000000) {
+            return addr & 0x1FFFFFFF;
+        }
+        return addr;
+    }
+
+    template<typename T> T ReadMMIO(uint32_t addr);
+    template<typename T> void WriteMMIO(uint32_t addr, T val);
+
+    template<typename T> T ReadGS(uint32_t addr);
+    template<typename T> void WriteGS(uint32_t addr, T val);
 };
 
-// Global memory instance for the recompiled code to access
 extern EE_Memory g_ee_memory;
 
-// PS2Recomp generated code expects these macros/functions to exist
 template<typename T>
 inline T MEM_READ(MIPS_EE_Context* ctx, uint32_t addr) {
     (void)ctx;
