@@ -16,6 +16,9 @@
 #include "openratchet/kernel_state.h"
 #include "openratchet/runtime_dispatch.h"
 
+// Declared in src/recompiled/runtime_patches.cpp
+extern void InitRuntimePatches();
+
 namespace OpenRatchet {
 namespace Debug {
     void RenderOverlay(VulkanRenderer& renderer, uint32_t call_count);
@@ -88,6 +91,8 @@ int main(int argc, char* argv[]) {
             copyContextToR5900(ee_ctx, r5900);
             PS2Runtime runtime = {};
             std::cout << "Registered " << CountGeneratedFunctions() << " guest functions" << std::endl;
+            InitRuntimePatches();
+            std::cout << "Runtime patches applied. Total registered: " << CountGeneratedFunctions() << std::endl;
             uint64_t tick_count = 0;
             
             bool running = true;

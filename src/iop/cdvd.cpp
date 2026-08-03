@@ -22,18 +22,30 @@ struct FileRecord {
     int priority;
 };
 
+// A completed async read: file data in host memory, ready to copy to guest.
+struct PendingReadResult {
+    std::vector<uint8_t> data;  // filled sectors (each 2048 bytes)
+    uint32_t dest_buffer_addr;  // guest EE address to copy into
+    uint32_t total_bytes;       // how many bytes to copy
+    int error_code;
+};
+
 struct ReadChunk {
     std::string file_path;
     uint64_t file_offset;
-    uint32_t file_bytes;
-    uint32_t zero_bytes;
-    uint32_t dest_buffer_addr;
+    uint32_t file_bytes;    // bytes available in file
+    uint32_t zero_bytes;    // pad to sector boundary
+    uint32_t dest_offset;   // byte offset from dest_buffer_addr for this chunk
 };
 
 static std::vector<FileRecord> g_files;
-static std::future<int> g_pendingRead;
+static std::future<PendingReadResult> g_pendingRead;
+static EE_Memory* g_pendingMem = nullptr;  // memory to apply result to in sceCdSync
 static int g_cdError = 0;
 static std::mutex g_cdMutex;
+
+// Forward declaration — defined later in this file
+static void ApplyPendingResult(const PendingReadResult& result);
 
 class CDVD_Module : public IOP_Module {
 public:
@@ -151,11 +163,19 @@ int32_t sceCdInit(int32_t mode) {
 int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t mode, EE_Memory* mem) {
     (void)mode;
     std::lock_guard lock(g_cdMutex);
-    if (g_pendingRead.valid() && g_pendingRead.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        g_cdError = 3;
+
+    // If a previous async read is still in-flight, wait for it before starting a new one.
+    if (g_pendingRead.valid() &&
+        g_pendingRead.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        g_cdError = 3; // busy
         return 0;
     }
-    if (g_pendingRead.valid()) g_cdError = g_pendingRead.get();
+    if (g_pendingRead.valid()) {
+        // Previous read completed — apply it to guest memory before starting a new read.
+        ApplyPendingResult(g_pendingRead.get());
+    }
+
+
     const uint64_t total_bytes64 = static_cast<uint64_t>(sectors) * 2048;
     if (sectors == 0 || total_bytes64 > UINT32_MAX || !mem ||
         !mem->IsValidRange(buffer_addr, static_cast<size_t>(total_bytes64))) {
@@ -165,8 +185,8 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
 
     std::vector<ReadChunk> chunks;
     uint32_t remaining_sectors = sectors;
-    uint32_t cur_lsn = lsn;
-    uint32_t cur_buffer = buffer_addr;
+    uint32_t cur_lsn    = lsn;
+    uint32_t cur_offset = 0;  // byte offset from buffer_addr
 
     while (remaining_sectors > 0) {
         const FileRecord* best_file = nullptr;
@@ -179,23 +199,29 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
         }
 
         if (best_file) {
-            uint32_t sect_offset_in_file = cur_lsn - best_file->lsn;
-            const uint32_t chunk_sectors = std::min(remaining_sectors, 1u);
+            const uint32_t sect_offset_in_file = cur_lsn - best_file->lsn;
+            const uint32_t file_end_lsn        = best_file->lsn + best_file->sector_count;
+            // Read as many consecutive sectors as this file covers
+            const uint32_t chunk_sectors = std::min(remaining_sectors,
+                                                     file_end_lsn - cur_lsn);
             const uint64_t file_offset = static_cast<uint64_t>(sect_offset_in_file) * 2048u;
-            const uint32_t file_bytes = file_offset < best_file->size
-                                            ? std::min<uint64_t>(2048u, best_file->size - file_offset)
-                                            : 0u;
+            const uint32_t file_bytes  = static_cast<uint32_t>(
+                file_offset < best_file->size
+                    ? std::min<uint64_t>(static_cast<uint64_t>(chunk_sectors) * 2048u,
+                                         best_file->size - file_offset)
+                    : 0u);
+            const uint32_t total_chunk_bytes = chunk_sectors * 2048u;
 
             chunks.push_back({
                 "data/raw/" + best_file->name,
                 file_offset,
                 file_bytes,
-                2048u - file_bytes,
-                cur_buffer
+                total_chunk_bytes - file_bytes,
+                cur_offset
             });
 
-            cur_lsn += chunk_sectors;
-            cur_buffer += 2048u;
+            cur_lsn    += chunk_sectors;
+            cur_offset += total_chunk_bytes;
             remaining_sectors -= chunk_sectors;
         } else {
             std::cerr << "[CDVD] Error: LSN " << cur_lsn << " is not covered by extracted data\n";
@@ -204,29 +230,40 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
         }
     }
 
-    g_pendingRead = std::async(std::launch::async, [chunks, mem]() {
-        for (const auto& chunk : chunks) {
-            std::ifstream f(chunk.file_path, std::ios::binary);
-            if (!f.is_open()) {
-                std::cerr << "[CDVD] Async Error: Failed to open " << chunk.file_path << "\n";
-                return 1;
+    // Build a total buffer size
+    const uint32_t total_bytes = sectors * 2048u;
+
+    // Launch async read into a HOST-SIDE buffer — no EE_Memory access from background thread.
+    g_pendingRead = std::async(std::launch::async,
+        [chunks, total_bytes, buffer_addr]() -> PendingReadResult {
+            PendingReadResult result{};
+            result.dest_buffer_addr = buffer_addr;
+            result.total_bytes      = total_bytes;
+            result.data.resize(total_bytes, 0);
+
+            for (const auto& chunk : chunks) {
+                std::ifstream f(chunk.file_path, std::ios::binary);
+                if (!f.is_open()) {
+                    std::cerr << "[CDVD] Async Error: Failed to open " << chunk.file_path << "\n";
+                    result.error_code = 1;
+                    return result;
+                }
+                f.seekg(static_cast<std::streamoff>(chunk.file_offset), std::ios::beg);
+                if (chunk.file_bytes > 0) {
+                    f.read(reinterpret_cast<char*>(result.data.data() + chunk.dest_offset),
+                           chunk.file_bytes);
+                    if (static_cast<uint32_t>(f.gcount()) != chunk.file_bytes) {
+                        result.error_code = 2;
+                        return result;
+                    }
+                }
+                // zero_bytes are already 0 from the resize.
             }
-            f.seekg(chunk.file_offset, std::ios::beg);
+            result.error_code = 0;
+            return result;
+        });
 
-            std::vector<uint8_t> tmp(chunk.file_bytes);
-            f.read(reinterpret_cast<char*>(tmp.data()), chunk.file_bytes);
-            if (static_cast<uint32_t>(f.gcount()) != chunk.file_bytes) return 2;
-
-            for (uint32_t i = 0; i < chunk.file_bytes; ++i) {
-                mem->Write<uint8_t>(chunk.dest_buffer_addr + i, tmp[i]);
-            }
-            for (uint32_t i = 0; i < chunk.zero_bytes; ++i)
-                mem->Write<uint8_t>(chunk.dest_buffer_addr + chunk.file_bytes + i, 0);
-        }
-        return 0;
-    }
-);
-
+    g_pendingMem  = mem;
     g_cdError = 0;
     return 1;
 }
@@ -235,22 +272,34 @@ int32_t sceCdSeek(uint32_t lsn) {
     return 1;
 }
 
+// Helper: flush a completed PendingReadResult into guest EE memory
+static void ApplyPendingResult(const PendingReadResult& result) {
+    g_cdError = result.error_code;
+    if (result.error_code == 0 && g_pendingMem) {
+        const uint32_t copy_bytes = std::min<uint32_t>(result.total_bytes,
+            static_cast<uint32_t>(result.data.size()));
+        uint8_t* dest = g_pendingMem->GetRamPointer(result.dest_buffer_addr);
+        if (dest) std::memcpy(dest, result.data.data(), copy_bytes);
+    }
+    g_pendingMem = nullptr;
+}
+
 int32_t sceCdSync(int32_t mode) {
     std::lock_guard lock(g_cdMutex);
-    if (g_pendingRead.valid()) {
-        if (mode == 0) {
-            g_pendingRead.wait();
-            g_cdError = g_pendingRead.get();
+    if (!g_pendingRead.valid()) return 0;
+
+    if (mode == 0) {
+        // Blocking wait — apply result to guest memory on this (main) thread
+        ApplyPendingResult(g_pendingRead.get());
+        return 0;
+    } else {
+        // Non-blocking poll
+        if (g_pendingRead.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            ApplyPendingResult(g_pendingRead.get());
             return 0;
-        } else {
-            if (g_pendingRead.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                g_cdError = g_pendingRead.get();
-                return 0;
-            }
-            return 1;
         }
+        return 1; // still in-progress
     }
-    return 0;
 }
 
 int32_t sceCdGetError() {

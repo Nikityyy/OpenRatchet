@@ -1,4 +1,7 @@
 #include "openratchet/vulkan_renderer.h"
+#include "openratchet/ee_memory.h"
+#include "openratchet/gs_state.h"
+#include "openratchet/native_hal.h"
 #include <iostream>
 #include <vector>
 #include <stdexcept>
@@ -16,7 +19,13 @@ VulkanRenderer::~VulkanRenderer() {
 bool VulkanRenderer::Initialize(SDL_Window* window) {
     m_window = window;
     m_vram.Init();
-    
+
+    // Wire GS memory-mapped writes to the GS state machine.
+    // This callback fires whenever the game writes to 0x12000000-0x12001FFF.
+    RegisterGSWriteCallback([](uint8_t reg, uint64_t val) {
+        WriteGSReg(g_gs_state, reg, val);
+    });
+
     if (!CreateInstance()) return false;
     
     if (!SDL_Vulkan_CreateSurface(window, m_instance, &m_surface)) {
@@ -35,6 +44,11 @@ bool VulkanRenderer::Initialize(SDL_Window* window) {
     if (!CreateSyncObjects()) return false;
     if (!InitImGui()) return false;
     if (!CreatePipeline()) return false;
+
+    // Forward SDL events to ImGui so the debug overlay receives keyboard/mouse input
+    OpenRatchet::HAL::SetExtraEventHandler([](SDL_Event* e) {
+        ImGui_ImplSDL2_ProcessEvent(e);
+    });
 
     std::cout << "Vulkan Renderer fully initialized.\n";
     return true;

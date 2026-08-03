@@ -691,13 +691,13 @@ cmake --build build
 
 #### Tasks
 
-- [/] **7.1** Implement `src/hal/native_hal.cpp`:
+- [x] **7.1** Implement `src/hal/native_hal.cpp`:
   - Initialize SDL2 with `SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO`
   - Create a window: `SDL_CreateWindow("OpenRatchet — Ratchet & Clank", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE)`
   - Handle `SDL_QUIT` event to exit
   - Handle `SDL_WINDOWEVENT_RESIZED` for dynamic resolution
 
-- [/] **7.2** Implement the main loop in `src/main.cpp`:
+- [x] **7.2** Implement the main loop in `src/main.cpp`:
   ```
   1. Initialize HAL (SDL2 window)
   2. Initialize EE memory
@@ -719,19 +719,19 @@ cmake --build build
   9. Shutdown HAL
   ```
 
-- [/] **7.3** Build the recompiled function dispatch table (`g_ps2RecompiledFunctionTable`)
+- [x] **7.3** Build the recompiled function dispatch table (`g_ps2RecompiledFunctionTable`)
 - [x] Integrate `tools/smoke_test.py` to verify the dispatch loop executes the entry point without a segfault (outputs `MISSING-TARGET: 0x...` and halts)
 
-- [/] **7.4** Handle the R&C1 startup sequence:
+- [x] **7.4** Handle the R&C1 startup sequence:
   - The game's entry point initializes the C runtime, then calls the game's main function
   - Log each function dispatch for the first 1000 calls to understand the call sequence
   - Identify and fix any missing function targets
   - [x] Preserve generated call/return dispatch across host frame yields
   - [x] Seed and maintain the guest BIOS syscall table used by R&C startup
   - [x] Implement syscall `0x83` (`FindAddress`) with KSEG alias matching
-  - [/] Continue startup from the current `0x11AC78`/`0x11AC80` wait loop by implementing the required DMA/SIF and interrupt syscalls
+  - [x] Continue startup from the current `0x11AC78`/`0x11AC80` wait loop by implementing the required DMA/SIF and interrupt syscalls
 
-- [/] **7.5** Write a smoke test in `tools/smoke_test.py`:
+- [x] **7.5** Write a smoke test in `tools/smoke_test.py`:
   - Launch the executable, wait N seconds, kill it
   - Parse stderr for `MISSING-TARGET`, `FATAL`, `UNIMPLEMENTED`, `CRASH` keywords
   - Report pass/fail

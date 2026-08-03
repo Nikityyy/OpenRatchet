@@ -3,8 +3,15 @@
 #include <vector>
 #include <cstring>
 #include <iostream>
+#include <functional>
 #include "ee_context.h"
 #include "mmio.h"
+
+// Register a callback that is invoked whenever the game writes to the GS
+// memory region (0x12000000–0x12001FFF). The renderer registers this at
+// startup so the HAL doesn't need to include renderer headers.
+// reg  = GS register index (0x00–0x7F), val = 64-bit register value.
+void RegisterGSWriteCallback(std::function<void(uint8_t reg, uint64_t val)> cb);
 
 // 32 MB Main RAM
 constexpr uint32_t EE_MAIN_RAM_SIZE = 32 * 1024 * 1024;

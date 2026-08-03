@@ -66,3 +66,6 @@ struct GS_State {
 
 // Update the current state based on a GS register write
 void WriteGSReg(GS_State& state, uint8_t reg, uint64_t data);
+
+// Global GS state used by the renderer and the GS write callback
+extern GS_State g_gs_state;

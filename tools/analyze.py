@@ -71,11 +71,25 @@ def make_function_map(output_dir, output_csv):
     output_cpp_dir = os.path.join(output_dir, 'output')
     functions = []
     
-    # Known manual exceptions for the R&C1 stripped ELF
+    # Known manual exceptions for the R&C1 stripped ELF.
+    # Add new entries here when a MISSING-TARGET is reported at runtime.
     exceptions = [
+        {'name': 'sub_00123008', 'address': '0x00123008', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_00120EB0', 'address': '0x00120EB0', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_0011CF48', 'address': '0x0011CF48', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_0011CF10', 'address': '0x0011CF10', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_0011AB20', 'address': '0x0011AB20', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_0011C840', 'address': '0x0011C840', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_00121388', 'address': '0x00121388', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_0011BC48', 'address': '0x0011BC48', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_00121450', 'address': '0x00121450', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_00120C30', 'address': '0x00120C30', 'end': '0x00000000', 'size': '0x0'},
+        {'name': 'sub_00122298', 'address': '0x00122298', 'end': '0x00000000', 'size': '0x0'},
+        # Discovered at runtime (called by JAL from 0x11D8C0 during startup)
+        {'name': 'sub_0011DB38', 'address': '0x0011DB38', 'end': '0x0011DC18', 'size': '0xE0'},
         {'name': 'sub_0011DC18', 'address': '0x0011DC18', 'end': '0x0011DCC8', 'size': '0xB0'},
         {'name': 'sub_001E9488', 'address': '0x001E9488', 'end': '0x001E9658', 'size': '0x1D0'},
-        {'name': 'sub_001E9658', 'address': '0x001E9658', 'end': '0x001E9AB8', 'size': '0x460'}
+        {'name': 'sub_001E9658', 'address': '0x001E9658', 'end': '0x001E9AB8', 'size': '0x460'},
     ]
     functions.extend(exceptions)
     

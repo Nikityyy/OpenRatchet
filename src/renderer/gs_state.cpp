@@ -2,6 +2,9 @@
 #include <iostream>
 #include <cstring>
 
+// Global GS register state — written by the GS callback, read by the renderer
+GS_State g_gs_state;
+
 void WriteGSReg(GS_State& state, uint8_t reg, uint64_t data) {
     switch (reg) {
         case 0x00: state.PRIM = data; break;
