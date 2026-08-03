@@ -520,17 +520,17 @@ PS2 games call kernel services through the `syscall` MIPS instruction, which tra
 
 #### Tasks
 
-- [ ] **5.1** Create `src/kernel/syscall_table.cpp`:
+- [x] **5.1** Create `src/kernel/syscall_table.cpp`:
   - Define a dispatch table: `std::array<SyscallHandler, 256>` where `SyscallHandler = void(*)(MIPS_EE_Context*, EE_Memory*)`
   - Implement `DispatchSyscall(ctx, mem)`: read `ctx->r[3]` (which holds the syscall number), call the corresponding handler
   - Log unimplemented syscalls with the syscall number and guest PC for debugging
 
-- [ ] **5.2** Implement critical libc-like syscalls in `src/kernel/libc_syscalls.cpp`:
+- [x] **5.2** Implement critical libc-like syscalls in `src/kernel/libc_syscalls.cpp`:
   - `FlushCache` (syscall 0x64): no-op on host (we don't have an instruction cache to flush)
   - `memcpy`, `memset`, `strlen`, `strcmp` guest-memory-aware wrappers
   - `printf` / `scePrintf`: redirect to host stdout (useful for game debug prints)
 
-- [ ] **5.3** Implement thread management in `src/kernel/threads.cpp`:
+- [x] **5.3** Implement thread management in `src/kernel/threads.cpp`:
   - `CreateThread(entry, stack, priority, attr)` → create a guest thread descriptor
   - `StartThread(tid, args)` → mark thread as runnable
   - `ExitThread()`, `ExitDeleteThread()`, `TerminateThread()`, `DeleteThread()`
@@ -540,24 +540,24 @@ PS2 games call kernel services through the `syscall` MIPS instruction, which tra
   - `ReferThreadStatus(tid)` → return thread state
   - **Implementation**: cooperative scheduling on the host. Maintain a list of guest thread descriptors. The "current thread" runs until it yields, sleeps, or a higher-priority thread is woken. Use host `std::thread` or fibers for actual context switching if needed, or start with single-threaded cooperative dispatch.
 
-- [ ] **5.4** Implement synchronization primitives in `src/kernel/sync.cpp`:
+- [x] **5.4** Implement synchronization primitives in `src/kernel/sync.cpp`:
   - **Semaphores**: `CreateSema(attr)`, `SignalSema(id)`, `WaitSema(id)`, `PollSema(id)`, `DeleteSema(id)`
   - **Event Flags**: `CreateEventFlag(attr)`, `SetEventFlag(id, bits)`, `ClearEventFlag(id, bits)`, `WaitEventFlag(id, mode, bits)`, `PollEventFlag(id)`, `DeleteEventFlag(id)`
   - **Alarms**: `SetAlarm(time, callback, arg)`, `iSetAlarm(...)`, `ReleaseAlarm(id)`
   - These must be thread-safe if we use host threads for guest threads
 
-- [ ] **5.5** Implement DMA control syscalls in `src/kernel/dma.cpp`:
+- [x] **5.5** Implement DMA control syscalls in `src/kernel/dma.cpp`:
   - `DmaHandlerVIF0`, `DmaHandlerVIF1`, `DmaHandlerGIF`, `DmaHandlerSIF0`, `DmaHandlerSIF1`
   - `EnableDmac(channel)`, `DisableDmac(channel)`
   - `SetDma(channel, madr, qwc, chcr)` → initiates a DMA transfer
   - For now, DMA transfers are synchronous: copy data from guest memory to the appropriate subsystem handler immediately
 
-- [ ] **5.6** Implement timer and VBlank interrupt stubs in `src/kernel/timers.cpp`:
+- [x] **5.6** Implement timer and VBlank interrupt stubs in `src/kernel/timers.cpp`:
   - `SetVSyncCallback(mode, callback)` → register a callback called once per vblank
   - `SetTimer(id, compare, callback)` → register a timer callback
   - The main loop will call these callbacks at the appropriate rate
 
-- [ ] **5.7** Implement GS syscalls in `src/kernel/gs_syscalls.cpp`:
+- [x] **5.7** Implement GS syscalls in `src/kernel/gs_syscalls.cpp`:
   - `GsPutIMR(imr)`: set GS interrupt mask
   - `SetGsCrt(interlace, mode, ffmd)`: set display mode (store parameters for renderer)
   - `GsSetDefDispEnv(...)`: set default display environment

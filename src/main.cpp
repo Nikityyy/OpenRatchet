@@ -4,6 +4,7 @@
 #include "openratchet/ee_memory.h"
 #include "openratchet/float_mode.h"
 #include "openratchet/elf_loader.h"
+#include "openratchet/syscalls.h"
 
 void run_self_test() {
     EE_Memory mem;
@@ -41,6 +42,7 @@ int main(int argc, char* argv[]) {
 
         // Otherwise assume it's an ELF path
         g_ee_memory.Init();
+        OpenRatchet::Kernel::InitSyscalls();
         MIPS_EE_Context ctx;
         if (ELFLoader::LoadELF(arg, g_ee_memory, ctx)) {
             std::cout << "Successfully loaded ELF: " << arg << std::endl;
