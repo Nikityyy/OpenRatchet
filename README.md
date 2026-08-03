@@ -1,89 +1,24 @@
 # OpenRatchet
 
-**Native PC port of Ratchet & Clank (PS2, 2002) via static binary recompilation.**
+This repository contains the bootstrap pipeline for a native Ratchet & Clank 1 PC port. It does not contain copyrighted game code or generated recompilation output. The supplied ISO must be user-owned.
 
-OpenRatchet translates the original MIPS R5900 game executable into native C++20 code using the [PS2Recomp](https://github.com/ran-j/PS2Recomp) toolchain, then runs it against a custom Hardware Abstraction Layer (HAL) built on SDL2 and Vulkan. No emulator. No dynamic translation. The original game logic executes natively on your PC.
+## Pipeline
 
-## Legal Notice
+1. `tools/bootstrap.ps1 -Stage Extract` mounts the ISO to copy its EE executable, then runs the upstream `rac-dvd-toc-parser` against hidden sectors and writes `build/extracted` plus `build/toc.json`.
 
-This project does **not** contain any copyrighted game code, assets, or data. You must supply your own legally dumped PS2 ISO of *Ratchet & Clank* (SCUS-97199). The ISO is never committed to the repository.
+The extraction wrapper sanitizes original developer paths embedded in VAG headers (for example `Z:\I5\sound\spee`) so they cannot escape the selected output directory on Windows.
+2. Import the extracted `PS2_MAIN.ELF` into a compatible Ghidra installation with `ghidra-emotionengine-reloaded`, then run `PS2Recomp/ps2xRecomp/tools/ghidra/ExportPS2Functions.java`. Save the generated `build/game.toml`.
+3. Run `tools/bootstrap.ps1 -Stage Recompile`. It builds upstream `ps2_recomp` and processes `build/game.toml`. Set the TOML `general.output` field to this repository's `generated/` directory.
+4. Configure and build this host with `tools/bootstrap.ps1 -Stage Build`.
 
-## Architecture Overview
+Use `-FetchTools` to clone the three supported repositories into `third_party/`. Ghidra is intentionally not downloaded: the extension must match the installed Ghidra release and the export is an interactive project operation.
 
-```
-┌─────────────────────────────────────────────────┐
-│               OpenRatchet Native                │
-├─────────────┬───────────────────┬───────────────┤
-│  Recompiled │   HAL Services    │   Renderer    │
-│  Game Logic │  (EE Memory,      │  (Vulkan /    │
-│  (C++20     │   BIOS/Kernel,    │   Compute     │
-│   from MIPS │   IOP/SIF, DMA,   │   Shaders)    │
-│   R5900)    │   Timers, Pad)    │               │
-├─────────────┼───────────────────┼───────────────┤
-│         SDL2 (Window, Input, Audio)             │
-├─────────────────────────────────────────────────┤
-│              Host OS (Windows/Linux)            │
-└─────────────────────────────────────────────────┘
-```
+## Current prerequisites
 
-## Status
+Required: Python 3, CMake 3.21+, a C++20 compiler, Java/Ghidra, and a PS2Recomp checkout. The bootstrap defaults to `C:\ghidra_12.1.2_PUBLIC_20260605\ghidra_12.1.2_PUBLIC`; use `-GhidraDir` if it moves. Ghidra's GUI launcher is in its root directory, while `analyzeHeadless.bat` is under `support`. `SDL2` and `Vulkan` are not required by the current PS2Recomp runtime; it uses raylib as its host backend. The `GuestMemory` class is only the project-owned boundary for future MMIO/device work; PS2Runtime remains the source of truth for guest execution.
 
-🚧 **Early Development** — See [CLAUDE.md](CLAUDE.md) for the full milestone plan.
+The matching `ghidra-emotionengine-reloaded` extension is detected from Ghidra's per-user extension directory under `%APPDATA%\ghidra\<version>\Extensions`.
 
-## Prerequisites
+The build enables MSVC `/MP` and uses all detected processor cores by default. Override this with `-Jobs N`, for example `-Jobs 12`, if memory pressure becomes a problem.
 
-- Python 3.10+
-- CMake 3.22+, Ninja
-- Visual Studio 2022 (MSVC v143) or Clang 16+
-- Vulkan SDK 1.3+
-- SDL2 2.28+
-- [Ghidra](https://ghidra-sre.org/) 11+ with [ghidra-emotionengine-reloaded](https://github.com/chaoticgd/ghidra-emotionengine-reloaded)
-- A legally dumped R&C1 PS2 ISO (`SCUS_971.99`)
-
-## Quick Start
-
-```powershell
-# 1. Clone with submodules
-git clone --recursive https://github.com/YourUser/OpenRatchet.git
-cd OpenRatchet
-
-# 2. Place your ISO
-cp /path/to/ratchet.iso games/
-
-# 3. Follow the milestone steps in CLAUDE.md
-```
-
-## Project Structure
-
-```
-OpenRatchet/
-├── CLAUDE.md           # Detailed milestone plan (step-by-step build guide)
-├── README.md           # This file
-├── .gitignore
-├── games/              # Place your ISO here (ignored)
-├── data/               # Extracted runtime data (ignored, generated)
-├── src/
-│   ├── hal/            # Hardware Abstraction Layer (EE memory, MMIO, timers)
-│   ├── renderer/       # Vulkan renderer, GS emulation, VU1 compute shaders
-│   ├── kernel/         # PS2 BIOS/kernel syscall implementations
-│   ├── iop/            # IOP processor HLE (SIF, CDVD, SPU2, PAD)
-│   ├── recompiled/     # Auto-generated recompiled C++ (from PS2Recomp)
-│   └── main.cpp        # Native entry point and main loop
-├── include/            # Public headers
-├── shaders/            # GLSL/HLSL compute and fragment shaders
-├── tools/
-│   ├── extract.py      # ISO extraction and asset unpacking
-│   ├── analyze.py      # Ghidra integration and function map generation
-│   └── build.py        # Build automation
-├── third_party/        # Git submodules (PS2Recomp, SDL2, etc.)
-├── tests/              # Verification and ground-truth comparison
-└── docs/               # Technical documentation
-```
-
-## Contributing
-
-See [CLAUDE.md](CLAUDE.md) for the implementation roadmap. Each milestone is a self-contained, committable step.
-
-## License
-
-This project is licensed under the MIT License. Game assets are not included and remain the property of Sony Interactive Entertainment / Insomniac Games.
+The ISO currently present is approximately 3.9 GiB. Extraction can take several minutes and requires enough free disk space for duplicated assets.
