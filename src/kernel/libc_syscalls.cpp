@@ -27,6 +27,10 @@ static void SysPrintf(MIPS_EE_Context* ctx, EE_Memory* mem) {
 void InitLibcSyscalls() {
     RegisterSyscall(0x64, SysFlushCache, "FlushCache");
     
+    // Stub for syscall 131
+    auto Sys131 = [](MIPS_EE_Context* ctx, EE_Memory* mem) { ctx->r[2] = 0; };
+    RegisterSyscall(131, Sys131, "Syscall_131");
+
     // RegisterPrintf? ID might be 0x3F or similar depending on BIOS, 
     // will leave it un-registered until we hit the unimplemented syscall or know the ID.
     // Some BIOS versions use 0x3E or 0x3F for printf.

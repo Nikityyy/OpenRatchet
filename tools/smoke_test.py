@@ -21,8 +21,8 @@ def main():
             stderr_str = stderr.decode(errors='replace')
             stdout_str = stdout.decode(errors='replace')
             
-            error_keywords = ['error', 'fatal', 'exception', 'segfault', 'crash']
-            found_errors = [kw for kw in error_keywords if kw in stderr_str or kw in stdout_str]
+            error_keywords = ['MISSING-TARGET', 'FATAL', 'UNIMPLEMENTED', 'CRASH', 'segfault']
+            found_errors = [kw for kw in error_keywords if kw.lower() in stderr_str.lower() or kw.lower() in stdout_str.lower()]
             
             if found_errors:
                 print(f"Found error keywords: {found_errors}")

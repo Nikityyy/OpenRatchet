@@ -65,6 +65,11 @@ void InitThreadSyscalls() {
     RegisterSyscall(0x2C, SysWakeupThread, "WakeupThread");
     RegisterSyscall(0x2D, SysIWakeupThread, "iWakeupThread");
     RegisterSyscall(0x2F, SysGetThreadId, "GetThreadId");
+    
+    // Add stubs for ChangeThreadPriority (60) and iChangeThreadPriority (61)
+    auto SysChangeThreadPriority = [](MIPS_EE_Context* ctx, EE_Memory* mem) { ctx->r[2] = 0; };
+    RegisterSyscall(60, SysChangeThreadPriority, "ChangeThreadPriority");
+    RegisterSyscall(61, SysChangeThreadPriority, "iChangeThreadPriority");
 }
 
 } // namespace Kernel

@@ -701,12 +701,12 @@ cmake --build build
 - [x] **7.3** Build the recompiled function dispatch table (`g_ps2RecompiledFunctionTable`)
 - [x] Integrate `tools/smoke_test.py` to verify the dispatch loop executes the entry point without a segfault (outputs `MISSING-TARGET: 0x...` and halts)
 
-- [ ] **7.4** Handle the R&C1 startup sequence:
+- [x] **7.4** Handle the R&C1 startup sequence:
   - The game's entry point initializes the C runtime, then calls the game's main function
   - Log each function dispatch for the first 1000 calls to understand the call sequence
   - Identify and fix any missing function targets
 
-- [ ] **7.5** Write a smoke test in `tools/smoke_test.py`:
+- [x] **7.5** Write a smoke test in `tools/smoke_test.py`:
   - Launch the executable, wait N seconds, kill it
   - Parse stderr for `MISSING-TARGET`, `FATAL`, `UNIMPLEMENTED`, `CRASH` keywords
   - Report pass/fail
