@@ -22,6 +22,10 @@ void InitPAD() {
     RegisterModule(0x8000010F, &g_padModule);
 }
 
+void UpdatePAD() {
+    SDL_GameControllerUpdate();
+}
+
 int32_t scePadInit(int32_t mode) {
     if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0 && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) return 0;
     return 1;

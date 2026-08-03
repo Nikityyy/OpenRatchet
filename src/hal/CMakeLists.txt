@@ -8,7 +8,7 @@ add_library(openratchet_hal STATIC
     context_bridge.cpp
 )
 target_include_directories(openratchet_hal PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_include_directories(openratchet_hal PRIVATE ${CMAKE_SOURCE_DIR}/third_party/PS2Recomp/ps2xRuntime/include)
+target_include_directories(openratchet_hal PUBLIC ${CMAKE_SOURCE_DIR}/third_party/PS2Recomp/ps2xRuntime/include)
 target_include_directories(openratchet_hal PRIVATE ${CMAKE_SOURCE_DIR}/third_party/PS2Recomp/ps2xIOP/include)
 target_include_directories(openratchet_hal PRIVATE ${CMAKE_SOURCE_DIR}/third_party/PS2Recomp/ps2xRuntime/src/lib)
 if(OPENRATCHET_SKIP_DEPS)

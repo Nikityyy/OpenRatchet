@@ -15,10 +15,11 @@ def main():
         Path(args.exe) if args.exe else None,
         root / 'build' / 'openratchet.exe',
         root / 'build' / 'Release' / 'openratchet.exe',
+        root / 'build-msvc' / 'openratchet.exe',
     ]
     exe = next((p.resolve() for p in candidates if p and p.exists()), None)
     if exe is None:
-        print('Failed to run executable: no build/openratchet.exe or build/Release/openratchet.exe found')
+        print('Failed to run executable: no supported openratchet build was found')
         sys.exit(1)
 
     print(f"Running {exe} for {args.seconds} seconds...")
@@ -35,16 +36,15 @@ def main():
         except subprocess.TimeoutExpired:
             proc.terminate()
             output, _ = proc.communicate(timeout=2)
-            if proc.returncode not in (None, 0):
-                print(f"Process terminated with exit code {proc.returncode}")
-                print(output)
-                print("smoke_test: FAIL")
-                sys.exit(1)
-
             error_keywords = ['MISSING-TARGET', 'FATAL', 'UNIMPLEMENTED', 'CRASH', 'segfault', 'Failed to']
             found_errors = [kw for kw in error_keywords if kw.lower() in output.lower()]
             if found_errors:
                 print(f"Found error keywords: {found_errors}")
+                print(output)
+                print("smoke_test: FAIL")
+                sys.exit(1)
+            if '[GUEST-TICK]' not in output or 'Registered ' not in output:
+                print('Guest execution was not observed')
                 print(output)
                 print("smoke_test: FAIL")
                 sys.exit(1)

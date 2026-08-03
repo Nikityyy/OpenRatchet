@@ -36,6 +36,7 @@ int32_t scePadInit(int32_t mode);
 int32_t scePadRead(int32_t port, int32_t slot, uint32_t buffer_addr, EE_Memory* mem);
 int32_t scePadGetState(int32_t port, int32_t slot);
 void InitPAD();
+void UpdatePAD();
 
 // SPU2
 int32_t sceSdInit(int32_t flag);

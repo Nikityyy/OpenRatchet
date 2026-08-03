@@ -3,8 +3,29 @@
 #include "openratchet/ee_memory.h"
 #include "openratchet/syscalls.h"
 #include "openratchet/context_bridge.h"
+#include "openratchet/runtime_dispatch.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "ps2_iop_host.h"
+#include <atomic>
+#include <chrono>
+#include <iomanip>
+#include <mutex>
+
+namespace {
+thread_local std::chrono::steady_clock::time_point g_guest_deadline{};
+std::atomic<uint64_t> g_guest_dispatch_count{0};
+}
+
+namespace OpenRatchet::Runtime {
+void RegisterGeneratedFunctions(PS2Runtime&) {}
+void SetGuestDeadline(std::chrono::steady_clock::time_point deadline) { g_guest_deadline = deadline; }
+void ClearGuestDeadline() { g_guest_deadline = {}; }
+bool GuestDeadlineExpired() {
+    return g_guest_deadline != std::chrono::steady_clock::time_point{} &&
+           std::chrono::steady_clock::now() >= g_guest_deadline;
+}
+uint64_t GetGuestDispatchCount() { return g_guest_dispatch_count.load(std::memory_order_relaxed); }
+}
 
 PS2Runtime::PS2Runtime() {}
 PS2Runtime::~PS2Runtime() {}
@@ -67,7 +88,7 @@ void PS2Runtime::handleBreak(uint8_t* rdram, R5900Context* ctx) {
 }
 
 bool PS2Runtime::shouldPreemptGuestExecution() {
-    return false; // Don't preempt
+    return isStopRequested() || OpenRatchet::Runtime::GuestDeadlineExpired();
 }
 
 // These might also be needed if not inlined properly in all places
@@ -77,7 +98,18 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
                                uint32_t sourcePc,
                                GuestBranchKind kind,
                                const char *debugName) {
-    std::cerr << "PS2Runtime::reportMissingFunction stub called: " << (debugName ? debugName : "unknown") << "\n";
+    const uint32_t ra = ctx ? getRegU32(ctx, 31) : 0;
+    const uint32_t sp = ctx ? getRegU32(ctx, 29) : 0;
+    const uint32_t gp = ctx ? getRegU32(ctx, 28) : 0;
+    std::cerr << "MISSING-TARGET: kind=" << static_cast<uint32_t>(kind)
+              << " op=" << (debugName ? debugName : "unknown")
+              << " source=0x" << std::hex << sourcePc
+              << " target=0x" << targetPc
+              << " pc=0x" << (ctx ? ctx->pc : 0)
+              << " ra=0x" << ra << " sp=0x" << sp << " gp=0x" << gp
+              << std::dec << '\n';
+    if (ctx) ctx->pc = targetPc;
+    requestStop();
 }
 
 bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
@@ -87,15 +119,63 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                          uint32_t fallthroughPc,
                          GuestBranchKind kind,
                          const char *debugName) {
-    // Return false so that the recompiled function yields back to the main loop's dispatcher
-    return false;
+    if (!ctx) return false;
+    ctx->pc = targetPc;
+    const bool is_call = kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall;
+    if (kind == GuestBranchKind::Return) return false;
+
+    RecompiledFunction function = lookupFunction(targetPc);
+    if (!function) {
+        reportMissingFunction(rdram, ctx, targetPc, sourcePc, kind, debugName);
+        return false;
+    }
+
+    ++g_guest_dispatch_count;
+    function(rdram, ctx, this);
+    if (isStopRequested() || ctx->pc == 0 || OpenRatchet::Runtime::GuestDeadlineExpired()) return false;
+    if (!is_call) return false;
+    if (ctx->pc == targetPc) ctx->pc = fallthroughPc;
+    return ctx->pc == fallthroughPc;
 }
+
+bool PS2Runtime::registerFunction(uint32_t, RecompiledFunction) { return false; }
+bool PS2Runtime::replaceFunction(uint32_t, RecompiledFunction) { return false; }
+PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address) {
+    if (address < g_ps2RecompiledFunctionTableBase || address >= g_ps2RecompiledFunctionTableEnd ||
+        (address & 3u) != 0) return nullptr;
+    const uint32_t slot = (address - g_ps2RecompiledFunctionTableBase) / 4u;
+    return slot < g_ps2RecompiledFunctionTableSlotCount ? g_ps2RecompiledFunctionTable[slot] : nullptr;
+}
+bool PS2Runtime::hasFunction(uint32_t address) const {
+    if (address < g_ps2RecompiledFunctionTableBase || address >= g_ps2RecompiledFunctionTableEnd ||
+        (address & 3u) != 0) return false;
+    const uint32_t slot = (address - g_ps2RecompiledFunctionTableBase) / 4u;
+    return slot < g_ps2RecompiledFunctionTableSlotCount && g_ps2RecompiledFunctionTable[slot] != nullptr;
+}
+void PS2Runtime::requestStop() { m_stopRequested.store(true, std::memory_order_release); }
+bool PS2Runtime::isStopRequested() const { return m_stopRequested.load(std::memory_order_acquire); }
 
 void PS2Runtime::HandleIntegerOverflow(R5900Context *ctx) {
     std::cerr << "PS2Runtime::HandleIntegerOverflow stub called\n";
 }
 
 void PS2Runtime::handleSyscall(uint8_t *rdram, R5900Context *ctx) {
+    const uint32_t syscall_id = getRegU32(ctx, 3);
+    if (syscall_id == 0x3Cu) {
+        const uint32_t gp = getRegU32(ctx, 4);
+        const uint32_t stack = getRegU32(ctx, 5);
+        const int32_t stack_size = static_cast<int32_t>(getRegU32(ctx, 6));
+        if (gp != 0) ctx->r[28] = _mm_set_epi64x(0, gp);
+        uint32_t sp = getRegU32(ctx, 29);
+        if (stack == 0xFFFFFFFFu) sp = stack_size > 0 ? EE_MAIN_RAM_SIZE - static_cast<uint32_t>(stack_size) : EE_MAIN_RAM_SIZE;
+        else if (stack != 0) sp = stack_size > 0 ? stack + static_cast<uint32_t>(stack_size) : stack;
+        setReturnU32(ctx, sp & ~0xFu);
+        return;
+    }
+    if (syscall_id == 0x3Du) {
+        setReturnU32(ctx, (getRegU32(ctx, 4) + 0xFu) & ~0xFu);
+        return;
+    }
     MIPS_EE_Context ee_ctx;
     copyContextFromR5900(*ctx, ee_ctx);
     OpenRatchet::Kernel::DispatchSyscall(&ee_ctx, &g_ee_memory);
@@ -103,10 +183,8 @@ void PS2Runtime::handleSyscall(uint8_t *rdram, R5900Context *ctx) {
 }
 
 void PS2Runtime::handleSyscall(uint8_t *rdram, R5900Context *ctx, uint32_t encodedSyscallId) {
-    MIPS_EE_Context ee_ctx;
-    copyContextFromR5900(*ctx, ee_ctx);
-    OpenRatchet::Kernel::DispatchSyscall(&ee_ctx, &g_ee_memory);
-    copyContextToR5900(ee_ctx, *ctx);
+    (void)encodedSyscallId;
+    handleSyscall(rdram, ctx);
 }
 
 void PS2Runtime::clearLLBit(R5900Context *ctx) {
