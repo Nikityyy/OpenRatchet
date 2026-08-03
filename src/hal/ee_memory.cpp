@@ -2,9 +2,7 @@
 
 EE_Memory g_ee_memory;
 
-EE_Memory::EE_Memory() {
-    Init();
-}
+EE_Memory::EE_Memory() = default;
 
 void EE_Memory::Init() {
     main_ram.assign(EE_MAIN_RAM_SIZE, 0);

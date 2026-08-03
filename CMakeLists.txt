@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(OpenRatchet LANGUAGES CXX)
+include(CTest)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,4 +44,11 @@ if(TARGET SDL2::SDL2)
             "$<TARGET_FILE:SDL2::SDL2>"
             "$<TARGET_FILE_DIR:openratchet>"
         COMMENT "Copying SDL2 runtime next to openratchet")
+endif()
+
+if(BUILD_TESTING)
+    add_executable(openratchet_memory_tests tests/test_memory.cpp)
+    target_link_libraries(openratchet_memory_tests PRIVATE openratchet_hal)
+    target_include_directories(openratchet_memory_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME openratchet_memory_tests COMMAND openratchet_memory_tests --self-test)
 endif()

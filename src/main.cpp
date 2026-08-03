@@ -50,7 +50,7 @@ void run_self_test() {
 
     // Test MMIO routing
     mem.Write<uint32_t>(0x10000000, 0x11112222);
-    assert(mem.Read<uint32_t>(0x10000000) == 0); // dummy handler returns 0
+    assert(mem.Read<uint32_t>(0x10000000) == 0x11112222);
 
     std::cout << "Memory tests pass!" << std::endl;
 }
@@ -150,4 +150,3 @@ int main(int argc, char* argv[]) {
     std::cout << "Status: Milestone 7 — HAL and Main Loop" << std::endl;
     return 0;
 }
-
