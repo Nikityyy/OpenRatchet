@@ -5,6 +5,8 @@
 #include <functional>
 #include "openratchet/gs_state.h"
 
+class GS_VRAM;
+
 struct GIF_Tag {
     uint16_t NLOOP;
     bool EOP;
@@ -30,7 +32,7 @@ using DrawCallback = std::function<void(uint8_t prim_type, const std::vector<GIF
 class GIF_Parser {
 public:
     // Parse a GIF packet. Calls on_draw each time a primitive is complete.
-    size_t ParsePacket(GS_State& gs, const uint8_t* data, size_t size,
+    size_t ParsePacket(GS_State& gs, GS_VRAM* vram, const uint8_t* data, size_t size,
                        DrawCallback on_draw = nullptr);
 
     // Stats
@@ -42,7 +44,7 @@ private:
 
     size_t ProcessPacked (GS_State& gs, const GIF_Tag& tag, const uint8_t* data, size_t size, DrawCallback& cb);
     size_t ProcessReglist(GS_State& gs, const GIF_Tag& tag, const uint8_t* data, size_t size, DrawCallback& cb);
-    size_t ProcessImage  (GS_State& gs, const GIF_Tag& tag, const uint8_t* data, size_t size);
+    size_t ProcessImage  (GS_State& gs, GS_VRAM* vram, const GIF_Tag& tag, const uint8_t* data, size_t size);
 
     // Vertex accumulation
     void PushVertex(GS_State& gs, bool kick, DrawCallback& cb);

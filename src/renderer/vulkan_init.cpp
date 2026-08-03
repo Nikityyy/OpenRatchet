@@ -26,6 +26,12 @@ bool VulkanRenderer::Initialize(SDL_Window* window) {
         WriteGSReg(g_gs_state, reg, val);
     });
 
+    // Wire GIF FIFO MMIO (0x10006000, PATH3 DIRECT) and DMA PATH3 to this renderer.
+    // Captures 'this' by pointer — safe since VulkanRenderer outlives all MMIO activity.
+    RegisterGIFPacketCallback([this](const uint8_t* data, size_t size) {
+        ProcessGIFPacket(data, size);
+    });
+
     if (!CreateInstance()) return false;
     
     if (!SDL_Vulkan_CreateSurface(window, m_instance, &m_surface)) {

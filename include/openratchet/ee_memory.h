@@ -13,6 +13,14 @@
 // reg  = GS register index (0x00–0x7F), val = 64-bit register value.
 void RegisterGSWriteCallback(std::function<void(uint8_t reg, uint64_t val)> cb);
 
+// Register a callback that is invoked when the game sends a GIF packet
+// to the GIF FIFO (MMIO 0x10006000) or via DMA channel 2 (PATH3).
+// data = pointer into host EE RAM at the start of the packet, size = byte count.
+void RegisterGIFPacketCallback(std::function<void(const uint8_t* data, size_t size)> cb);
+
+// Called by MMIO or DMA to deliver a GIF packet to the registered callback.
+void DeliverGIFPacket(const uint8_t* data, size_t size);
+
 // 32 MB Main RAM
 constexpr uint32_t EE_MAIN_RAM_SIZE = 32 * 1024 * 1024;
 // 16 KB Scratchpad

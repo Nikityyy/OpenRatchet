@@ -3,12 +3,25 @@
 
 EE_Memory g_ee_memory;
 
-// ── GS write callback ────────────────────────────────────────────────────────
+// ── GS write callback ─────────────────────────────────────────────────────────────────────────
 // Registered by the renderer at startup so the HAL doesn't depend on renderer.
 static std::function<void(uint8_t reg, uint64_t val)> g_gs_write_cb;
 
 void RegisterGSWriteCallback(std::function<void(uint8_t reg, uint64_t val)> cb) {
     g_gs_write_cb = std::move(cb);
+}
+
+// ── GIF packet callback ─────────────────────────────────────────────────────────────────
+// Registered by VulkanRenderer so GIF FIFO/DMA writes reach ProcessGIFPacket.
+static std::function<void(const uint8_t*, size_t)> g_gif_packet_cb;
+
+void RegisterGIFPacketCallback(std::function<void(const uint8_t* data, size_t size)> cb) {
+    g_gif_packet_cb = std::move(cb);
+}
+
+void DeliverGIFPacket(const uint8_t* data, size_t size) {
+    if (g_gif_packet_cb && data && size >= 16)
+        g_gif_packet_cb(data, size);
 }
 
 EE_Memory::EE_Memory() = default;

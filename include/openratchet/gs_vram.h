@@ -26,7 +26,7 @@ public:
     void WriteImage(uint32_t base_ptr, uint32_t width, uint32_t psm, const uint8_t* data, size_t size);
 
     // Read a texture from VRAM into a 32-bit RGBA buffer (for uploading to Vulkan)
-    void ReadTexture32(uint32_t base_ptr, uint32_t width, uint32_t height, uint32_t psm,
+    void ReadTexture32(uint32_t base_ptr, uint32_t tbw, uint32_t width, uint32_t height, uint32_t psm,
                        std::vector<uint32_t>& out_rgba) const;
 
     // Convert a byte offset from a block pointer (256-byte blocks)

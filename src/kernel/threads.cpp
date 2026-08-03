@@ -54,7 +54,10 @@ static void SysTerminateThread(MIPS_EE_Context* ctx, EE_Memory* mem) {
 }
 
 static void SysSleepThread(MIPS_EE_Context* ctx, EE_Memory* mem) {
-    std::lock_guard lock(g_mutex); g_threads[g_current_thread].state = 2; ctx->r[2] = 0;
+    std::lock_guard lock(g_mutex); 
+    // Do not set state=2 (sleeping) as there is no scheduler to wake this thread yet.
+    // Behave as a no-op yield to prevent deadlocks in the stub implementation.
+    ctx->r[2] = 0;
 }
 
 static void SysWakeupThread(MIPS_EE_Context* ctx, EE_Memory* mem) {

@@ -284,17 +284,37 @@ void VulkanRenderer::EndFrame() {
 
 void VulkanRenderer::ProcessGIFPacket(const uint8_t* data, size_t size) {
     auto cb = [this](uint8_t prim_type, const std::vector<GIF_Vertex>& verts) {
+        // XYOFFSET is stored in 12:4 fixed-point format (bits 0-15 = X, 32-47 = Y).
+        // e.g. center 2048.0 is represented as 32768.
+        const uint64_t xyoffset = m_gsState.XYOFFSET_1;
+        const float ofx = static_cast<float>((xyoffset >> 0) & 0xFFFF) / 16.0f;
+        const float ofy = static_cast<float>((xyoffset >> 32) & 0xFFFF) / 16.0f;
+
         // Convert GIF_Vertex → PS2Vertex (NDC coords from 4-bit fixed-point PS2 space)
         std::vector<PS2Vertex> ps2verts;
         ps2verts.reserve(verts.size());
-        // PS2 rasterises at 4096x4096 fixed coords (4-bit subpixel), display is typically 640x448
-        constexpr float W = 640.0f * 16.0f, H = 448.0f * 16.0f;
+        
+        // Typical resolution for display mapping.
+        constexpr float W = 640.0f, H = 448.0f;
+        
         for (const auto& gv : verts) {
             PS2Vertex v;
-            v.x = (static_cast<float>(gv.x) / W) * 2.0f - 1.0f;
-            v.y = (static_cast<float>(gv.y) / H) * 2.0f - 1.0f;
+            // Convert from 4-bit fixed point to float pixels
+            float px = static_cast<float>(gv.x) / 16.0f;
+            float py = static_cast<float>(gv.y) / 16.0f;
+            
+            // Subtract the GS drawing offset
+            px -= ofx;
+            py -= ofy;
+            
+            // Map offset-relative [0, W] and [0, H] to NDC [-1, 1]
+            v.x = (px / W) * 2.0f - 1.0f;
+            v.y = (py / H) * 2.0f - 1.0f;
+            
+            // Z is 32-bit (24-bit usable), map to [0, 1]
             v.z = static_cast<float>(gv.z) / static_cast<float>(0xFFFFFFu);
             v.w = 1.0f;
+            
             v.r = gv.r / 255.0f; v.g = gv.g / 255.0f;
             v.b = gv.b / 255.0f; v.a = gv.a / 255.0f;
             v.u = gv.s; v.v = gv.t;
@@ -303,7 +323,7 @@ void VulkanRenderer::ProcessGIFPacket(const uint8_t* data, size_t size) {
         DrawPrimitive(prim_type, ps2verts);
     };
 
-    m_gifParser.ParsePacket(m_gsState, data, size, cb);
+    m_gifParser.ParsePacket(m_gsState, &m_vram, data, size, cb);
     ++m_frameGIFPackets;
     ++m_totalGIFPackets;
 }

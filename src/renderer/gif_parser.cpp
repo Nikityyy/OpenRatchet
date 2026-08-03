@@ -1,6 +1,8 @@
 #include "openratchet/gif_parser.h"
+#include "openratchet/gs_vram.h"
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
 // How many verts until a primitive is complete
 static int vertsForPrim(uint8_t ptype) {
@@ -29,7 +31,7 @@ GIF_Tag GIF_Parser::DecodeTag(uint64_t tag0, uint64_t tag1) {
     return tag;
 }
 
-size_t GIF_Parser::ParsePacket(GS_State& gs, const uint8_t* data, size_t size,
+size_t GIF_Parser::ParsePacket(GS_State& gs, GS_VRAM* vram, const uint8_t* data, size_t size,
                                DrawCallback on_draw) {
     if (size < 16) return 0;
     size_t offset = 0;
@@ -43,20 +45,19 @@ size_t GIF_Parser::ParsePacket(GS_State& gs, const uint8_t* data, size_t size,
 
         GIF_Tag tag = DecodeTag(tag0, tag1);
         eop = tag.EOP;
+        
+        size_t tag_size = tag.NLOOP * (tag.FLG == 2 ? 16 : tag.NREG * 16);
+        if (offset + tag_size > size) break;
 
         if (tag.PRE) {
             WriteGSReg(gs, 0x00, tag.PRIM);
             m_primType = gs.PRIM & 0x7;
         }
 
-        size_t consumed = 0;
-        switch (tag.FLG) {
-            case 0: consumed = ProcessPacked (gs, tag, data + offset, size - offset, on_draw); break;
-            case 1: consumed = ProcessReglist(gs, tag, data + offset, size - offset, on_draw); break;
-            case 2: consumed = ProcessImage  (gs, tag, data + offset, size - offset); break;
-            case 3: consumed = 0; break;
-        }
-        offset += consumed;
+        if (tag.FLG == 0) offset += ProcessPacked(gs, tag, data + offset, tag_size, on_draw);
+        else if (tag.FLG == 1) offset += ProcessReglist(gs, tag, data + offset, tag_size, on_draw);
+        else if (tag.FLG == 2) offset += ProcessImage(gs, vram, tag, data + offset, tag_size);
+        
         m_packetsProcessed++;
     }
     return offset;
@@ -223,17 +224,23 @@ size_t GIF_Parser::ProcessReglist(GS_State& gs, const GIF_Tag& tag,
 
 // ─── IMAGE format ────────────────────────────────────────────────────────────
 
-size_t GIF_Parser::ProcessImage(GS_State& gs, const GIF_Tag& tag,
+size_t GIF_Parser::ProcessImage(GS_State& gs, GS_VRAM* vram, const GIF_Tag& tag,
                                  const uint8_t* data, size_t size) {
     // IMAGE (TRXDIR) mode: raw pixel data written to VRAM via HWREG.
     // NLOOP is the number of 128-bit (16-byte) data words.
     const size_t consumed = std::min(static_cast<size_t>(tag.NLOOP) * 16u, size);
-    // Store BITBLTBUF/TRXPOS/TRXREG state is already in gs_state.
-    // We store a pointer-sized tag in HWREG so the renderer can pick it up.
-    // The actual VRAM write is done by the caller (VulkanRenderer) which has
-    // a reference to GS_VRAM. Here we mark the transfer in the state.
-    // (This field is safe to overwrite; it's per-transfer.)
+    
+    if (vram) {
+        // BITBLTBUF bits 32-45 is DBP (Destination Buffer Pointer)
+        const uint32_t dbp = static_cast<uint32_t>((gs.BITBLTBUF >> 32) & 0x3FFF);
+        // TRXREG bits 0-11 is RRW (Transmission Region Width)
+        const uint32_t rrw = static_cast<uint32_t>(gs.TRXREG & 0xFFF);
+        // BITBLTBUF bits 56-61 is DPSM (Destination Pixel Format)
+        const uint32_t dpsm = static_cast<uint32_t>((gs.BITBLTBUF >> 56) & 0x3F);
+        
+        vram->WriteImage(dbp, rrw, dpsm, data, consumed);
+    }
+    
     gs.HWREG = static_cast<uint64_t>(consumed); // bytes consumed this transfer
-    (void)data; // data pointer available for the renderer to use via GS_VRAM::WriteImage
     return consumed;
 }

@@ -39,6 +39,7 @@ struct ReadChunk {
 };
 
 static std::vector<FileRecord> g_files;
+static std::string g_isoPath = "games/Ratchet & Clank (USA) (En,Fr,De,Es,It).iso";
 static std::future<PendingReadResult> g_pendingRead;
 static EE_Memory* g_pendingMem = nullptr;  // memory to apply result to in sceCdSync
 static int g_cdError = 0;
@@ -110,6 +111,10 @@ int32_t sceCdInit(int32_t mode) {
     bool in_files = false;
     try {
         while (std::getline(manifest, line)) {
+            if (line.rfind("ISO_PATH=", 0) == 0) {
+                g_isoPath = line.substr(9);
+                continue;
+            }
             if (line == "---FILES---") { in_files = true; continue; }
             if (!in_files || line.empty()) continue;
 
@@ -163,6 +168,7 @@ int32_t sceCdInit(int32_t mode) {
 int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t mode, EE_Memory* mem) {
     (void)mode;
     std::lock_guard lock(g_cdMutex);
+    std::clog << "[CDVD] sceCdRead lsn=" << lsn << " sectors=" << sectors << " buffer=0x" << std::hex << buffer_addr << std::dec << "\n";
 
     // If a previous async read is still in-flight, wait for it before starting a new one.
     if (g_pendingRead.valid() &&
@@ -176,9 +182,15 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
     }
 
 
+    if (sectors == 0) {
+        g_cdError = 0;
+        return 1; // 0 sectors read is a no-op success
+    }
+
     const uint64_t total_bytes64 = static_cast<uint64_t>(sectors) * 2048;
-    if (sectors == 0 || total_bytes64 > UINT32_MAX || !mem ||
+    if (total_bytes64 > UINT32_MAX || !mem ||
         !mem->IsValidRange(buffer_addr, static_cast<size_t>(total_bytes64))) {
+        std::clog << "[CDVD] sceCdRead INVALID ARGUMENTS! sectors=" << sectors << " buffer=0x" << std::hex << buffer_addr << std::dec << " valid=" << (mem ? mem->IsValidRange(buffer_addr, static_cast<size_t>(total_bytes64)) : 0) << "\n";
         g_cdError = 2;
         return 0;
     }
@@ -224,9 +236,17 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
             cur_offset += total_chunk_bytes;
             remaining_sectors -= chunk_sectors;
         } else {
-            std::cerr << "[CDVD] Error: LSN " << cur_lsn << " is not covered by extracted data\n";
-            g_cdError = 1;
-            return 0;
+            std::cout << "[CDVD] Fallback: Reading LSN " << cur_lsn << " (" << remaining_sectors << " sectors) directly from ISO: " << g_isoPath << "\n";
+            chunks.push_back({
+                g_isoPath,
+                static_cast<uint64_t>(cur_lsn) * 2048u,
+                remaining_sectors * 2048u,
+                0,
+                cur_offset
+            });
+            cur_lsn += remaining_sectors;
+            cur_offset += remaining_sectors * 2048u;
+            remaining_sectors = 0;
         }
     }
 
@@ -242,6 +262,9 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
             result.data.resize(total_bytes, 0);
 
             for (const auto& chunk : chunks) {
+                if (chunk.file_path.empty()) {
+                    continue;
+                }
                 std::ifstream f(chunk.file_path, std::ios::binary);
                 if (!f.is_open()) {
                     std::cerr << "[CDVD] Async Error: Failed to open " << chunk.file_path << "\n";

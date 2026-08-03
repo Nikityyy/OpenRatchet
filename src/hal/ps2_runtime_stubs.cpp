@@ -80,11 +80,12 @@ void PS2Runtime::vu0StartMicroProgram(uint8_t* rdram, R5900Context* ctx, uint32_
 }
 
 void PS2Runtime::handleTrap(uint8_t* rdram, R5900Context* ctx) {
-    std::cerr << "PS2Runtime::handleTrap stub called\n";
+    // MIPS TRAP instruction — condition was true; on PS2 user code this is a no-op
+    // (the OS trap handler would normally run but we have none, so just continue).
 }
 
 void PS2Runtime::handleBreak(uint8_t* rdram, R5900Context* ctx) {
-    std::cerr << "PS2Runtime::handleBreak stub called\n";
+    // MIPS BREAK instruction — treat as no-op in recompiled user code.
 }
 
 bool PS2Runtime::shouldPreemptGuestExecution() {
@@ -132,8 +133,14 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
 
     ++g_guest_dispatch_count;
     function(rdram, ctx, this);
-    if (isStopRequested() || ctx->pc == 0 || OpenRatchet::Runtime::GuestDeadlineExpired()) return false;
-    if (!is_call) return false;
+    if (isStopRequested() || OpenRatchet::Runtime::GuestDeadlineExpired()) return false;
+    if (!is_call) {
+        if (ctx->pc == 0) return false;
+        return false;
+    }
+    // For JAL/JALR calls: if callee returned with $ra=0 (PC=0), treat it as returning
+    // to the fallthrough (callee was a leaf stub that zeroed $ra).
+    if (ctx->pc == 0) ctx->pc = fallthroughPc;
     if (ctx->pc == targetPc) ctx->pc = fallthroughPc;
     // A generated callee returns by placing its RA in PC.  The caller's
     // generated code expects true precisely when that return reached its
