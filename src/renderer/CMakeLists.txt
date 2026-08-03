@@ -20,5 +20,10 @@ target_include_directories(openratchet_renderer PUBLIC
     ${CMAKE_SOURCE_DIR}/third_party/imgui
     ${CMAKE_SOURCE_DIR}/third_party/vma
 )
+if(OPENRATCHET_SKIP_DEPS)
+    target_include_directories(openratchet_renderer PUBLIC ${OPENRATCHET_SDL2_INCLUDE_DIR})
+endif()
 
-target_link_libraries(openratchet_renderer PUBLIC Vulkan::Vulkan SDL2::SDL2)
+if(NOT OPENRATCHET_SKIP_DEPS)
+    target_link_libraries(openratchet_renderer PUBLIC Vulkan::Vulkan SDL2::SDL2)
+endif()

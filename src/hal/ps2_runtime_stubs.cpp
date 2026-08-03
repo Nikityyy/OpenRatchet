@@ -4,7 +4,7 @@
 #include "openratchet/syscalls.h"
 #include "openratchet/context_bridge.h"
 #include "ps2x/iop/iop_subsystem.h"
-#include "../../../third_party/PS2Recomp/ps2xRuntime/src/lib/ps2_iop_host.h"
+#include "ps2_iop_host.h"
 
 PS2Runtime::PS2Runtime() {}
 PS2Runtime::~PS2Runtime() {}
@@ -153,4 +153,3 @@ __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr) {
     uint128_t val = g_ee_memory.Read<uint128_t>(vaddr);
     return *reinterpret_cast<__m128i*>(&val);
 }
-

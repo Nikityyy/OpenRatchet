@@ -13,6 +13,27 @@
 This file is the **single source of truth** for building OpenRatchet. It is organized into
 **Milestones** (large, committable steps). Each milestone contains **Tasks** (individual units of work).
 
+### Local Build Environment
+
+The development machine already has Microsoft Visual Studio Community installed with
+the MSVC C++ compiler. Do not assume that a compiler must be installed:
+
+- Visual Studio: `C:\Program Files\Microsoft Visual Studio\18\Community`
+- MSVC compiler: `VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\cl.exe`
+- Developer environment script: `Common7\Tools\VsDevCmd.bat`
+- CMake: `C:\Program Files\CMake\bin\cmake.exe`
+- Ninja: `C:\Users\berge\miniconda3\Scripts\ninja.exe`
+
+The compiler executable is present and works. The current installation is missing the
+Windows SDK resource/manifest tools (`rc.exe` and `mt.exe`), so a native CMake link may
+fail with `CMAKE_MT-NOTFOUND` until the Visual Studio Installer adds the Desktop
+development with C++ workload and a Windows 10/11 SDK. Use the x64 Developer Command
+Prompt, or initialize it explicitly with:
+
+```powershell
+cmd /k "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat" -arch=x64
+```
+
 ### Rules for the AI Agent
 
 1. **Work one milestone at a time.** Do not skip ahead.

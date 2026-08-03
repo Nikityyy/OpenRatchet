@@ -9,10 +9,12 @@ if(MSVC)
 endif()
 
 if(NOT OPENRATCHET_SKIP_DEPS)
-    find_package(Vulkan)
+    find_package(Vulkan REQUIRED)
     set(SDL2_DIR "${CMAKE_SOURCE_DIR}/third_party/SDL2/cmake")
     find_package(SDL2 REQUIRED)
 endif()
+
+set(OPENRATCHET_SDL2_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third_party/SDL2/include")
 
 include_directories(include/)
 
@@ -34,3 +36,11 @@ endif()
 
 add_executable(openratchet src/main.cpp)
 target_link_libraries(openratchet PRIVATE openratchet_hal openratchet_renderer openratchet_kernel openratchet_iop openratchet_recompiled)
+
+if(TARGET SDL2::SDL2)
+    add_custom_command(TARGET openratchet POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:SDL2::SDL2>"
+            "$<TARGET_FILE_DIR:openratchet>"
+        COMMENT "Copying SDL2 runtime next to openratchet")
+endif()
