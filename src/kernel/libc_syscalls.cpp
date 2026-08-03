@@ -90,15 +90,17 @@ static void SysGetEntryAddress(MIPS_EE_Context* ctx, EE_Memory*) {
 }
 
 void InitLibcSyscalls() {
-    RegisterSyscall(0x64, SysFlushCache, "FlushCache");
-    
-    RegisterSyscall(0x83, SysFindAddress, "FindAddress");
-    RegisterSyscall(0x74, SysSetSyscall, "SetSyscall");
+    RegisterSyscall(0x64, SysFlushCache,      "FlushCache");
+    RegisterSyscall(0x83, SysFindAddress,     "FindAddress");
+    RegisterSyscall(0x74, SysSetSyscall,      "SetSyscall");
     RegisterSyscall(0x5B, SysGetEntryAddress, "GetEntryAddress");
 
-    // RegisterPrintf? ID might be 0x3F or similar depending on BIOS, 
-    // will leave it un-registered until we hit the unimplemented syscall or know the ID.
-    // Some BIOS versions use 0x3E or 0x3F for printf.
+    // scePrintf — PS2 BIOS syscall 0x3F
+    RegisterSyscall(0x3F, SysPrintf, "scePrintf");
+
+    // RotateThreadReadyQueue (0x29) — called during startup; no-op is safe
+    auto SysRotate = [](MIPS_EE_Context* c, EE_Memory*) { c->r[2] = 0; };
+    RegisterSyscall(0x29, SysRotate, "RotateThreadReadyQueue");
 }
 
 } // namespace Kernel

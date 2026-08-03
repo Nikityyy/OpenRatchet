@@ -34,9 +34,8 @@ bool VulkanRenderer::Initialize(SDL_Window* window) {
     if (!CreateCommandBuffers()) return false;
     if (!CreateSyncObjects()) return false;
     if (!InitImGui()) return false;
-    
-    // We'll create the pipeline later in vulkan_draw.cpp or here if we have shaders
-    
+    if (!CreatePipeline()) return false;
+
     std::cout << "Vulkan Renderer fully initialized.\n";
     return true;
 }
@@ -61,6 +60,8 @@ void VulkanRenderer::Shutdown() {
         
         if (m_swapchain) vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
         
+        if (m_graphicsPipeline) { vkDestroyPipeline(m_device, m_graphicsPipeline, nullptr); m_graphicsPipeline = VK_NULL_HANDLE; }
+        if (m_pipelineLayout)   { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
         if (m_vertexBuffer) vmaDestroyBuffer(m_allocator, m_vertexBuffer, m_vertexBufferAllocation);
         if (m_allocator) vmaDestroyAllocator(m_allocator);
 

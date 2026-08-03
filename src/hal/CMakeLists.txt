@@ -5,6 +5,7 @@ add_library(openratchet_hal STATIC
     float_mode.cpp
     native_hal.cpp
     ps2_runtime_stubs.cpp
+    ps2_function_stubs.cpp
     context_bridge.cpp
 )
 target_include_directories(openratchet_hal PUBLIC ${CMAKE_SOURCE_DIR}/include)

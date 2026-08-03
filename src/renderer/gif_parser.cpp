@@ -65,23 +65,19 @@ size_t GIF_Parser::ParsePacket(GS_State& gs, const uint8_t* data, size_t size,
 // ─── Vertex push / primitive flush ───────────────────────────────────────────
 
 void GIF_Parser::PushVertex(GS_State& gs, bool kick, DrawCallback& cb) {
-    // Fill current vertex from current GS registers
-    // XYZ2 / XYZF2 is stored in gs.HWREG as a scratchpad by WriteGSReg, but we
-    // snapshot directly from the state struct. Here we use the raw 64-bit values.
-
     // RGBAQ: R[7:0] G[15:8] B[23:16] A[31:24] Q[63:32]
-    uint64_t rgbaq = gs.RGBAQ;
+    const uint64_t rgbaq = gs.RGBAQ;
     m_current.r = (rgbaq >>  0) & 0xFF;
     m_current.g = (rgbaq >>  8) & 0xFF;
     m_current.b = (rgbaq >> 16) & 0xFF;
     m_current.a = (rgbaq >> 24) & 0xFF;
-    uint32_t q_bits = (rgbaq >> 32) & 0xFFFFFFFF;
+    uint32_t q_bits = static_cast<uint32_t>(rgbaq >> 32);
     std::memcpy(&m_current.q, &q_bits, 4);
 
-    // ST: S[31:0] T[63:32] (IEEE float)
-    uint64_t st = gs.TEX0_1; // ST is stored separately, but gs.RGBAQ already holds Q.
-    // ST is in HWREG after a write to reg 0x02 (ST). We stored it into... let's use a dedicated field.
-    // For now, UV is zero unless the game sets it. We'll leave u/v from m_current (set via reg write).
+    // ST texture coordinates come from gs.ST_S / gs.ST_T
+    // (set by WriteGSReg when reg 0x02/0x03 is written)
+    m_current.s = gs.ST_S;
+    m_current.t = gs.ST_T;
 
     m_verts.push_back(m_current);
 
@@ -227,9 +223,17 @@ size_t GIF_Parser::ProcessReglist(GS_State& gs, const GIF_Tag& tag,
 
 // ─── IMAGE format ────────────────────────────────────────────────────────────
 
-size_t GIF_Parser::ProcessImage(GS_State& /*gs*/, const GIF_Tag& tag,
-                                 const uint8_t* /*data*/, size_t size) {
-    // IMAGE data goes to HWREG; each NLOOP unit is 16 bytes.
-    size_t consumed = (size_t)tag.NLOOP * 16;
-    return std::min(consumed, size);
+size_t GIF_Parser::ProcessImage(GS_State& gs, const GIF_Tag& tag,
+                                 const uint8_t* data, size_t size) {
+    // IMAGE (TRXDIR) mode: raw pixel data written to VRAM via HWREG.
+    // NLOOP is the number of 128-bit (16-byte) data words.
+    const size_t consumed = std::min(static_cast<size_t>(tag.NLOOP) * 16u, size);
+    // Store BITBLTBUF/TRXPOS/TRXREG state is already in gs_state.
+    // We store a pointer-sized tag in HWREG so the renderer can pick it up.
+    // The actual VRAM write is done by the caller (VulkanRenderer) which has
+    // a reference to GS_VRAM. Here we mark the transfer in the state.
+    // (This field is safe to overwrite; it's per-transfer.)
+    gs.HWREG = static_cast<uint64_t>(consumed); // bytes consumed this transfer
+    (void)data; // data pointer available for the renderer to use via GS_VRAM::WriteImage
+    return consumed;
 }

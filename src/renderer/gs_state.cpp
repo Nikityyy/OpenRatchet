@@ -1,14 +1,24 @@
 #include "openratchet/gs_state.h"
 #include <iostream>
+#include <cstring>
 
 void WriteGSReg(GS_State& state, uint8_t reg, uint64_t data) {
     switch (reg) {
         case 0x00: state.PRIM = data; break;
         case 0x01: state.RGBAQ = data; break;
-        case 0x02: /* ST */ break;
-        case 0x03: /* UV */ break;
-        case 0x04: /* XYZF2 */ break;
-        case 0x05: /* XYZ2 */ break;
+        case 0x02: { // ST — S and T as IEEE 754 floats packed in 64 bits
+            std::memcpy(&state.ST_S, &data,     sizeof(float));
+            std::memcpy(&state.ST_T, reinterpret_cast<const uint8_t*>(&data) + 4, sizeof(float));
+            break;
+        }
+        case 0x03: { // UV — 16.4 fixed-point, S in [15:0], T in [31:16]
+            state.ST_S = (data & 0xFFFF) / 16.0f;
+            state.ST_T = ((data >> 16) & 0xFFFF) / 16.0f;
+            break;
+        }
+        case 0x04: state.HWREG = data; break; // XYZF2 — kick, store for inspection
+        case 0x05: state.HWREG = data; break; // XYZ2  — kick, store for inspection
+
         case 0x06: state.TEX0_1 = data; break;
         case 0x07: state.TEX0_2 = data; break;
         case 0x08: state.CLAMP_1 = data; break;

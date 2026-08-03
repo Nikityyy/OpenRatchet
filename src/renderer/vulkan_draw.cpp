@@ -1,8 +1,197 @@
+// vulkan_draw.cpp — Primitive rendering and frame management
 #include "openratchet/vulkan_renderer.h"
 #include <iostream>
 #include <cstring>
+#include <fstream>
+#include <vector>
 #include <backends/imgui_impl_sdl2.h>
 #include <backends/imgui_impl_vulkan.h>
+
+// ─── SPIR-V loading helper ────────────────────────────────────────────────────
+
+static std::vector<uint32_t> LoadSPIRV(const char* path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return {};
+    const size_t size = static_cast<size_t>(f.tellg());
+    if (size == 0 || size % 4 != 0) return {};
+    f.seekg(0);
+    std::vector<uint32_t> code(size / 4);
+    f.read(reinterpret_cast<char*>(code.data()), size);
+    return code;
+}
+
+// ─── Pipeline creation ────────────────────────────────────────────────────────
+
+bool VulkanRenderer::CreatePipeline() {
+#ifndef OPENRATCHET_SHADER_DIR
+    std::cerr << "[Vulkan] OPENRATCHET_SHADER_DIR not defined — skipping pipeline\n";
+    return true; // non-fatal
+#else
+    const std::string shaderDir = OPENRATCHET_SHADER_DIR;
+    if (shaderDir.empty()) {
+        std::cerr << "[Vulkan] Shader directory empty (glslc not found at CMake time) — no game geometry will render\n";
+        return true; // non-fatal
+    }
+
+    const auto vertCode = LoadSPIRV((shaderDir + "ps2_prim.vert.spv").c_str());
+    const auto fragCode = LoadSPIRV((shaderDir + "ps2_prim.frag.spv").c_str());
+    if (vertCode.empty() || fragCode.empty()) {
+        std::cerr << "[Vulkan] Failed to load compiled shaders from: " << shaderDir << "\n";
+        return true; // non-fatal — ImGui still works
+    }
+
+    auto makeModule = [&](const std::vector<uint32_t>& code) -> VkShaderModule {
+        VkShaderModuleCreateInfo info{};
+        info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        info.codeSize = code.size() * 4;
+        info.pCode    = code.data();
+        VkShaderModule mod = VK_NULL_HANDLE;
+        vkCreateShaderModule(m_device, &info, nullptr, &mod);
+        return mod;
+    };
+    VkShaderModule vertMod = makeModule(vertCode);
+    VkShaderModule fragMod = makeModule(fragCode);
+    if (!vertMod || !fragMod) {
+        std::cerr << "[Vulkan] Failed to create shader modules\n";
+        vkDestroyShaderModule(m_device, vertMod, nullptr);
+        vkDestroyShaderModule(m_device, fragMod, nullptr);
+        return true;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertMod;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragMod;
+    stages[1].pName  = "main";
+
+    // Vertex layout: PS2Vertex = {x,y,z,w, r,g,b,a, u,v} — 10 floats = 40 bytes
+    VkVertexInputBindingDescription binding{};
+    binding.binding   = 0;
+    binding.stride    = sizeof(PS2Vertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrs[3]{};
+    attrs[0].location = 0; attrs[0].binding = 0;
+    attrs[0].format   = VK_FORMAT_R32G32B32A32_SFLOAT; // position (x,y,z,w)
+    attrs[0].offset   = offsetof(PS2Vertex, x);
+    attrs[1].location = 1; attrs[1].binding = 0;
+    attrs[1].format   = VK_FORMAT_R32G32B32A32_SFLOAT; // color (r,g,b,a)
+    attrs[1].offset   = offsetof(PS2Vertex, r);
+    attrs[2].location = 2; attrs[2].binding = 0;
+    attrs[2].format   = VK_FORMAT_R32G32_SFLOAT;       // texcoord (u,v)
+    attrs[2].offset   = offsetof(PS2Vertex, u);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount   = 1;
+    vertexInput.pVertexBindingDescriptions      = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.pVertexAttributeDescriptions    = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode    = VK_CULL_MODE_NONE; // PS2 doesn't cull by default
+    rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachment.blendEnable         = VK_TRUE;
+    blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAttachment.colorBlendOp        = VK_BLEND_OP_ADD;
+    blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments    = &blendAttachment;
+
+    // Dynamic viewport and scissor so we can handle resize
+    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates    = dynamicStates;
+
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+        std::cerr << "[Vulkan] Failed to create pipeline layout\n";
+        vkDestroyShaderModule(m_device, vertMod, nullptr);
+        vkDestroyShaderModule(m_device, fragMod, nullptr);
+        return true;
+    }
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount          = 2;
+    pipelineInfo.pStages             = stages;
+    pipelineInfo.pVertexInputState   = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState      = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState   = &multisampling;
+    pipelineInfo.pColorBlendState    = &colorBlending;
+    pipelineInfo.pDynamicState       = &dynamicState;
+    pipelineInfo.layout              = m_pipelineLayout;
+    pipelineInfo.renderPass          = m_renderPass;
+    pipelineInfo.subpass             = 0;
+
+    const VkResult res = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1,
+                                                    &pipelineInfo, nullptr, &m_graphicsPipeline);
+    vkDestroyShaderModule(m_device, vertMod, nullptr);
+    vkDestroyShaderModule(m_device, fragMod, nullptr);
+
+    if (res != VK_SUCCESS) {
+        std::cerr << "[Vulkan] Failed to create graphics pipeline (VkResult=" << res << ")\n";
+        return true; // non-fatal — fall back to ImGui only
+    }
+
+    // Create the persistent host-visible vertex buffer (1 MB, mapped persistently)
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size  = m_vertexBufferSize;
+    bufInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    VmaAllocationInfo allocResult{};
+    if (vmaCreateBuffer(m_allocator, &bufInfo, &allocInfo,
+                        &m_vertexBuffer, &m_vertexBufferAllocation, &allocResult) != VK_SUCCESS) {
+        std::cerr << "[Vulkan] Failed to create vertex buffer\n";
+        return true;
+    }
+    m_vertexBufferMapped = allocResult.pMappedData;
+
+    std::cout << "[Vulkan] Graphics pipeline and vertex buffer ready.\n";
+    return true;
+#endif
+}
 
 // ─── Frame begin/end ─────────────────────────────────────────────────────────
 
@@ -11,9 +200,9 @@ void VulkanRenderer::BeginFrame() {
 
     vkWaitForFences(m_device, 1, &m_inFlightFence, VK_TRUE, UINT64_MAX);
 
-    VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
-                                            m_imageAvailableSemaphore, VK_NULL_HANDLE,
-                                            &m_imageIndex);
+    const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
+                                                   m_imageAvailableSemaphore, VK_NULL_HANDLE,
+                                                   &m_imageIndex);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) return;
     if (result != VK_SUCCESS) { std::cerr << "vkAcquireNextImageKHR failed\n"; return; }
 
@@ -35,13 +224,28 @@ void VulkanRenderer::BeginFrame() {
     rpInfo.pClearValues      = &clearColor;
     vkCmdBeginRenderPass(m_commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
+    // Set dynamic viewport and scissor
+    VkViewport viewport{};
+    viewport.x        = 0.0f; viewport.y = 0.0f;
+    viewport.width    = static_cast<float>(m_swapchainExtent.width);
+    viewport.height   = static_cast<float>(m_swapchainExtent.height);
+    viewport.minDepth = 0.0f; viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(m_commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = m_swapchainExtent;
+    vkCmdSetScissor(m_commandBuffer, 0, 1, &scissor);
+
+    // Reset per-frame vertex write cursor
+    m_vertexBufferOffset = 0;
+
     // ImGui new frame
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    // Reset per-frame draw call counter
-    m_frameDrawCalls = 0;
+    m_frameDrawCalls  = 0;
     m_frameGIFPackets = 0;
 }
 
@@ -79,20 +283,18 @@ void VulkanRenderer::EndFrame() {
 // ─── GIF packet processing ────────────────────────────────────────────────────
 
 void VulkanRenderer::ProcessGIFPacket(const uint8_t* data, size_t size) {
-    // Wire the DrawCallback so vertex accumulation calls DrawPrimitive
     auto cb = [this](uint8_t prim_type, const std::vector<GIF_Vertex>& verts) {
-        // Convert GIF_Vertex → PS2Vertex
+        // Convert GIF_Vertex → PS2Vertex (NDC coords from 4-bit fixed-point PS2 space)
         std::vector<PS2Vertex> ps2verts;
         ps2verts.reserve(verts.size());
-        // XYOFFSET is in 4-bit subpixel units (1/16 of a pixel)
-        // Convert to NDC assuming 640×448 PS2 frame buffer
-        constexpr float W = 640.0f, H = 448.0f;
-        for (auto& gv : verts) {
+        // PS2 rasterises at 4096x4096 fixed coords (4-bit subpixel), display is typically 640x448
+        constexpr float W = 640.0f * 16.0f, H = 448.0f * 16.0f;
+        for (const auto& gv : verts) {
             PS2Vertex v;
-            float px = (gv.x / 16.0f) / W * 2.0f - 1.0f;
-            float py = (gv.y / 16.0f) / H * 2.0f - 1.0f;
-            float pz = gv.z / (float)0xFFFFFF;
-            v.x = px; v.y = py; v.z = pz; v.w = 1.0f;
+            v.x = (static_cast<float>(gv.x) / W) * 2.0f - 1.0f;
+            v.y = (static_cast<float>(gv.y) / H) * 2.0f - 1.0f;
+            v.z = static_cast<float>(gv.z) / static_cast<float>(0xFFFFFFu);
+            v.w = 1.0f;
             v.r = gv.r / 255.0f; v.g = gv.g / 255.0f;
             v.b = gv.b / 255.0f; v.a = gv.a / 255.0f;
             v.u = gv.s; v.v = gv.t;
@@ -102,23 +304,77 @@ void VulkanRenderer::ProcessGIFPacket(const uint8_t* data, size_t size) {
     };
 
     m_gifParser.ParsePacket(m_gsState, data, size, cb);
-    m_frameGIFPackets++;
-    m_totalGIFPackets++;
+    ++m_frameGIFPackets;
+    ++m_totalGIFPackets;
 }
 
 // ─── Primitive drawing ────────────────────────────────────────────────────────
 
-void VulkanRenderer::DrawPrimitive(uint32_t /*prim_type*/, const std::vector<PS2Vertex>& vertices) {
-    // Milestone 8: log the call; actual vertex-buffer submission will come in Milestone 9+
-    (void)vertices;
-    m_frameDrawCalls++;
-    m_totalDrawCalls++;
-}
+void VulkanRenderer::DrawPrimitive(uint32_t prim_type,
+                                    const std::vector<PS2Vertex>& vertices) {
+    if (!m_graphicsPipeline || !m_vertexBufferMapped || vertices.empty()) {
+        ++m_frameDrawCalls; ++m_totalDrawCalls;
+        return;
+    }
 
-// ─── Pipeline ─────────────────────────────────────────────────────────────────
+    // Triangulate: PS2 types 3=triangle, 4=tri-strip, 5=tri-fan, 6=sprite(quad)
+    // Build a flat triangle list for Vulkan (TRIANGLE_LIST topology).
+    std::vector<PS2Vertex> tris;
+    tris.reserve(vertices.size());
 
-bool VulkanRenderer::CreatePipeline() {
-    // Deferred to Milestone 9 when we have compiled SPIR-V shaders.
-    // Returning true so init doesn't fail.
-    return true;
+    const size_t n = vertices.size();
+    switch (prim_type & 7) {
+        case 3: // Triangle list — copy as-is
+            tris = vertices;
+            break;
+        case 4: // Triangle strip
+            for (size_t i = 2; i < n; ++i) {
+                if (i & 1) { tris.push_back(vertices[i-1]); tris.push_back(vertices[i-2]); }
+                else        { tris.push_back(vertices[i-2]); tris.push_back(vertices[i-1]); }
+                tris.push_back(vertices[i]);
+            }
+            break;
+        case 5: // Triangle fan
+            for (size_t i = 2; i < n; ++i) {
+                tris.push_back(vertices[0]);
+                tris.push_back(vertices[i-1]);
+                tris.push_back(vertices[i]);
+            }
+            break;
+        case 6: // Sprite (screen-aligned quad) — 2 corner verts → 2 triangles
+            for (size_t i = 1; i < n; i += 2) {
+                const auto& a = vertices[i-1];
+                const auto& b = vertices[i];
+                PS2Vertex bl = a; bl.y = b.y;
+                PS2Vertex tr = b; tr.y = a.y;
+                tris.push_back(a); tris.push_back(bl); tris.push_back(b);
+                tris.push_back(a); tris.push_back(b);  tris.push_back(tr);
+            }
+            break;
+        default: // Points, lines — skip for now
+            ++m_frameDrawCalls; ++m_totalDrawCalls;
+            return;
+    }
+
+    if (tris.empty()) { ++m_frameDrawCalls; ++m_totalDrawCalls; return; }
+
+    const size_t byteSize = tris.size() * sizeof(PS2Vertex);
+    if (m_vertexBufferOffset + byteSize > m_vertexBufferSize) {
+        // Vertex buffer full this frame — reset (accept tearing over crash)
+        m_vertexBufferOffset = 0;
+    }
+
+    // Write vertices into the persistently mapped buffer
+    uint8_t* dst = static_cast<uint8_t*>(m_vertexBufferMapped) + m_vertexBufferOffset;
+    std::memcpy(dst, tris.data(), byteSize);
+
+    // Record draw call into the current command buffer
+    vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
+    const VkDeviceSize offset = static_cast<VkDeviceSize>(m_vertexBufferOffset);
+    vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, &m_vertexBuffer, &offset);
+    vkCmdDraw(m_commandBuffer, static_cast<uint32_t>(tris.size()), 1, 0, 0);
+
+    m_vertexBufferOffset += byteSize;
+    ++m_frameDrawCalls;
+    ++m_totalDrawCalls;
 }

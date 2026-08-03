@@ -43,6 +43,10 @@ struct GS_State {
     uint64_t RGBAQ;     // current vertex color
     uint64_t FOG;
     uint64_t FOGCOL;
+
+    // Current texture coordinates (not a real GS register — accumulated per-vertex)
+    float ST_S = 0.0f;  // from GS reg 0x02 (ST)
+    float ST_T = 0.0f;
     
     // Others
     uint64_t DIMX;

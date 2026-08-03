@@ -5,6 +5,10 @@ import sys
 import re
 import csv
 
+# Default: ps2xAnalyzer.exe sits next to this script in tools/
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_ANALYZER = os.path.join(_SCRIPT_DIR, "ps2xAnalyzer.exe")
+
 def ensure_elf(elf_path):
     if not os.path.exists(elf_path):
         print(f"Warning: {elf_path} not found. Attempting to run tools/extract.py...")
@@ -140,7 +144,7 @@ def main():
     parser = argparse.ArgumentParser(description="Ghidra Analysis and Function Map Generation")
     parser.add_argument('--elf', default='data/raw/SCUS_971.99', help='Path to the ELF file')
     parser.add_argument('--ghidra', default=os.environ.get('GHIDRA_HOME', ''), help='Path to Ghidra home directory')
-    parser.add_argument('--analyzer', default='ps2xAnalyzer.exe', help='Path to ps2xAnalyzer executable')
+    parser.add_argument('--analyzer', default=_DEFAULT_ANALYZER, help='Path to ps2xAnalyzer executable')
     parser.add_argument('--output', default='data/analysis', help='Output directory')
     
     args = parser.parse_args()

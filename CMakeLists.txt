@@ -9,6 +9,42 @@ if(MSVC)
     add_compile_options(/MP)
 endif()
 
+# ── Shader compilation ────────────────────────────────────────────────────────
+find_program(GLSLC glslc HINTS
+    "$ENV{VULKAN_SDK}/Bin"
+    "C:/VulkanSDK/1.3.261.1/Bin"
+    "C:/VulkanSDK/1.3.268.0/Bin"
+    "C:/VulkanSDK/1.3.275.0/Bin"
+    "C:/VulkanSDK/1.4.303.0/Bin"
+    "C:/VulkanSDK/1.4.309.0/Bin"
+    "C:/VulkanSDK/1.4.313.0/Bin"
+)
+
+set(SHADER_SRC_DIR "${CMAKE_SOURCE_DIR}/shaders")
+set(SHADER_BIN_DIR "${CMAKE_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY ${SHADER_BIN_DIR})
+
+set(COMPILED_SHADERS "")
+if(GLSLC)
+    message(STATUS "glslc found: ${GLSLC} — shaders will be compiled")
+    foreach(SHADER ps2_prim.vert ps2_prim.frag)
+        set(SRC "${SHADER_SRC_DIR}/${SHADER}")
+        set(SPV "${SHADER_BIN_DIR}/${SHADER}.spv")
+        add_custom_command(
+            OUTPUT  ${SPV}
+            COMMAND ${GLSLC} ${SRC} -o ${SPV}
+            DEPENDS ${SRC}
+            COMMENT "Compiling shader ${SHADER}"
+        )
+        list(APPEND COMPILED_SHADERS ${SPV})
+    endforeach()
+    add_custom_target(openratchet_shaders ALL DEPENDS ${COMPILED_SHADERS})
+    add_compile_definitions(OPENRATCHET_SHADER_DIR="${SHADER_BIN_DIR}/")
+else()
+    message(WARNING "glslc NOT found — shaders won't be compiled; game geometry won't render. Install the Vulkan SDK.")
+    add_compile_definitions(OPENRATCHET_SHADER_DIR="")
+endif()
+
 if(NOT OPENRATCHET_SKIP_DEPS)
     find_package(Vulkan REQUIRED)
     set(SDL2_DIR "${CMAKE_SOURCE_DIR}/third_party/SDL2/cmake")
@@ -37,6 +73,9 @@ endif()
 
 add_executable(openratchet src/main.cpp)
 target_link_libraries(openratchet PRIVATE openratchet_hal openratchet_renderer openratchet_kernel openratchet_iop openratchet_recompiled)
+if(TARGET openratchet_shaders)
+    add_dependencies(openratchet openratchet_shaders)
+endif()
 
 if(TARGET SDL2::SDL2)
     add_custom_command(TARGET openratchet POST_BUILD
