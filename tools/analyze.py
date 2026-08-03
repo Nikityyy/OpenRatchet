@@ -67,49 +67,92 @@ def run_ps2xanalyzer(analyzer_path, elf_path, output_dir):
 
     return toml_path
 
-def make_function_map(output_dir, output_csv):
+import struct
+
+def find_jal_targets(elf_path):
+    targets = set()
+    try:
+        with open(elf_path, 'rb') as f:
+            header = f.read(52)
+            if header[0:4] != b'\x7fELF':
+                return targets
+            phoff = struct.unpack_from('<I', header, 28)[0]
+            phentsize = struct.unpack_from('<H', header, 42)[0]
+            phnum = struct.unpack_from('<H', header, 44)[0]
+            
+            for i in range(phnum):
+                f.seek(phoff + i * phentsize)
+                p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align = struct.unpack('<IIIIIIII', f.read(32))
+                if p_type == 1 and (p_flags & 1):  # PT_LOAD and Executable
+                    f.seek(p_offset)
+                    data = f.read(p_filesz)
+                    for j in range(0, len(data) - 3, 4):
+                        instr = struct.unpack_from('<I', data, j)[0]
+                        opcode = instr >> 26
+                        if opcode == 3: # JAL
+                            target = ((instr & 0x03FFFFFF) << 2) | ((p_vaddr + j) & 0xF0000000)
+                            targets.add(target)
+    except Exception as e:
+        print(f"Failed to extract JAL targets: {e}")
+    return targets
+
+def make_function_map(elf_path, output_dir, output_csv):
     output_cpp_dir = os.path.join(output_dir, 'output')
     functions = []
-    
-    # Known manual exceptions for the R&C1 stripped ELF.
-    # Add new entries here when a MISSING-TARGET is reported at runtime.
-    exceptions = [
-        {'name': 'sub_00123008', 'address': '0x00123008', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_00120EB0', 'address': '0x00120EB0', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_0011CF48', 'address': '0x0011CF48', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_0011CF10', 'address': '0x0011CF10', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_0011AB20', 'address': '0x0011AB20', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_0011C840', 'address': '0x0011C840', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_00121388', 'address': '0x00121388', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_0011BC48', 'address': '0x0011BC48', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_00121450', 'address': '0x00121450', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_00120C30', 'address': '0x00120C30', 'end': '0x00000000', 'size': '0x0'},
-        {'name': 'sub_00122298', 'address': '0x00122298', 'end': '0x00000000', 'size': '0x0'},
-        # Discovered at runtime (called by JAL from 0x11D8C0 during startup)
-        {'name': 'sub_0011DB38', 'address': '0x0011DB38', 'end': '0x0011DC18', 'size': '0xE0'},
-        {'name': 'sub_0011DC18', 'address': '0x0011DC18', 'end': '0x0011DCC8', 'size': '0xB0'},
-        {'name': 'sub_001E9488', 'address': '0x001E9488', 'end': '0x001E9658', 'size': '0x1D0'},
-        {'name': 'sub_001E9658', 'address': '0x001E9658', 'end': '0x001E9AB8', 'size': '0x460'},
-    ]
-    functions.extend(exceptions)
+    known_addrs = set()
     
     if os.path.exists(output_cpp_dir):
-        pattern = re.compile(r"^// Function: (.+)\n// Address: 0x([0-9a-fA-F]+) - 0x([0-9a-fA-F]+)", re.MULTILINE)
+        # Match // Function: name\n// Address: 0x... - 0x...
+        pattern1 = re.compile(r"^// Function: (.+)\n// Address: 0x([0-9a-fA-F]+) - 0x([0-9a-fA-F]+)", re.MULTILINE)
+        # Match void sub_ADDRESS_0xADDRESS(...)
+        pattern2 = re.compile(r"void\s+(sub_([0-9a-fA-F]+)_(0x[0-9a-fA-F]+))\(")
+        
         for root, _, files in os.walk(output_cpp_dir):
             for file in files:
                 if file.endswith('.cpp'):
                     with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
                         content = f.read()
-                        for match in pattern.finditer(content):
+                        
+                        # Process pattern 1
+                        for match in pattern1.finditer(content):
                             name, start, end = match.groups()
-                            size_val = int(end, 16) - int(start, 16)
-                            size_hex = f"0x{size_val:X}"
-                            functions.append({
-                                'name': name,
-                                'address': f"0x{start.upper()}",
-                                'end': f"0x{end.upper()}",
-                                'size': size_hex
-                            })
+                            start_val = int(start, 16)
+                            if start_val not in known_addrs:
+                                size_val = int(end, 16) - start_val
+                                size_hex = f"0x{size_val:X}"
+                                functions.append({
+                                    'name': name,
+                                    'address': f"0x{start.upper()}",
+                                    'end': f"0x{end.upper()}",
+                                    'size': size_hex
+                                })
+                                known_addrs.add(start_val)
+                                
+                        # Process pattern 2 for stubs
+                        for match in pattern2.finditer(content):
+                            name, start_str, _ = match.groups()
+                            start_val = int(start_str, 16)
+                            if start_val not in known_addrs:
+                                functions.append({
+                                    'name': name,
+                                    'address': f"0x{start_str.upper()}",
+                                    'end': "0x0",
+                                    'size': "0x0"
+                                })
+                                known_addrs.add(start_val)
+
+    # Now add missing JAL targets
+    jal_targets = find_jal_targets(elf_path)
+    for target in jal_targets:
+        if target not in known_addrs and 0x00100000 <= target < 0x02000000:
+            name = f"sub_{target:08X}_0x{target:x}"
+            functions.append({
+                'name': name,
+                'address': f"0x{target:08X}",
+                'end': "0x0",
+                'size': "0x0"
+            })
+            known_addrs.add(target)
                             
     # Write CSV
     with open(output_csv, 'w', newline='', encoding='utf-8') as f:
@@ -173,7 +216,7 @@ def main():
         run_ps2xanalyzer(args.analyzer, args.elf, args.output)
         
     auto_map_csv = os.path.join(args.output, 'auto-map.csv')
-    make_function_map(args.output, auto_map_csv)
+    make_function_map(args.elf, args.output, auto_map_csv)
     
     toml_path = os.path.join(args.output, 'rc1.toml')
     prepare_recomp_config(toml_path, auto_map_csv)

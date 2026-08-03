@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import shutil
+import filecmp
 
 # ── VS Developer Environment Detection ───────────────────────────────────────
 
@@ -52,9 +53,9 @@ def cmake_run(cmake_args, *, vsdevcmd=None):
     if vsdevcmd:
         # Wrap: cmd /c "VsDevCmd.bat" && cmake ...
         shell_cmd = f'"{vsdevcmd}" -arch=x64 -no_logo && ' + " ".join(f'"{a}"' if " " in a else a for a in cmd)
-        subprocess.run(["cmd", "/c", shell_cmd], check=True)
+        subprocess.run(shell_cmd, shell=True, check=True)
     else:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, shell=True, check=True)
 
 
 def main():
@@ -127,11 +128,35 @@ def main():
         count = 0
         for fname in os.listdir(output_dir):
             if fname.endswith(".cpp") or fname.endswith(".h"):
-                shutil.copy2(os.path.join(output_dir, fname),
-                             os.path.join(recompiled_dir, fname))
-                count += 1
-        print(f"Copied {count} generated files to src/recompiled/")
-
+                src_path = os.path.join(output_dir, fname)
+                dst_path = os.path.join(recompiled_dir, fname)
+                if not os.path.exists(dst_path) or not filecmp.cmp(src_path, dst_path, shallow=False):
+                    shutil.copy2(src_path, dst_path)
+                    count += 1
+        print(f"Updated {count} generated files in src/recompiled/")
+        # Generate missing_stubs.cpp automatically based on register_functions.cpp
+        import re
+        register_file = os.path.join(recompiled_dir, "register_functions.cpp")
+        missing_stubs_path = os.path.join(recompiled_dir, "missing_stubs.cpp")
+        
+        stubs_to_generate = []
+        if os.path.exists(register_file):
+            with open(register_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            pattern = re.compile(r"g_ps2RecompiledFunctionTable\[.*?\]\s*=\s*(sub_[0-9a-fA-F]+_0x[0-9a-fA-F]+)\s*;")
+            for match in pattern.finditer(content):
+                func_name = match.group(1)
+                cpp_file = os.path.join(recompiled_dir, f"{func_name}.cpp")
+                if not os.path.exists(cpp_file):
+                    stubs_to_generate.append(func_name)
+                    
+        with open(missing_stubs_path, "w", encoding="utf-8") as f:
+            f.write("// Auto-generated stubs for functions registered but not emitted by ps2xRecomp.\n")
+            f.write('#include "ps2_runtime.h"\n\n')
+            for stub in sorted(set(stubs_to_generate)):
+                f.write(f"void {stub}(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {{}}\n")
+                
+        print(f"Generated missing_stubs.cpp with {len(stubs_to_generate)} empty stubs.")
     # Step 5: Configure and build with CMake + Ninja
     build_dir = "build"
     print("Configuring CMake ...")

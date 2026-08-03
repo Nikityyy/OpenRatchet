@@ -16,8 +16,7 @@
 #include "openratchet/kernel_state.h"
 #include "openratchet/runtime_dispatch.h"
 
-// Declared in src/recompiled/runtime_patches.cpp
-extern void InitRuntimePatches();
+
 
 namespace OpenRatchet {
 namespace Debug {
@@ -91,8 +90,6 @@ int main(int argc, char* argv[]) {
             copyContextToR5900(ee_ctx, r5900);
             PS2Runtime runtime = {};
             std::cout << "Registered " << CountGeneratedFunctions() << " guest functions" << std::endl;
-            InitRuntimePatches();
-            std::cout << "Runtime patches applied. Total registered: " << CountGeneratedFunctions() << std::endl;
             uint64_t tick_count = 0;
             
             bool running = true;
@@ -109,36 +106,55 @@ int main(int argc, char* argv[]) {
                     OpenRatchet::IOP::UpdatePAD();
                     OpenRatchet::Kernel::TickTimers();
 
-                    if (r5900.pc == 0) {
-                        std::cerr << "FATAL: guest stopped at PC=0 after " << tick_count << " ticks and "
-                                  << OpenRatchet::Runtime::GetGuestDispatchCount() << " branch dispatches\n";
-                        ps2_running = false;
-                        exit_code = 2;
-                        break;
+                    OpenRatchet::Runtime::SetGuestDeadline(std::chrono::steady_clock::now() + target_frame_time);
+                    
+                    while (running && ps2_running) {
+                        if (r5900.pc == 0) {
+                            std::cerr << "FATAL: guest stopped at PC=0 after " << tick_count << " ticks and "
+                                      << OpenRatchet::Runtime::GetGuestDispatchCount() << " branch dispatches\n";
+                            ps2_running = false;
+                            exit_code = 2;
+                            break;
+                        }
+
+                        const uint32_t pc = r5900.pc;
+                        auto function = runtime.lookupFunction(pc);
+                        if (!function) {
+                            runtime.reportMissingFunction(g_ee_memory.GetRamPointer(0), &r5900, pc, pc,
+                                                          PS2Runtime::GuestBranchKind::DirectJump, "frame-dispatch");
+                            ps2_running = false;
+                            exit_code = 2;
+                            break;
+                        }
+
+                        if (tick_count < 1000) {
+                            std::cout << "[GUEST-TICK] tick=" << tick_count << " pc=0x" << std::hex << pc
+                                      << " v0=0x" << getRegU32(&r5900, 2)
+                                      << " s0=0x" << getRegU32(&r5900, 16)
+                                      << " s1=0x" << getRegU32(&r5900, 17)
+                                      << " s2=0x" << getRegU32(&r5900, 18)
+                                      << " s3=0x" << getRegU32(&r5900, 19)
+                                      << " t2=0x" << getRegU32(&r5900, 10)
+                                      << " t5=0x" << getRegU32(&r5900, 13)
+                                      << " t7=0x" << getRegU32(&r5900, 15)
+                                      << std::dec << std::endl;
+                        }
+
+                        function(g_ee_memory.GetRamPointer(0), &r5900, &runtime);
+                        ++tick_count;
+
+                        if (runtime.isStopRequested()) {
+                            ps2_running = false;
+                            exit_code = 2;
+                            break;
+                        }
+
+                        if (OpenRatchet::Runtime::GuestDeadlineExpired()) {
+                            break;
+                        }
                     }
 
-                    const uint32_t pc = r5900.pc;
-                    auto function = runtime.lookupFunction(pc);
-                    if (!function) {
-                        runtime.reportMissingFunction(g_ee_memory.GetRamPointer(0), &r5900, pc, pc,
-                                                      PS2Runtime::GuestBranchKind::DirectJump, "frame-dispatch");
-                        ps2_running = false;
-                        exit_code = 2;
-                        break;
-                    }
-                    if (tick_count < 1000) {
-                        std::cout << "[GUEST-TICK] tick=" << tick_count << " pc=0x" << std::hex << pc
-                                  << " v0=0x" << getRegU32(&r5900, 2)
-                                  << " s0=0x" << getRegU32(&r5900, 16)
-                                  << " s1=0x" << getRegU32(&r5900, 17)
-                                  << " s2=0x" << getRegU32(&r5900, 18)
-                                  << " s3=0x" << getRegU32(&r5900, 19)
-                                  << std::dec << std::endl;
-                    }
-                    OpenRatchet::Runtime::SetGuestDeadline(std::chrono::steady_clock::now() + target_frame_time);
-                    function(g_ee_memory.GetRamPointer(0), &r5900, &runtime);
                     OpenRatchet::Runtime::ClearGuestDeadline();
-                    ++tick_count;
                     ++catch_up_ticks;
                     next_tick += target_frame_time;
                     if (runtime.isStopRequested()) {
