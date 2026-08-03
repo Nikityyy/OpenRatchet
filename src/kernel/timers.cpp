@@ -1,21 +1,11 @@
 #include "openratchet/syscalls.h"
-#include <iostream>
+#include "openratchet/kernel_state.h"
 
-namespace OpenRatchet {
-namespace Kernel {
-
-static void SysSetVSyncCallback(MIPS_EE_Context* ctx, EE_Memory* mem) {
-    std::cout << "[SYSCALL] SetVSyncCallback called" << std::endl;
+namespace OpenRatchet::Kernel {
+static TimerState g_state;
+const TimerState& GetTimerState() { return g_state; }
+void TickTimers() { ++g_state.vsync_count; }
+static void SysSetVSyncCallback(MIPS_EE_Context* c, EE_Memory*) { g_state.vsync_mode = static_cast<uint32_t>(c->r[4]); g_state.vsync_callback = static_cast<uint32_t>(c->r[5]); c->r[2] = 0; }
+static void SysSetTimer(MIPS_EE_Context* c, EE_Memory*) { g_state.timer_id=static_cast<uint32_t>(c->r[4]); g_state.timer_compare=static_cast<uint32_t>(c->r[5]); g_state.timer_callback=static_cast<uint32_t>(c->r[6]); c->r[2]=0; }
+void InitTimerSyscalls() { g_state = {}; RegisterSyscall(0x73,SysSetVSyncCallback,"SetVSyncCallback"); RegisterSyscall(0x74,SysSetTimer,"SetTimer"); }
 }
-
-static void SysSetTimer(MIPS_EE_Context* ctx, EE_Memory* mem) {
-    std::cout << "[SYSCALL] SetTimer called" << std::endl;
-}
-
-void InitTimerSyscalls() {
-    RegisterSyscall(0x73, SysSetVSyncCallback, "SetVSyncCallback");
-    RegisterSyscall(0x74, SysSetTimer, "SetTimer"); // Approximate ID
-}
-
-} // namespace Kernel
-} // namespace OpenRatchet
