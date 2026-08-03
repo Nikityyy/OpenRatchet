@@ -129,7 +129,7 @@ inline float ClampPS2Float(float value) {
 
 #### Tasks
 
-- [ ] **0.1** Create the directory tree:
+- [x] **0.1** Create the directory tree:
   ```
   OpenRatchet/
   ├── src/
@@ -148,7 +148,7 @@ inline float ClampPS2Float(float value) {
   ├── docs/              # Technical docs
   └── games/             # User places ISO here (ignored)
   ```
-- [ ] **0.2** Create `CMakeLists.txt` at the project root:
+- [x] **0.2** Create `CMakeLists.txt` at the project root:
   - Set `cmake_minimum_required(VERSION 3.22)`
   - Set `project(OpenRatchet LANGUAGES CXX)`
   - Set `CMAKE_CXX_STANDARD 20`, `CMAKE_CXX_STANDARD_REQUIRED ON`
@@ -157,7 +157,7 @@ inline float ClampPS2Float(float value) {
   - Add `include_directories(include/)`
   - Set up `add_subdirectory()` for `src/hal`, `src/renderer`, `src/kernel`, `src/iop`
   - Each subdirectory gets its own `CMakeLists.txt` creating a static library
-- [ ] **0.3** Create `src/main.cpp` with a minimal stub:
+- [x] **0.3** Create `src/main.cpp` with a minimal stub:
   ```cpp
   #include <iostream>
   
@@ -167,21 +167,21 @@ inline float ClampPS2Float(float value) {
       return 0;
   }
   ```
-- [ ] **0.4** Create placeholder `CMakeLists.txt` files in each `src/` subdirectory:
+- [x] **0.4** Create placeholder `CMakeLists.txt` files in each `src/` subdirectory:
   - `src/hal/CMakeLists.txt` → library `openratchet_hal` (no sources yet, just a placeholder `.cpp`)
   - `src/renderer/CMakeLists.txt` → library `openratchet_renderer`
   - `src/kernel/CMakeLists.txt` → library `openratchet_kernel`
   - `src/iop/CMakeLists.txt` → library `openratchet_iop`
-- [ ] **0.5** Verify the project configures and builds:
+- [x] **0.5** Verify the project configures and builds:
   ```powershell
   cmake -S . -B build -G Ninja -DOPENRATCHET_SKIP_DEPS=ON
   cmake --build build
   ./build/openratchet.exe
   # Should print the status message
   ```
-- [ ] **0.6** Ensure `.gitignore` covers: `build/`, `data/`, `games/*.iso`, `mc0/`, `mc1/`, `imgui.ini`, `*.spv`, `__pycache__/`, IDE files.
-- [ ] **0.7** Ensure `README.md` documents the project, architecture, and prerequisites.
-- [ ] **0.8** Create empty placeholder files:
+- [x] **0.6** Ensure `.gitignore` covers: `build/`, `data/`, `games/*.iso`, `mc0/`, `mc1/`, `imgui.ini`, `*.spv`, `__pycache__/`, IDE files.
+- [x] **0.7** Ensure `README.md` documents the project, architecture, and prerequisites.
+- [x] **0.8** Create empty placeholder files:
   - `games/.gitkeep`
   - `shaders/.gitkeep`
   - `tests/.gitkeep`
