@@ -8,7 +8,8 @@ class MC_Module : public IOP_Module {
 public:
     void Init() override {}
     uint32_t Dispatch(uint32_t func, uint32_t send_addr, uint32_t send_size, uint32_t recv_addr, uint32_t recv_size, EE_Memory* mem) override {
-        return 0;
+        if (recv_size >= 4) mem->Write<uint32_t>(recv_addr, static_cast<uint32_t>(func == 0 ? sceMcInit() : -1));
+        return func == 0 ? 0u : static_cast<uint32_t>(-1);
     }
 };
 

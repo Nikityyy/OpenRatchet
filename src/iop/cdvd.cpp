@@ -24,7 +24,16 @@ class CDVD_Module : public IOP_Module {
 public:
     void Init() override {}
     uint32_t Dispatch(uint32_t func, uint32_t send_addr, uint32_t send_size, uint32_t recv_addr, uint32_t recv_size, EE_Memory* mem) override {
-        return 0;
+        if (send_size < 12) return static_cast<uint32_t>(-1);
+        const uint32_t lsn = mem->Read<uint32_t>(send_addr);
+        const uint32_t sectors = mem->Read<uint32_t>(send_addr + 4);
+        const uint32_t buffer = mem->Read<uint32_t>(send_addr + 8);
+        const int32_t result = func == 1 ? sceCdRead(lsn, sectors, buffer, 0, mem) :
+                               func == 2 ? sceCdSeek(lsn) :
+                               func == 3 ? sceCdSync(static_cast<int32_t>(lsn)) :
+                               func == 4 ? sceCdGetError() : -1;
+        if (recv_size >= 4) mem->Write<uint32_t>(recv_addr, static_cast<uint32_t>(result));
+        return static_cast<uint32_t>(result);
     }
 };
 
@@ -32,6 +41,8 @@ static CDVD_Module g_cdvdModule;
 
 void InitCDVD() {
     RegisterModule(0x80000059, &g_cdvdModule);
+    g_cdvdModule.Init();
+    sceCdInit(0);
 }
 
 int32_t sceCdInit(int32_t mode) {
@@ -39,6 +50,7 @@ int32_t sceCdInit(int32_t mode) {
     std::ifstream mf("data/manifest.txt");
     if (!mf.is_open()) {
         std::cerr << "[CDVD] Failed to open data/manifest.txt\n";
+        g_cdError = 1;
         return 0;
     }
 
@@ -66,7 +78,9 @@ int32_t sceCdInit(int32_t mode) {
 int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t mode, EE_Memory* mem) {
     std::string target_file;
     uint32_t file_offset = 0;
-    uint32_t read_bytes = sectors * 2048;
+    const uint64_t read_bytes64 = static_cast<uint64_t>(sectors) * 2048;
+    if (read_bytes64 > UINT32_MAX || !mem || !mem->IsValidRange(buffer_addr, static_cast<size_t>(read_bytes64))) { g_cdError = 2; return 0; }
+    uint32_t read_bytes = static_cast<uint32_t>(read_bytes64);
 
     for (const auto& f : g_files) {
         if (lsn >= f.lsn && (lsn - f.lsn) * 2048 < f.size) {
@@ -92,6 +106,7 @@ int32_t sceCdRead(uint32_t lsn, uint32_t sectors, uint32_t buffer_addr, int32_t 
         
         std::vector<uint8_t> tmp(read_bytes);
         f.read(reinterpret_cast<char*>(tmp.data()), read_bytes);
+        if (static_cast<uint32_t>(f.gcount()) != read_bytes) return 2;
         
         for (uint32_t i = 0; i < read_bytes; ++i) {
             mem->Write<uint8_t>(buffer_addr + i, tmp[i]);

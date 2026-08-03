@@ -8,7 +8,9 @@ class SPU2_Module : public IOP_Module {
 public:
     void Init() override {}
     uint32_t Dispatch(uint32_t func, uint32_t send_addr, uint32_t send_size, uint32_t recv_addr, uint32_t recv_size, EE_Memory* mem) override {
-        return 0;
+        if (func == 0) return sceSdInit(send_size >= 4 ? static_cast<int32_t>(mem->Read<uint32_t>(send_addr)) : 0);
+        if (func == 1 && send_size >= 4) return sceSdSetParam(mem->Read<uint16_t>(send_addr), mem->Read<uint16_t>(send_addr + 2));
+        return static_cast<uint32_t>(-1);
     }
 };
 

@@ -1,5 +1,6 @@
 #include "openratchet/iop.h"
 #include <iostream>
+#include <vector>
 
 namespace OpenRatchet {
 namespace IOP {
