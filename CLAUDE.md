@@ -670,13 +670,13 @@ cmake --build build
 
 #### Tasks
 
-- [ ] **7.1** Implement `src/hal/native_hal.cpp`:
+- [x] **7.1** Implement `src/hal/native_hal.cpp`:
   - Initialize SDL2 with `SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO`
   - Create a window: `SDL_CreateWindow("OpenRatchet — Ratchet & Clank", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE)`
   - Handle `SDL_QUIT` event to exit
   - Handle `SDL_WINDOWEVENT_RESIZED` for dynamic resolution
 
-- [ ] **7.2** Implement the main loop in `src/main.cpp`:
+- [x] **7.2** Implement the main loop in `src/main.cpp`:
   ```
   1. Initialize HAL (SDL2 window)
   2. Initialize EE memory
@@ -698,13 +698,8 @@ cmake --build build
   9. Shutdown HAL
   ```
 
-- [ ] **7.3** Implement the recompiled function dispatch table:
-  - Build a `std::unordered_map<uint32_t, RecompiledFunction>` mapping guest PC addresses to recompiled C++ functions
-  - The generated code registers itself via constructor initialization or a registration macro
-  - `DispatchFunction(ctx, mem, target_pc)`:
-    - Look up target PC in the table
-    - If found, call the function
-    - If not found, log `MISSING-TARGET: 0x{pc:08X}` and halt or skip
+- [x] **7.3** Build the recompiled function dispatch table (`g_ps2RecompiledFunctionTable`)
+- [x] Integrate `tools/smoke_test.py` to verify the dispatch loop executes the entry point without a segfault (outputs `MISSING-TARGET: 0x...` and halts)
 
 - [ ] **7.4** Handle the R&C1 startup sequence:
   - The game's entry point initializes the C runtime, then calls the game's main function

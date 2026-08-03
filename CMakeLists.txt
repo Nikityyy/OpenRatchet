@@ -4,8 +4,13 @@ project(OpenRatchet LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    add_compile_options(/MP)
+endif()
+
 if(NOT OPENRATCHET_SKIP_DEPS)
-    find_package(Vulkan REQUIRED)
+    find_package(Vulkan)
+    set(SDL2_DIR "${CMAKE_SOURCE_DIR}/third_party/SDL2/cmake")
     find_package(SDL2 REQUIRED)
 endif()
 

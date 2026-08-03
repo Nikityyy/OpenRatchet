@@ -11,15 +11,28 @@ def main():
 
     print(f"Running {args.exe} for {args.seconds} seconds...")
     try:
-        proc = subprocess.Popen([args.exe], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen([args.exe, "data/raw/SCUS_971.99"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(args.seconds)
         
         if proc.poll() is None:
             print("Process is still running. Terminating...")
             proc.terminate()
             stdout, stderr = proc.communicate(timeout=2)
-            print("smoke_test: PASS")
-            sys.exit(0)
+            stderr_str = stderr.decode(errors='replace')
+            stdout_str = stdout.decode(errors='replace')
+            
+            error_keywords = ['error', 'fatal', 'exception', 'segfault', 'crash']
+            found_errors = [kw for kw in error_keywords if kw in stderr_str or kw in stdout_str]
+            
+            if found_errors:
+                print(f"Found error keywords: {found_errors}")
+                print("--- STDERR ---")
+                print(stderr_str)
+                print("smoke_test: FAIL")
+                sys.exit(1)
+            else:
+                print("smoke_test: PASS")
+                sys.exit(0)
         elif proc.returncode == 0:
             stdout, stderr = proc.communicate()
             print("Process exited successfully.")

@@ -23,14 +23,14 @@ public:
         addr = TranslateAddress(addr);
 
         if (addr < EE_MAIN_RAM_SIZE) {
-            if (addr + sizeof(T) > EE_MAIN_RAM_SIZE) return 0; // Out of bounds
+            if (addr + sizeof(T) > EE_MAIN_RAM_SIZE) return T(); // Out of bounds
             T val;
             std::memcpy(&val, &main_ram[addr], sizeof(T));
             return val;
         }
         else if (addr >= 0x70000000 && addr < 0x70000000 + EE_SCRATCHPAD_SIZE) {
             uint32_t offset = addr - 0x70000000;
-            if (offset + sizeof(T) > EE_SCRATCHPAD_SIZE) return 0;
+            if (offset + sizeof(T) > EE_SCRATCHPAD_SIZE) return T();
             T val;
             std::memcpy(&val, &scratchpad[offset], sizeof(T));
             return val;
@@ -45,11 +45,11 @@ public:
         }
         else if (addr >= 0x1FC00000 && addr < 0x20000000) {
             // BIOS ROM region (just return 0 for now)
-            return 0;
+            return T();
         }
 
         // Unmapped memory
-        return 0;
+        return T();
     }
 
     template<typename T>

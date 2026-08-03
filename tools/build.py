@@ -59,7 +59,7 @@ def main():
 
     # Step 5: Configure and build native executable
     print("Building OpenRatchet...")
-    subprocess.run(['cmake', '-S', '.', '-B', 'build', '-DOPENRATCHET_SKIP_DEPS=ON'], check=True)
+    subprocess.run(['cmake', '-S', '.', '-B', 'build', '-DOPENRATCHET_SKIP_DEPS=OFF'], check=True)
     subprocess.run(['cmake', '--build', 'build', '--config', 'Release'], check=True)
 
     print("Build complete! Executable is at build/Release/openratchet.exe")
