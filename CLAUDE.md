@@ -211,7 +211,7 @@ The R&C1 PS2 ISO uses standard ISO9660 for the filesystem layer, but Insomniac h
 
 #### Tasks
 
-- [ ] **1.1** Create `tools/extract.py` implementing an `ISO9660` class:
+- [x] **1.1** Create `tools/extract.py` implementing an `ISO9660` class:
   - Open the ISO file in binary read mode
   - Parse the Primary Volume Descriptor at sector 16 (magic `\x01CD001`)
   - Extract the root directory record (offset 156, length 34 bytes in the PVD)
@@ -227,7 +227,7 @@ The R&C1 PS2 ISO uses standard ISO9660 for the filesystem layer, but Insomniac h
   - Provide methods: `records() → List[FileRecord]`, `copy(record, dest_path)`, `copy_range(lsn, size, dest_path)`
   - Each `FileRecord` has: `path: str`, `lsn: int`, `size: int`
 
-- [ ] **1.2** Implement R&C1 hidden TOC parsing in `tools/extract.py`:
+- [x] **1.2** Implement R&C1 hidden TOC parsing in `tools/extract.py`:
   - Read 8 bytes at `LSN 1500 * 2048`: expect `uint32 magic = 1`, `uint32 toc_size`
   - Read `toc_size` bytes from that same offset
   - Walk entries every 8 bytes starting at offset 8: `uint32 header_lsn`, `uint32 header_sectors`
@@ -242,23 +242,23 @@ The R&C1 PS2 ISO uses standard ISO9660 for the filesystem layer, but Insomniac h
   - Compute the overall level range: `low = min(start)`, `high = max(start + count)`
   - Return a list of `(level_id, low_sector, high_sector, [(name, start, count)])`
 
-- [ ] **1.3** Implement the ELF parser function `parse_elf(path)`:
+- [x] **1.3** Implement the ELF parser function `parse_elf(path)`:
   - Validate ELF magic (`\x7fELF`), class 1 (32-bit), little-endian, machine 8 (MIPS)
   - Read entry point (offset 24, uint32), program header offset (28, uint32), phentsize (42, uint16), phnum (44, uint16)
   - For each program header of type `PT_LOAD` (1): extract `p_vaddr`, `p_filesz`, `p_memsz`
   - Return `(entry_point, phnum, [(vaddr, filesz, memsz)])`
 
-- [ ] **1.4** Implement the `extract` CLI command:
+- [x] **1.4** Implement the `extract` CLI command:
   - Accept `--iso PATH`, `--out PATH` (default `data`), `--all` flag
   - Without `--all`: extract only `SYSTEM.CNF`, `SCUS_971.99`, `IOPRP243.IMG`
   - With `--all`: extract all ISO files + all discovered level WAD ranges
   - Write a `data/manifest.txt` with: ISO path, sector size, boot ELF path/LSN/size/SHA256, entry point, segment info, and a file table
   - Level WADs go to `data/raw/levels/{level_id}/level.wad` and sub-ranges go to `data/raw/levels/{level_id}/{name}`
 
-- [ ] **1.5** Implement `verify` command: re-parse the boot ELF, compare SHA256 against manifest
-- [ ] **1.6** Implement `toc` command: print the R&C1 TOC summary (level IDs, sectors)
-- [ ] **1.7** Implement `self-test` command: create a synthetic ELF in memory, run `parse_elf`, verify results. Create a synthetic ISO range, verify `copy_range` works.
-- [ ] **1.8** Implement `locate_iso(requested, root)`: if `--iso` given, use it; otherwise find the single `.iso` in `games/`.
+- [x] **1.5** Implement `verify` command: re-parse the boot ELF, compare SHA256 against manifest
+- [x] **1.6** Implement `toc` command: print the R&C1 TOC summary (level IDs, sectors)
+- [x] **1.7** Implement `self-test` command: create a synthetic ELF in memory, run `parse_elf`, verify results. Create a synthetic ISO range, verify `copy_range` works.
+- [x] **1.8** Implement `locate_iso(requested, root)`: if `--iso` given, use it; otherwise find the single `.iso` in `games/`.
 
 #### File Details
 
