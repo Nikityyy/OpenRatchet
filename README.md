@@ -1,35 +1,89 @@
 # OpenRatchet
 
-Native PC recompilation work for the original Ratchet & Clank PS2 release.
+**Native PC port of Ratchet & Clank (PS2, 2002) via static binary recompilation.**
 
-## Build and run
+OpenRatchet translates the original MIPS R5900 game executable into native C++20 code using the [PS2Recomp](https://github.com/ran-j/PS2Recomp) toolchain, then runs it against a custom Hardware Abstraction Layer (HAL) built on SDL2 and Vulkan. No emulator. No dynamic translation. The original game logic executes natively on your PC.
 
-Requirements: Python 3, CMake, Ninja, and a Visual Studio C++ toolchain.
-Put a legally dumped ISO in `games/` or pass one explicitly to the extractor.
+## Legal Notice
 
-```powershell
-python tools/openratchet.py self-test
-python tools/openratchet.py extract --iso games\Ratchet.iso
-python tools/native.py build
-python tools/native.py smoke --seconds 15
-python tools/native.py run
+This project does **not** contain any copyrighted game code, assets, or data. You must supply your own legally dumped PS2 ISO of *Ratchet & Clank* (SCUS-97199). The ISO is never committed to the repository.
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────┐
+│               OpenRatchet Native                │
+├─────────────┬───────────────────┬───────────────┤
+│  Recompiled │   HAL Services    │   Renderer    │
+│  Game Logic │  (EE Memory,      │  (Vulkan /    │
+│  (C++20     │   BIOS/Kernel,    │   Compute     │
+│   from MIPS │   IOP/SIF, DMA,   │   Shaders)    │
+│   R5900)    │   Timers, Pad)    │               │
+├─────────────┼───────────────────┼───────────────┤
+│         SDL2 (Window, Input, Audio)             │
+├─────────────────────────────────────────────────┤
+│              Host OS (Windows/Linux)            │
+└─────────────────────────────────────────────────┘
 ```
 
-Pass `--iso path\to\game.iso` when the dump is not the only `.iso` in
-`games/`. The runner receives the image directly for CDVD reads; it does not
-copy the disc into the repository.
+## Status
 
-`tools/native.py` drives PS2Recomp, generates the stripped-ELF function map,
-copies the generated C++ into the PS2 runtime, and builds
-`build/ps2recomp-patched/ps2xRuntime/ps2EntryRunner.exe`. OpenRatchet-specific
-PS2Recomp changes live in `patches/PS2Recomp/` and are applied to an ignored
-build copy; `third_party/PS2Recomp` remains a clean pinned submodule.
+🚧 **Early Development** — See [CLAUDE.md](CLAUDE.md) for the full milestone plan.
 
-The current milestone is a native executable that initializes the PS2 runtime,
-opens a Windows OpenGL window, and stays alive through the game startup path.
-It is not yet a complete playable port: GS/VU behavior, asset loading, input,
-audio, and remaining indirect control-flow cases still need implementation.
+## Prerequisites
 
-The practical route is static recompilation, not re-coding every weapon. Game
-logic remains the original MIPS code translated to native C++; only PS2
-hardware and OS services need host implementations.
+- Python 3.10+
+- CMake 3.22+, Ninja
+- Visual Studio 2022 (MSVC v143) or Clang 16+
+- Vulkan SDK 1.3+
+- SDL2 2.28+
+- [Ghidra](https://ghidra-sre.org/) 11+ with [ghidra-emotionengine-reloaded](https://github.com/chaoticgd/ghidra-emotionengine-reloaded)
+- A legally dumped R&C1 PS2 ISO (`SCUS_971.99`)
+
+## Quick Start
+
+```powershell
+# 1. Clone with submodules
+git clone --recursive https://github.com/YourUser/OpenRatchet.git
+cd OpenRatchet
+
+# 2. Place your ISO
+cp /path/to/ratchet.iso games/
+
+# 3. Follow the milestone steps in CLAUDE.md
+```
+
+## Project Structure
+
+```
+OpenRatchet/
+├── CLAUDE.md           # Detailed milestone plan (step-by-step build guide)
+├── README.md           # This file
+├── .gitignore
+├── games/              # Place your ISO here (ignored)
+├── data/               # Extracted runtime data (ignored, generated)
+├── src/
+│   ├── hal/            # Hardware Abstraction Layer (EE memory, MMIO, timers)
+│   ├── renderer/       # Vulkan renderer, GS emulation, VU1 compute shaders
+│   ├── kernel/         # PS2 BIOS/kernel syscall implementations
+│   ├── iop/            # IOP processor HLE (SIF, CDVD, SPU2, PAD)
+│   ├── recompiled/     # Auto-generated recompiled C++ (from PS2Recomp)
+│   └── main.cpp        # Native entry point and main loop
+├── include/            # Public headers
+├── shaders/            # GLSL/HLSL compute and fragment shaders
+├── tools/
+│   ├── extract.py      # ISO extraction and asset unpacking
+│   ├── analyze.py      # Ghidra integration and function map generation
+│   └── build.py        # Build automation
+├── third_party/        # Git submodules (PS2Recomp, SDL2, etc.)
+├── tests/              # Verification and ground-truth comparison
+└── docs/               # Technical documentation
+```
+
+## Contributing
+
+See [CLAUDE.md](CLAUDE.md) for the implementation roadmap. Each milestone is a self-contained, committable step.
+
+## License
+
+This project is licensed under the MIT License. Game assets are not included and remain the property of Sony Interactive Entertainment / Insomniac Games.

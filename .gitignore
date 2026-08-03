@@ -1,11 +1,17 @@
-# Game dumps and generated runtime data
+# === Game ISOs and extracted runtime data ===
+# User must supply their own legally dumped PS2 ISO.
+# All extracted/generated data lives in data/ and is never committed.
 /games/*.iso
+/games/*.ISO
+/games/*.bin
+/games/*.cue
 /data/
+
+# === Virtual memory card directories ===
 /mc0/
 /mc1/
-/imgui.ini
 
-# Native build output
+# === Native build output ===
 **/build/
 **/bin/
 **/out/
@@ -17,23 +23,57 @@
 **/.ninja_deps
 **/.ninja_log
 **/Testing/
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.so
+*.dylib
+*.pdb
+*.ilk
+*.exp
 
-# Visual Studio
+# === Visual Studio / VS Code ===
 /.vs/
+/.vscode/
 *.sln
 *.vcxproj*
 *.user
 
-# Python caches and tooling
+# === CMake presets (user-local) ===
+CMakeUserPresets.json
+
+# === Python ===
 __pycache__/
 *.py[cod]
+*.pyo
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+dist/
+venv/
+.venv/
+env/
 
-# Logs and OS noise
+# === Ghidra analysis artifacts ===
+*.gpr
+*.rep/
+*.lock
+
+# === ImGui state ===
+imgui.ini
+
+# === Shader compilation ===
+*.spv
+*.spirv
+
+# === Logs, temps, OS noise ===
 *.log
 *.tmp
 *.bak
 .DS_Store
 Thumbs.db
+desktop.ini
