@@ -6,6 +6,7 @@
 /games/*.bin
 /games/*.cue
 /data/
+/src/recompiled/
 
 # === Virtual memory card directories ===
 /mc0/

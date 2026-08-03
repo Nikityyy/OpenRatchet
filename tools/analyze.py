@@ -122,7 +122,7 @@ def prepare_recomp_config(toml_path, csv_path):
     for line in lines:
         if line.strip().startswith('ghidra_output'):
             has_ghidra_output = True
-            out_lines.append(f'ghidra_output = "{csv_path.replace("\\\\", "/")}"\n')
+            out_lines.append(f'ghidra_output = "{csv_path.replace("\\", "/")}"\n')
             continue
             
         if 'InitExecPS2@0x0011D9B8' in line:
@@ -134,7 +134,7 @@ def prepare_recomp_config(toml_path, csv_path):
         # insert ghidra_output in [general]
         for i, line in enumerate(out_lines):
             if line.strip() == '[general]':
-                out_lines.insert(i + 1, f'ghidra_output = "{csv_path.replace("\\\\", "/")}"\n')
+                out_lines.insert(i + 1, f'ghidra_output = "{csv_path.replace("\\", "/")}"\n')
                 break
                 
     with open(toml_path, 'w', encoding='utf-8') as f:
