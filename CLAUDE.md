@@ -726,7 +726,7 @@ python tools/smoke_test.py --seconds 60
 
 ---
 
-### Milestone 8: GIF/GS Packet Decoding and Vulkan Renderer Foundation
+### Milestone 8: Vulkan Renderer Foundation (GS & GIF)
 
 **Goal**: Implement the GS (Graphics Synthesizer) register state machine, GIF packet parser, and a minimal Vulkan renderer that can interpret PS2 draw commands and present a frame. This is where the game first becomes *visible*.
 
@@ -742,7 +742,7 @@ The PS2 rendering pipeline works like this:
 
 #### Tasks
 
-- [ ] **8.1** Implement `src/renderer/gs_state.cpp` — GS register state machine:
+- [x] **8.1** Implement `src/renderer/gs_state.cpp` — GS register state machine:
   - Maintain all GS registers as a struct:
     ```cpp
     struct GS_State {
@@ -770,7 +770,7 @@ The PS2 rendering pipeline works like this:
   - Implement `WriteGSReg(uint8_t reg, uint64_t data)` — decode and store
   - Handle all GS register addresses (0x00–0x7F)
 
-- [ ] **8.2** Implement `src/renderer/gif_parser.cpp` — GIF packet decoder:
+- [x] **8.2** Implement `src/renderer/gif_parser.cpp` — GIF packet decoder:
   - Parse GIF tags (64-bit):
     - Bits 0–14: NLOOP (number of loops)
     - Bit 15: EOP (end of packet)
@@ -784,7 +784,7 @@ The PS2 rendering pipeline works like this:
   - For IMAGE format: copy raw pixel data to GS VRAM
   - Route decoded register writes to `WriteGSReg()`
 
-- [ ] **8.3** Implement `src/renderer/vulkan_init.cpp` — Vulkan bootstrapping:
+- [x] **8.3** Implement `src/renderer/vulkan_init.cpp` — Vulkan bootstrapping:
   - Create Vulkan instance with validation layers (debug mode)
   - Select physical device (discrete GPU preferred)
   - Create logical device with graphics + compute queue families
@@ -794,7 +794,7 @@ The PS2 rendering pipeline works like this:
   - Create descriptor set layout and pipeline layout
   - Use VulkanMemoryAllocator (VMA) for memory management
 
-- [ ] **8.4** Implement `src/renderer/vulkan_draw.cpp` — primitive rendering:
+- [x] **8.4** Implement `src/renderer/vulkan_draw.cpp` — primitive rendering:
   - Create vertex/fragment shader pair for PS2 primitive rendering:
     - Vertex shader: takes PS2 vertex data (position, color, UV, fog) and transforms to clip space
     - Fragment shader: samples texture (if enabled), applies alpha test, fog, and outputs color
@@ -804,7 +804,7 @@ The PS2 rendering pipeline works like this:
     - Upload vertex data to a GPU staging buffer
     - Record draw commands into the current command buffer
 
-- [ ] **8.5** Implement PS2 VRAM emulation in `src/renderer/gs_vram.cpp`:
+- [x] **8.5** Implement PS2 VRAM emulation in `src/renderer/gs_vram.cpp`:
   - Allocate a 4 MB buffer representing GS VRAM (2048x2048 pixels, various pixel formats)
   - Implement pixel format conversions:
     - PSMCT32: 32-bit RGBA
@@ -814,7 +814,7 @@ The PS2 rendering pipeline works like this:
   - Implement block/page layout (PS2 VRAM uses a swizzled memory layout, not linear)
   - Implement `UploadTexture(base_pointer, width, psm)` → create/update a Vulkan texture
 
-- [ ] **8.6** Wire GIF packets to the Vulkan renderer:
+- [x] **8.6** Wire GIF packets to the Vulkan renderer:
   - When the GIF parser finishes a NLOOP with valid primitive data:
     - Build host vertex array from decoded GS vertex registers (XYZ, RGBAQ, ST/UV)
     - Look up or upload the current texture (TEX0 register)
@@ -824,7 +824,7 @@ The PS2 rendering pipeline works like this:
     - Submit the draw call
   - At VBlank: present the swapchain image
 
-- [ ] **8.7** Create debug overlay:
+- [x] **8.7** Create debug overlay:
   - Show: FPS, frame time, number of GIF packets processed, number of draw calls, number of textures uploaded
 
 #### Acceptance Criteria
