@@ -593,7 +593,7 @@ R&C1's critical IOP modules:
 
 #### Tasks
 
-- [ ] **6.1** Create `src/iop/sif.cpp` — SIF RPC dispatch:
+- [x] **6.1** Create `src/iop/sif.cpp` — SIF RPC dispatch:
   - Implement `sceSifInitRpc()`: no-op (RPC system is always ready)
   - Implement `sceSifBindRpc(client, server_id, mode)`: register an RPC binding
   - Implement `sceSifCallRpc(client, func, mode, send, ssize, recv, rsize)`:
@@ -603,7 +603,7 @@ R&C1's critical IOP modules:
   - Implement `sceSifSetDma(dma_desc, count)`: direct memory copy operations
   - Maintain a server registry: `std::unordered_map<uint32_t, IOP_Module*>`
 
-- [ ] **6.2** Create `src/iop/cdvd.cpp` — CDVD file I/O replacement:
+- [x] **6.2** Create `src/iop/cdvd.cpp` — CDVD file I/O replacement:
   - RPC server ID for CDVD: look up from game's binding calls
   - Implement `sceCdRead(lsn, sectors, buffer, mode)`:
     - **Do NOT read from a disc.** Instead, read from `data/raw/` extracted files
@@ -615,7 +615,7 @@ R&C1's critical IOP modules:
   - Implement `sceCdGetError()`: return 0 (no error)
   - Implement `sceCdInit(mode)`: initialize the file lookup table from `data/manifest.txt`
 
-- [ ] **6.3** Create `src/iop/pad.cpp` — Controller input:
+- [x] **6.3** Create `src/iop/pad.cpp` — Controller input:
   - Implement `scePadInit()`: initialize SDL2 GameController subsystem
   - Implement `scePadRead(port, slot, buffer)`:
     - Poll SDL2 controller state
@@ -633,19 +633,19 @@ R&C1's critical IOP modules:
     - Write the mapped data into guest memory at `buffer`
   - Implement `scePadGetState(port, slot)`: return pad state
 
-- [ ] **6.4** Create `src/iop/spu2.cpp` — SPU2 audio stubs:
+- [x] **6.4** Create `src/iop/spu2.cpp` — SPU2 audio stubs:
   - For now, all SPU2 functions are no-ops that log their call
   - `sceSdInit(flag)`: log and return 0
   - `sceSdSetParam(entry, value)`: log and ignore
   - `sceSdVoiceTrans(channel, mode, addr, size, start)`: log and ignore
   - These will be implemented properly in a later milestone (audio)
 
-- [ ] **6.5** Create `src/iop/mc.cpp` — Memory card stubs:
+- [x] **6.5** Create `src/iop/mc.cpp` — Memory card stubs:
   - `sceMcInit()`: log and return 0
   - `sceMcOpen()`, `sceMcRead()`, `sceMcWrite()`, `sceMcClose()`: log and return error/empty
   - These are deferred until save/load is needed
 
-- [ ] **6.6** Wire the IOP modules into the SIF dispatch:
+- [x] **6.6** Wire the IOP modules into the SIF dispatch:
   - In `sif.cpp`, register CDVD, PAD, SPU2, and MC modules with their server IDs
   - Any unknown server ID logs a warning with the ID
 
