@@ -7,6 +7,7 @@ int main() {
     memory.Init();
     MIPS_EE_Context ctx{};
     OpenRatchet::Kernel::InitSyscalls();
+    OpenRatchet::Kernel::ResetGuestSyscallTable(memory);
 
     memory.Write<uint32_t>(0x1000, 0x2000);
     memory.Write<uint32_t>(0x1004, 0x3000);
@@ -20,6 +21,16 @@ int main() {
     OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
     assert(ctx.r[2] == 0);
 
+    assert(memory.Read<uint32_t>(0x2F0) == 0x8001);
+    assert(memory.Read<uint32_t>(0x2F8) == 0x1F80);
+    ctx.r[3] = 0x74; ctx.r[4] = 0x83; ctx.r[5] = 0x0011D740;
+    OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
+    assert(ctx.r[2] == 0);
+    assert(memory.Read<uint32_t>(0x11F80 + 0x83 * 4) == 0x0011D740);
+    ctx.r[3] = 0x5B; ctx.r[4] = 0x83;
+    OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
+    assert(ctx.r[2] == 0x0011D740);
+
     memory.Write<uint32_t>(0x1100, 0); memory.Write<uint32_t>(0x1104, 0);
     memory.Write<uint32_t>(0x1108, 1); memory.Write<uint32_t>(0x110C, 2);
     ctx.r[3] = 0x40; ctx.r[4] = 0x1100;
@@ -32,5 +43,20 @@ int main() {
     assert(OpenRatchet::Kernel::GetTimerState().vsync_callback == 0x1234);
     ctx.r[3] = 0x02; ctx.r[4] = 1; ctx.r[5] = 2; ctx.r[6] = 3; OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
     assert(OpenRatchet::Kernel::GetGSSystemState().mode == 2);
+
+    memory.Write<uint32_t>(0x2000, 0x11111111);
+    memory.Write<uint32_t>(0x2004, 0x80123456);
+    memory.Write<uint32_t>(0x2008, 0x00123456);
+    ctx.r[3] = 0x83; ctx.r[4] = 0x80002000; ctx.r[5] = 0x8000200C; ctx.r[6] = 0x80123456;
+    OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
+    assert(ctx.r[2] == 0x80002004);
+
+    ctx.r[3] = 0x83; ctx.r[4] = 0x2008; ctx.r[5] = 0x200C; ctx.r[6] = 0x80123456;
+    OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
+    assert(ctx.r[2] == 0x2008);
+
+    ctx.r[3] = 0x83; ctx.r[4] = 0x2000; ctx.r[5] = 0x200C; ctx.r[6] = 0xDEADBEEF;
+    OpenRatchet::Kernel::DispatchSyscall(&ctx, &memory);
+    assert(ctx.r[2] == 0);
     return 0;
 }

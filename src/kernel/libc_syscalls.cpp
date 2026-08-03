@@ -1,9 +1,22 @@
 #include "openratchet/syscalls.h"
+#include "openratchet/kernel_state.h"
 #include <iostream>
 #include <cstring>
+#include <array>
 
 namespace OpenRatchet {
 namespace Kernel {
+
+constexpr uint32_t kGuestSyscallTableGuestBase = 0x80011F80u;
+constexpr uint32_t kGuestSyscallTablePhysicalBase = kGuestSyscallTableGuestBase & 0x1FFFFFFFu;
+constexpr uint32_t kGuestSyscallProbeBase = 0x000002F0u;
+static std::array<uint32_t, 256> g_guest_syscall_handlers{};
+
+static uint32_t NormalizeKernelAlias(uint32_t address) {
+    return address >= 0x80000000u && address < 0xC0000000u
+               ? address & 0x1FFFFFFFu
+               : address;
+}
 
 static void SysFlushCache(MIPS_EE_Context* ctx, EE_Memory* mem) {
     // Syscall 0x64
@@ -24,12 +37,64 @@ static void SysPrintf(MIPS_EE_Context* ctx, EE_Memory* mem) {
     }
 }
 
+static void SysFindAddress(MIPS_EE_Context* ctx, EE_Memory* mem) {
+    uint32_t start = (static_cast<uint32_t>(ctx->r[4]) + 3u) & ~3u;
+    const uint32_t end = static_cast<uint32_t>(ctx->r[5]) & ~3u;
+    const uint32_t target = static_cast<uint32_t>(ctx->r[6]);
+    const uint32_t normalized_target = NormalizeKernelAlias(target);
+
+    ctx->r[2] = 0;
+    if (start >= end) return;
+
+    // FindAddress only operates on mapped EE RAM. Validate the complete range
+    // up front so malformed guest arguments cannot create a host-side scan.
+    const uint32_t normalized_start = NormalizeKernelAlias(start);
+    const uint32_t normalized_end = NormalizeKernelAlias(end);
+    if (normalized_start >= normalized_end ||
+        !mem->IsValidRange(normalized_start, normalized_end - normalized_start)) return;
+
+    for (uint32_t address = start; address < end; address += sizeof(uint32_t)) {
+        const uint32_t value = mem->Read<uint32_t>(address);
+        if (value == target || NormalizeKernelAlias(value) == normalized_target) {
+            ctx->r[2] = address;
+            return;
+        }
+    }
+}
+
+void ResetGuestSyscallTable(EE_Memory& memory) {
+    g_guest_syscall_handlers.fill(0);
+    for (uint32_t index = 0; index < g_guest_syscall_handlers.size(); ++index)
+        memory.Write<uint32_t>(kGuestSyscallTablePhysicalBase + index * sizeof(uint32_t), 0);
+
+    // R&C's startup locates the syscall table by scanning the BIOS probe area.
+    memory.Write<uint32_t>(kGuestSyscallProbeBase, kGuestSyscallTableGuestBase >> 16);
+    memory.Write<uint32_t>(kGuestSyscallProbeBase + 8, kGuestSyscallTableGuestBase & 0xFFFFu);
+}
+
+static void SysSetSyscall(MIPS_EE_Context* ctx, EE_Memory* mem) {
+    const uint32_t index = static_cast<uint32_t>(ctx->r[4]);
+    const uint32_t handler = static_cast<uint32_t>(ctx->r[5]);
+    if (index >= g_guest_syscall_handlers.size()) {
+        ctx->r[2] = static_cast<uint64_t>(-1);
+        return;
+    }
+    g_guest_syscall_handlers[index] = handler;
+    mem->Write<uint32_t>(kGuestSyscallTablePhysicalBase + index * sizeof(uint32_t), handler);
+    ctx->r[2] = 0;
+}
+
+static void SysGetEntryAddress(MIPS_EE_Context* ctx, EE_Memory*) {
+    const uint32_t index = static_cast<uint32_t>(ctx->r[4]);
+    ctx->r[2] = index < g_guest_syscall_handlers.size() ? g_guest_syscall_handlers[index] : 0;
+}
+
 void InitLibcSyscalls() {
     RegisterSyscall(0x64, SysFlushCache, "FlushCache");
     
-    // Stub for syscall 131
-    auto Sys131 = [](MIPS_EE_Context* ctx, EE_Memory* mem) { ctx->r[2] = 0; };
-    RegisterSyscall(131, Sys131, "Syscall_131");
+    RegisterSyscall(0x83, SysFindAddress, "FindAddress");
+    RegisterSyscall(0x74, SysSetSyscall, "SetSyscall");
+    RegisterSyscall(0x5B, SysGetEntryAddress, "GetEntryAddress");
 
     // RegisterPrintf? ID might be 0x3F or similar depending on BIOS, 
     // will leave it un-registered until we hit the unimplemented syscall or know the ID.

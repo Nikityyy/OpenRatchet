@@ -726,6 +726,10 @@ cmake --build build
   - The game's entry point initializes the C runtime, then calls the game's main function
   - Log each function dispatch for the first 1000 calls to understand the call sequence
   - Identify and fix any missing function targets
+  - [x] Preserve generated call/return dispatch across host frame yields
+  - [x] Seed and maintain the guest BIOS syscall table used by R&C startup
+  - [x] Implement syscall `0x83` (`FindAddress`) with KSEG alias matching
+  - [/] Continue startup from the current `0x11AC78`/`0x11AC80` wait loop by implementing the required DMA/SIF and interrupt syscalls
 
 - [/] **7.5** Write a smoke test in `tools/smoke_test.py`:
   - Launch the executable, wait N seconds, kill it

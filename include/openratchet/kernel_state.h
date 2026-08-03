@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+class EE_Memory;
+
 namespace OpenRatchet::Kernel {
 
 struct TimerState {
@@ -23,5 +25,6 @@ struct GSSystemState {
 const TimerState& GetTimerState();
 const GSSystemState& GetGSSystemState();
 void TickTimers();
+void ResetGuestSyscallTable(EE_Memory& memory);
 
 }

@@ -76,6 +76,7 @@ int main(int argc, char* argv[]) {
 
         g_ee_memory.Init();
         OpenRatchet::Kernel::InitSyscalls();
+        OpenRatchet::Kernel::ResetGuestSyscallTable(g_ee_memory);
         OpenRatchet::IOP::InitIOP();
 
         MIPS_EE_Context ee_ctx;
@@ -122,6 +123,11 @@ int main(int argc, char* argv[]) {
                     }
                     if (tick_count < 1000) {
                         std::cout << "[GUEST-TICK] tick=" << tick_count << " pc=0x" << std::hex << pc
+                                  << " v0=0x" << getRegU32(&r5900, 2)
+                                  << " s0=0x" << getRegU32(&r5900, 16)
+                                  << " s1=0x" << getRegU32(&r5900, 17)
+                                  << " s2=0x" << getRegU32(&r5900, 18)
+                                  << " s3=0x" << getRegU32(&r5900, 19)
                                   << std::dec << std::endl;
                     }
                     OpenRatchet::Runtime::SetGuestDeadline(std::chrono::steady_clock::now() + target_frame_time);

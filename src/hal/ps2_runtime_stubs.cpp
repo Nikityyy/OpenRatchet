@@ -135,6 +135,9 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     if (isStopRequested() || ctx->pc == 0 || OpenRatchet::Runtime::GuestDeadlineExpired()) return false;
     if (!is_call) return false;
     if (ctx->pc == targetPc) ctx->pc = fallthroughPc;
+    // A generated callee returns by placing its RA in PC.  The caller's
+    // generated code expects true precisely when that return reached its
+    // fallthrough label; returning false here incorrectly unwinds every JAL.
     return ctx->pc == fallthroughPc;
 }
 
