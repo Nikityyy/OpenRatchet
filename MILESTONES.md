@@ -79,7 +79,7 @@ Test logs: `build/native/Release/m1-refactor-20260804-133534.stdout.log` and
 
 ### M2 — First authentic native frame
 
-Status: `TODO`
+Status: `IN PROGRESS`
 
 Acceptance criteria:
 
@@ -90,6 +90,22 @@ Acceptance criteria:
 - Display registers, framebuffer address, resolution, and VRAM contents are
   captured and compared with PCSX2.
 - The native process survives at least 5 seconds of continuous frame updates.
+
+Handoff note (2026-08-04):
+
+- Ghidra/PCSX2 tracing identified `FUN_0011a948` as the SIF response handler;
+  the native override now injects the verified INIT response and bridges the
+  observed `0x80000009`/`0x8000000a` transactions.
+- PCSX2 responses captured for requests `0x80000592` and `0x8000059a` return
+  `(0x3f570, 0x3fb20)` and `(0x3f648, 0x3fc50)` respectively.
+- Native verification after the bridge: process remains alive for 10 seconds,
+  SIF completions occur, and graphics activity is still `gif=0`, `gsw=0`.
+  The bridge currently loops on request `0x80000003`, returning zero results;
+  this is the next trace target.
+- Next chat: reset PCSX2, break at `0x0011a948`, capture the response queue for
+  the original `0x80000003` request, add only that verified result mapping,
+  rebuild, and then trace the first real GIF/GS submission. Do not mark M2
+  complete until the acceptance criteria below are observed.
 
 ### M3 — Title screen and input
 
@@ -158,6 +174,10 @@ Acceptance criteria:
 4. Preserve existing user changes and do not commit automatically.
 5. After completing one milestone, stop and wait for review and commit before
    starting the next major milestone.
+6. Codex never creates commits. All changes made during one chat, including
+   code and documentation, belong in one user-created commit. Codex prepares
+   the changes and supplies the suggested commit message; the user always
+   commits.
 
 ## Test results
 
