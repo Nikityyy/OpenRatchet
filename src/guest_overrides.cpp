@@ -10,6 +10,7 @@ namespace {
 PS2Runtime::RecompiledFunction g_guest11a948Original = nullptr;
 bool g_sifInitResponseInjected = false;
 bool g_sifCommandBridgeActive = false;
+bool g_sifCommand3Completed = false;
 
 void guest_11a428(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const uint32_t index = READ32(ADD32(GPR_U32(ctx, 4), 0x10u));
@@ -31,6 +32,7 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     // ponytail: bridge the absent async IOP-ready event; replace with real IOP status when available.
     g_sifInitResponseInjected = false;
     g_sifCommandBridgeActive = false;
+    g_sifCommand3Completed = false;
     WRITE32(0x12fbf0u, 0u);
     SET_GPR_U32(ctx, 2, 1u);
     ctx->pc = GPR_U32(ctx, 31);
@@ -65,6 +67,13 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             const uint32_t candidate = pool + slot * 0x40u;
             const uint32_t command = READ32(candidate + 8u);
             if (command == 0x80000009u || command == 0x8000000au) {
+                const uint32_t requestAddress = READ32(candidate + 0x1cu);
+                // The original response callback clears the request object's first
+                // word after consuming it. Do not re-bridge the stale outbound
+                // packet when the runtime dispatches the response DMA locally.
+                if (requestAddress == 0u || READ32(requestAddress) == 0u) {
+                    continue;
+                }
                 packetAddress = candidate;
                 packetCommand = command;
                 break;
@@ -98,6 +107,13 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             } else if (requestCommand == 0x8000059au) {
                 result0 = 0x3f648u;
                 result1 = 0x3fc50u;
+            } else if (requestCommand == 0x80000003u) {
+                if (g_sifCommand3Completed) {
+                    result0 = 0x4f848u;
+                    result1 = 0x4f890u;
+                } else {
+                    g_sifCommand3Completed = true;
+                }
             }
         }
         const uint32_t responseWords[] = {

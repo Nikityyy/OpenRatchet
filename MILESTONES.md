@@ -93,19 +93,43 @@ Acceptance criteria:
 
 Handoff note (2026-08-04):
 
-- Ghidra/PCSX2 tracing identified `FUN_0011a948` as the SIF response handler;
-  the native override now injects the verified INIT response and bridges the
-  observed `0x80000009`/`0x8000000a` transactions.
+- Ghidra identified `FUN_0011a948` as the SIF response handler and
+  `FUN_0011c840` as a poll of command `0x80000003` until response `result0`
+  becomes nonzero. `FUN_0011ade0` copies the response fields back into the
+  waiting request.
+- A fresh PCSX2 trace captured the two response states for that poll: the
+  first completion returned `(result0,result1)=(0,0)`, and the next completion
+  for the same request returned `(0x4f848,0x4f890)`.
 - PCSX2 responses captured for requests `0x80000592` and `0x8000059a` return
   `(0x3f570, 0x3fb20)` and `(0x3f648, 0x3fc50)` respectively.
-- Native verification after the bridge: process remains alive for 10 seconds,
-  SIF completions occur, and graphics activity is still `gif=0`, `gsw=0`.
-  The bridge currently loops on request `0x80000003`, returning zero results;
-  this is the next trace target.
-- Next chat: reset PCSX2, break at `0x0011a948`, capture the response queue for
-  the original `0x80000003` request, add only that verified result mapping,
-  rebuild, and then trace the first real GIF/GS submission. Do not mark M2
-  complete until the acceptance criteria below are observed.
+- The native override now resets this state at `0x11cf10`, ignores stale
+  response-pool packets after the native callback clears their request object,
+  and emits the same zero-then-nonzero `0x80000003` sequence.
+- Native verification after that change: the process remained alive for 10
+  seconds, the log recorded both `0x80000003` completions, and guest PC
+  advanced from `0x11c860` to `0x120e08`. The next blocker is repeated request
+  `0x80000593` completions with zero results; graphics counters remained
+  `dma=0`, `gif=0`, `gsw=0`, `vif=2`.
+- M2 is not complete: no authentic framebuffer or nonzero graphics activity
+  has been demonstrated. The next concrete step is to trace the original
+  `0x80000593` response and its following SIF/DMAC transaction in PCSX2 before
+  adding another bridge mapping.
+
+Files changed in this handoff: `src/guest_overrides.cpp` and
+`MILESTONES.md`.
+
+Build and native test commands:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+.\build\native\Release\openratchet.exe .\build\extracted\PS2_MAIN.ELF
+```
+
+The tested launch used the same executable and ELF arguments through a
+temporary log-capture process with duplicate `Path`/`PATH` environment keys
+normalized for that child process. The 10-second test captured logs in
+`build/native/native-test.stdout.log` and `build/native/native-test.stderr.log`;
+the test process was still alive and was stopped after the observation window.
 
 ### M3 — Title screen and input
 
@@ -185,6 +209,7 @@ Acceptance criteria:
 |---|---|---|---|---|
 | 2026-08-04 | M0/M1 | Window opens; magenta fallback; stalls at `0x11ac78` | Not recorded in this run | `dma=0`, `gif=0`, `gsw=0`, `vif=2` |
 | 2026-08-04 | M1 | Startup passes the former wait; process alive 12s; SIF response and follow-up DMA logged | DebugServer connected; `0x154f80 = 1`; equivalent startup PC `0x118cc0` | M1 acceptance passed; framebuffer remains fallback |
+| 2026-08-04 | M2 in progress | Process alive 10s; PC advanced `0x11c860` -> `0x120e08`; `0x80000003` zero-then-nonzero bridge observed | PCSX2: `(0,0)` then `(0x4f848,0x4f890)` for the same poll | `dma=0`, `gif=0`, `gsw=0`, `vif=2`; next blocker is `0x80000593` |
 
 ## Blockers
 
