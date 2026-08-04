@@ -442,3 +442,33 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\diagnose-native.
 Build log: `build/native/build-Release.log`. Post-fix logs:
 `build/native/test-logs/native-20260805-010548.stdout.log` and
 `build/native/test-logs/native-20260805-010548.stderr.log`.
+
+Continuation note (2026-08-05, `0x80000006` result-pointer correction):
+
+- PCSX2 DebugServer and PINE were verified connected for Ratchet & Clank
+  (SCUS-97199), and Ghidra was verified active on port 8193 before tracing.
+- Ghidra `FUN_0011ade0` confirms that the SIF response field at packet `+0x28`
+  is copied into the request result slot at `+0x14`. PCSX2's live request at
+  `0x158400` contains command `0x6` and result0 `0x220d0`; `0x2020d0` is code
+  in the original ELF, not the matching result pointer.
+- Root-owned `src/guest_overrides.cpp` now bridges request `0x80000006` with
+  `result0=0x220d0`. The Release build passed, and the post-fix diagnostic
+  launched, stayed alive for 10.12 seconds, and was stopped by the harness.
+  It recorded 56 SIF completions and `tick=120 pc=0x1198b0 dma=514 gif=513
+  gsw=0 vif=2`; the log records the corrected completion.
+- M2 remains incomplete. The run still reports `displayFbp=0`, `sourceFbp=0`,
+  `preferred=0`, zero non-black pixels, zero nonzero VRAM bytes, and zero-filled
+  image payloads. The next concrete action is to trace the native guest path
+  after the repaired `0x20b618` return and the `0x80000006` completion, then
+  capture the corresponding `FUN_00201650` staging fill and GS VRAM updates.
+
+Build and test commands for this continuation:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\diagnose-native.ps1 -DurationSeconds 10
+```
+
+Build log: `build/native/build-Release.log`. Post-fix logs:
+`build/native/test-logs/native-20260805-011651.stdout.log` and
+`build/native/test-logs/native-20260805-011651.stderr.log`.

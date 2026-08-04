@@ -393,7 +393,7 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 }
             } else if (requestCommand == 0x80000006u) {
                 completion = 1u;
-                result0 = 0x2020d0u;
+                result0 = 0x220d0u;
             } else if (requestCommand == 0x80000900u) {
                 completion = 1u;
                 result0 = 0x60f38u;
