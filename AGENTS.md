@@ -1,7 +1,8 @@
 # OpenRatchet agent instructions
 
-These are the persistent project rules. Use `OPENRATCHET_PROMPT.md` as the
-stable bootstrap prompt; it intentionally does not require per-task fields.
+These are the persistent project rules. The agent should inspect the current
+repository and determine the active milestone and next step without requiring
+per-task fields in the chat prompt.
 
 ## Scope and tools
 
@@ -19,15 +20,28 @@ at a time and make the game progressively functional and playable.
   them.
 - If runtime/reference verification requires an unavailable MCP, report that
   and stop. Never invent MCP results.
-- Do not install, activate, reconnect, reset, pause, resume, reload, or replace
-  an MCP/tool without asking first when that action is needed from the user.
+- Use existing shell commands and available MCP tools autonomously. This
+  includes verifying connections, reading memory, inspecting the original
+  game, setting/clearing routine debug state, running builds/tests, and
+  pausing or resuming the reference emulator when required by the task.
+- Ask before obtaining a genuinely new tool, MCP, plugin, permission, external
+  artifact, or user-provided runtime result. Do not ask permission for a simple
+  command that an already available tool can perform.
 
 ## Stop-and-ask boundary
 
-If anything is needed from the user, stop immediately and ask before further
-edits or investigation. This includes missing files, dumps, saves, runtime
-results, permissions, tools, MCPs, external actions, or a clarification that
-could change the implementation.
+Keep working autonomously unless one of these applies:
+
+- a required tool, MCP, plugin, permission, or external capability is missing;
+- a required file, dump, save, game asset, or runtime result cannot be obtained
+  from the repository or available tools;
+- an irreversible/destructive action or external coordination is required; or
+- an answer is needed to resolve ambiguity that would materially change the
+  implementation.
+
+Routine repository commands, builds, tests, MCP connection checks, Ghidra
+queries, PCSX2 reads, breakpoints, stepping, and emulator control do not need
+user confirmation when they are within the task's scope.
 
 ## Fast diagnostic path
 
