@@ -1,6 +1,8 @@
 #include "guest_overrides.h"
 
+#include <cstring>
 #include <iostream>
+#include <vector>
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -36,6 +38,60 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     WRITE32(0x12fbf0u, 0u);
     SET_GPR_U32(ctx, 2, 1u);
     ctx->pc = GPR_U32(ctx, 31);
+}
+
+void guest_120788(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const uint32_t buffer = GPR_U32(ctx, 4) | 0x20000000u;
+    const uint32_t firstSize = READ32(buffer);
+    if (firstSize > 0u) {
+        const uint32_t destination = READ32(ADD32(buffer, 8u));
+        for (uint32_t i = 0u; i < firstSize; ++i) {
+            WRITE8(ADD32(destination, i), READ8(ADD32(buffer, 0x10u + i)));
+        }
+    }
+
+    const uint32_t secondSize = READ32(ADD32(buffer, 4u));
+    if (secondSize > 0u) {
+        const uint32_t destination = READ32(ADD32(buffer, 0xcu));
+        for (uint32_t i = 0u; i < secondSize; ++i) {
+            WRITE8(ADD32(destination, i), READ8(ADD32(buffer, 0x50u + i)));
+        }
+    }
+
+    ctx->pc = 0x1206d8u;
+}
+
+void installGuestGraphicsBridge(PS2Runtime& runtime) {
+    runtime.gifArbiter().setProcessPacketFn([&runtime](const uint8_t* data, uint32_t sizeBytes) {
+        const GSDebugSnapshot snapshot = runtime.gs().getDebugSnapshot();
+        uint64_t firstWord = 0u;
+        if (data != nullptr && sizeBytes >= 16u) {
+            std::memcpy(&firstWord, data, sizeof(firstWord));
+        }
+
+        const bool isActiveImagePayload =
+            data != nullptr &&
+            sizeBytes >= 16u &&
+            snapshot.trxdir == 0u &&
+            snapshot.transferTotalPixels > snapshot.transferCopiedPixels &&
+            (firstWord & 0x7FFFu) == 0u;
+        if (!isActiveImagePayload) {
+            runtime.gs().processGIFPacket(data, sizeBytes);
+            return;
+        }
+
+        const uint32_t imageQwc = sizeBytes / 16u;
+        if (imageQwc == 0u || imageQwc > 0x7FFFu || imageQwc * 16u != sizeBytes) {
+            runtime.gs().processGIFPacket(data, sizeBytes);
+            return;
+        }
+
+        std::vector<uint8_t> imagePacket(sizeBytes + 16u, 0u);
+        const uint64_t imageTag = static_cast<uint64_t>(imageQwc) | (2ull << 58u);
+        std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
+        std::memcpy(imagePacket.data() + 16u, data, sizeBytes);
+        runtime.gs().processGIFPacket(imagePacket.data(), static_cast<uint32_t>(imagePacket.size()));
+    });
 }
 
 void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
@@ -107,6 +163,12 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             } else if (requestCommand == 0x8000059au) {
                 result0 = 0x3f648u;
                 result1 = 0x3fc50u;
+            } else if (requestCommand == 0x80000593u) {
+                result0 = 0x410f0u;
+                result1 = 0x417c0u;
+            } else if (requestCommand == 0x80000595u) {
+                result0 = 0x41060u;
+                result1 = 0x41bd0u;
             } else if (requestCommand == 0x80000003u) {
                 if (g_sifCommand3Completed) {
                     result0 = 0x4f848u;
@@ -155,5 +217,7 @@ void registerGuestDmacOverride(PS2Runtime& runtime) {
     g_guest11a948Original = runtime.lookupFunction(0x11a948u);
     runtime.registerFunction(0x11a948u, guest_11a948);
     runtime.registerFunction(0x11cf10u, guest_11cf10);
+    runtime.registerFunction(0x120788u, guest_120788);
+    installGuestGraphicsBridge(runtime);
 }
 }

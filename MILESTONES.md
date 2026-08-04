@@ -115,8 +115,41 @@ Handoff note (2026-08-04):
   `0x80000593` response and its following SIF/DMAC transaction in PCSX2 before
   adding another bridge mapping.
 
-Files changed in this handoff: `src/guest_overrides.cpp` and
-`MILESTONES.md`.
+Continuation note (2026-08-04, commit boundary):
+
+- PCSX2/PINE captured the verified startup response data for `0x80000593`:
+  `(result0,result1)=(0x410f0,0x417c0)`. The native override now returns those
+  values. The following `0x80000595` request was also captured and bridged as
+  `(0x41060,0x41bd0)`.
+- Ghidra showed the callback target `0x120788` copying two response blocks and
+  returning to `0x1206d8`; a native guest override now implements that exact
+  copy behavior. The previous missing indirect-call target diagnostic is gone.
+- Before the final GS-layer edit, the native harness ran for 10 seconds with
+  `dma=514`, `gif=513`, `gsw=0`, `vif=2`, and PC `0x2017a4`. The log showed
+  repeated real GIF setup packets, but frame uploads still reported
+  `displayFbp=0`, `sourceFbp=0`, and `preferred=0`, so M2 acceptance was not
+  claimed.
+- Runtime tracing proved the next boundary: setup packets start a local-to-host
+  transfer, while the following raw image payload arrives as a separate DMA
+  submission whose leading zero-loop word was incorrectly treated as a GIF tag.
+  The root-owned `src/guest_overrides.cpp` graphics bridge now detects that
+  active-transfer packet shape, prepends a valid IMAGE tag, and forwards it
+  through the public GS API.
+- The verified Release build passed after this fix. The post-fix harness run
+  completed successfully: the process launched, stayed alive for 10.13 seconds,
+  and was stopped by the harness. It reported 22 SIF completions and
+  `tick=240 pc=0x2017a4 dma=514 gif=513 gsw=0 vif=2`.
+- The post-fix log confirms the raw 4096-byte transfer packets no longer appear
+  as zero-loop GIF packets, so the stateful image-payload branch is active.
+  However, frame uploads still report `displayFbp=0`, `sourceFbp=0`, and
+  `preferred=0` (`native-20260804-223936.stdout.log`). M2 therefore remains in
+  progress: the next concrete investigation is the guest's GS privileged
+  presentation setup (`PMODE`, `DISPFB1/2`, `DISPLAY1/2`) and its comparison to
+  PCSX2, not another SIF response bridge.
+
+Files changed in this handoff: `src/guest_overrides.cpp` and `MILESTONES.md`.
+The nested `third_party/PS2Recomp` checkout is clean; no third-party file is
+required for this fix.
 
 Build and native test commands:
 
@@ -130,6 +163,38 @@ temporary log-capture process with duplicate `Path`/`PATH` environment keys
 normalized for that child process. The 10-second test captured logs in
 `build/native/native-test.stdout.log` and `build/native/native-test.stderr.log`;
 the test process was still alive and was stopped after the observation window.
+
+Latest verified build command:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+```
+
+Build result: passed; output was `build/native/Release/openratchet.exe` and the
+complete log was `build/native/build-Release.log`.
+
+Post-fix native test:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File .\tools\run-native-test.ps1 -DurationSeconds 10
+```
+
+Result: launched `True`, alive at duration `True`, elapsed `10.13` seconds,
+stopped by harness `True`; logs are
+`build/native/test-logs/native-20260804-223936.stdout.log` and
+`build/native/test-logs/native-20260804-223936.stderr.log`. M2 acceptance did
+not pass because the host still used the fallback presentation path.
+
+Root-only replacement test:
+
+- Build and test repeated after moving the GS bridge out of the nested checkout.
+- Result: launched `True`, alive at duration `True`, elapsed `10.12` seconds,
+  22 SIF completions, `dma=514`, `gif=513`, `gsw=0`, `vif=2`.
+- The log records `size=4112 nloop=256 flg=2` IMAGE packets after the setup
+  packets, proving the root-owned bridge preserves the behavior.
+- Logs: `build/native/test-logs/native-20260804-224407.stdout.log` and
+  `build/native/test-logs/native-20260804-224407.stderr.log`.
 
 ### M3 — Title screen and input
 
@@ -209,9 +274,30 @@ Acceptance criteria:
 |---|---|---|---|---|
 | 2026-08-04 | M0/M1 | Window opens; magenta fallback; stalls at `0x11ac78` | Not recorded in this run | `dma=0`, `gif=0`, `gsw=0`, `vif=2` |
 | 2026-08-04 | M1 | Startup passes the former wait; process alive 12s; SIF response and follow-up DMA logged | DebugServer connected; `0x154f80 = 1`; equivalent startup PC `0x118cc0` | M1 acceptance passed; framebuffer remains fallback |
-| 2026-08-04 | M2 in progress | Process alive 10s; PC advanced `0x11c860` -> `0x120e08`; `0x80000003` zero-then-nonzero bridge observed | PCSX2: `(0,0)` then `(0x4f848,0x4f890)` for the same poll | `dma=0`, `gif=0`, `gsw=0`, `vif=2`; next blocker is `0x80000593` |
+| 2026-08-04 | M2 in progress | Root-only bridge test alive 10.12s; PC `0x2017a4`; `dma=514`, `gif=513`, `gsw=0`, `vif=2`; 22 SIF completions; IMAGE packets observed | PCSX2/PINE: `0x80000593 -> (0x410f0,0x417c0)` and `0x80000595 -> (0x41060,0x41bd0)`; Ghidra confirms callback `0x120788` copy behavior | Uploads remain `displayFbp=0`, `sourceFbp=0`, `preferred=0`; no authentic framebuffer acceptance |
 
 ## Blockers
 
-- None for M1. Next milestone: capture and enable the first authentic native
-  frame from guest DMA/GIF/GS activity (M2).
+- None for M1. M2 remains in progress. Next concrete action: inspect the guest's
+  GS privileged presentation setup (`PMODE`, `DISPFB1/2`, `DISPLAY1/2`) against
+  PCSX2 and capture a non-fallback framebuffer with nonzero display/source
+  evidence. If that passes, update M2 acceptance; otherwise continue from the
+  GS transfer trace.
+
+## New-chat handoff
+
+Start in `C:\Users\berge\Downloads\OpenRatchet` with the current uncommitted
+changes intact. Do not reset or reconfigure. First run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File .\tools\run-native-test.ps1 -DurationSeconds 10
+```
+
+Then inspect the newest files under `build\native\test-logs`; the completed run
+was `native-20260804-224407`. Acceptance still requires authentic guest-produced
+output, not merely a surviving process, nonzero DMA/GIF counters, or the magenta
+fallback. Suggested commit message for the root changes:
+`fix: bridge startup SIF and GS image transfers`.
+
+The nested `third_party/PS2Recomp` checkout is clean; do not edit or reset it.
