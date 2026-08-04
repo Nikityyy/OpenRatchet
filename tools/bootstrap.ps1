@@ -106,6 +106,13 @@ if ($Stage -in @('Build', 'All')) {
     Require-Command cmake
     if (-not (Test-Path -LiteralPath $Elf)) { throw "Missing ELF '$Elf'. Run with -Stage Extract first." }
     $nativeBuild = Join-Path $root 'build\native'
+    $cache = Join-Path $nativeBuild 'CMakeCache.txt'
+    if (Test-Path -LiteralPath $cache) {
+        $cachedRoot = (Select-String -LiteralPath $cache -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=(.+)$').Matches.Groups[1].Value
+        if ($cachedRoot -and ($cachedRoot.TrimEnd('\', '/') -ine $root.TrimEnd('\', '/'))) {
+            Remove-Item -LiteralPath $nativeBuild -Recurse -Force
+        }
+    }
     cmake -S $root -B $nativeBuild "-DPS2RECOMP_SOURCE_DIR:PATH=$PS2RecompDir" "-DRATCHET_BOOT_ELF:FILEPATH=$Elf"
     if ($LASTEXITCODE -ne 0) { throw 'Native CMake configuration failed.' }
     cmake --build $nativeBuild --config Release --parallel $buildJobs
