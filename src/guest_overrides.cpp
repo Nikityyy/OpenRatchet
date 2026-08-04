@@ -115,6 +115,18 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     ctx->pc = GPR_U32(ctx, 31);
 }
 
+void guest_12f1c8(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    // The original VBlank-start callback enters at this interior label of
+    // sub_0012F1A0, which the generated function table cannot address directly.
+    const uint64_t nextVblank = READ64(0x15ed48u) + 1u;
+    const uint64_t frameCounterBase = READ64(0x15ed40u);
+    WRITE64(0x15ed48u, nextVblank);
+    SET_GPR_U64(ctx, 2, 0u);
+    SET_GPR_U64(ctx, 6, frameCounterBase + READ32(0x1000800u));
+    WRITE64(ADD32(GPR_U32(ctx, 28), 0xffff8150u), GPR_U64(ctx, 6));
+    ctx->pc = GPR_U32(ctx, 31);
+}
+
 void guest_120788(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const uint32_t buffer = GPR_U32(ctx, 4) | 0x20000000u;
     const uint32_t firstSize = READ32(buffer);
@@ -442,6 +454,7 @@ void registerGuestDmacOverride(PS2Runtime& runtime) {
     g_guest20b618Original = runtime.lookupFunction(0x20b618u);
     runtime.registerFunction(0x11a948u, guest_11a948);
     runtime.registerFunction(0x11cf10u, guest_11cf10);
+    runtime.registerFunction(0x12f1c8u, guest_12f1c8);
     runtime.registerFunction(0x120788u, guest_120788);
     runtime.registerFunction(0x121e40u, guest_121e40);
     runtime.registerFunction(0x1f97e8u, guest_1f97e8);

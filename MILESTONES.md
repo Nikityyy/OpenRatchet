@@ -404,3 +404,41 @@ post-`0x123457` DMA copy and the optimized packed-GIF transfer, then fix the
 missing guest-produced GS/VRAM state using a matching PCSX2 trace. Do not claim
 M2 until display/source addresses, nonzero VRAM, and a non-fallback frame are
 observed.
+
+Continuation note (2026-08-05, VBlank interior-handler fix):
+
+- The refreshed native run showed a persistent 30-second stall with repeated
+  `[INTC:missing] cause=2 handler=0x12f1c8 id=1` diagnostics. Ghidra and the
+  generated `sub_0012F1A0` show that `0x12f1c8` is the original VBlank-start
+  callback's interior entry, not an invalid handler; the generated function
+  table only exposed the containing function's `0x12f1a0` entry.
+- Root-owned `src/guest_overrides.cpp` now implements the instructions at that
+  interior entry: it advances the original VBlank counter at `0x15ed48`,
+  combines the field value from `0x1000800` with the base at `0x15ed40`, stores
+  the result at `gp-0x7eb0`, and returns through the interrupt context's zero
+  return address. The alias is registered at `0x12f1c8`; generated output and
+  `third_party/PS2Recomp` remain unchanged.
+- The Release build passed. The post-fix 10-second diagnostic launched and
+  stayed alive for 10.11 seconds, with 56 SIF completions and
+  `tick=120 pc=0x1198b0 dma=514 gif=513 gsw=0 vif=2`. The prior VBlank missing
+  handler diagnostics are gone.
+- M2 remains incomplete: the same run still reports
+  `displayFbp=0`, `sourceFbp=0`, `preferred=0`, and the presentation probe has
+  zero non-black pixels and zero nonzero VRAM bytes. The raw image payloads are
+  still zero-filled. PCSX2 comparison confirmed the original staging buffer at
+  `0x1941c0` contains the expected `0x80` fill; the native trace only shows an
+  earlier zero-fill and does not yet reach the later `FUN_00201650` staging
+  fill. The next concrete action is to trace the guest path after the repaired
+  `0x20b618` return and the remaining SIF/DMA data population, then verify the
+  corresponding staging bytes and GS VRAM contents against PCSX2.
+
+Build and test commands for this continuation:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\diagnose-native.ps1 -DurationSeconds 10
+```
+
+Build log: `build/native/build-Release.log`. Post-fix logs:
+`build/native/test-logs/native-20260805-010548.stdout.log` and
+`build/native/test-logs/native-20260805-010548.stderr.log`.
