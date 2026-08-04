@@ -350,10 +350,57 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File .\tools\run-native-test.ps1 -DurationSeconds 10
 ```
 
-Then inspect the newest files under `build\native\test-logs`; the completed run
-was `native-20260804-224407`. Acceptance still requires authentic guest-produced
-output, not merely a surviving process, nonzero DMA/GIF counters, or the magenta
-fallback. Suggested commit message for the root changes:
-`fix: bridge startup SIF and GS image transfers`.
+Then inspect the newest files under `build\native\test-logs`; the completed
+diagnostic run was `native-20260805-004924`. Acceptance still requires
+authentic guest-produced output, not merely a surviving process, nonzero
+DMA/GIF counters, or the magenta fallback. Suggested commit message for the
+root changes: `fix: correct startup SIF response layout and commands`.
 
 The nested `third_party/PS2Recomp` checkout is clean; do not edit or reset it.
+
+## Latest M2 continuation (2026-08-05)
+
+- Verified before relying on runtime evidence: PCSX2 DebugServer and PINE both
+  reported connected for Ratchet & Clank (SCUS-97199), and Ghidra was active
+  on port 8193.
+- Ghidra `FUN_0011ade0` and the live request state at `0x158400` established
+  the SIF response layout: packet `+0x24` is the completion field, while
+  `+0x28` and `+0x2c` are result0/result1. The root bridge had been writing
+  result0 into the completion field. `src/guest_overrides.cpp` now emits the
+  correct layout and keeps the initial `0x80000003` completion pending.
+- PCSX2-backed mappings were added for `0x80000006 -> 0x2020d0`,
+  `0x80000900 -> 0x60f38`, `0x8000091b -> 0x61338`,
+  `0x80000400 -> 0x5ad00`, `0x123456 -> 0x56500`, and
+  `0x123457 -> 0xd6e30`. Ghidra confirmed `0x123456` and `0x123457` are
+  real commands from `FUN_0012da28`, not malformed native requests.
+- The Release build passed. The final diagnostic launched the native process,
+  kept it alive for 10.11 seconds, and stopped it cleanly. It recorded 56 SIF
+  completions and `tick=120 pc=0x1198b0 dma=514 gif=513 gsw=0 vif=2`.
+- The request storm is gone and the trace reaches the post-`0x123457` DMA
+  copy, but M2 acceptance still fails: frame uploads remain
+  `displayFbp=0`, `sourceFbp=0`, `preferred=0`, and the presentation probe
+  reports zero non-black pixels and zero nonzero VRAM bytes. No authentic
+  framebuffer or primitive draw event was demonstrated.
+
+Files changed in this continuation: `src/guest_overrides.cpp` and
+`MILESTONES.md`. The nested `third_party/PS2Recomp` checkout and generated
+output remain unchanged.
+
+Build and diagnostic commands:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File .\tools\diagnose-native.ps1 -DurationSeconds 10
+```
+
+Build result: passed; executable `build/native/Release/openratchet.exe` and
+build log `build/native/build-Release.log`. Diagnostic logs:
+`build/native/test-logs/native-20260805-004924.stdout.log` and
+`build/native/test-logs/native-20260805-004924.stderr.log`.
+
+The next concrete M2 action is to trace the native path after the verified
+post-`0x123457` DMA copy and the optimized packed-GIF transfer, then fix the
+missing guest-produced GS/VRAM state using a matching PCSX2 trace. Do not claim
+M2 until display/source addresses, nonzero VRAM, and a non-fallback frame are
+observed.

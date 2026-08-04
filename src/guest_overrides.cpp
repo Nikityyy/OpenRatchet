@@ -351,28 +351,52 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         (packetCommand == 0x80000009u || packetCommand == 0x8000000au)) {
         const uint32_t requestAddress = READ32(packetAddress + 0x1cu);
         const uint32_t requestCommand = READ32(packetAddress + 0x20u);
+        uint32_t completion = 0u;
         uint32_t result0 = 0u;
         uint32_t result1 = 0u;
         if (packetCommand == 0x80000009u) {
             if (requestCommand == 0x80000592u) {
+                completion = 1u;
                 result0 = 0x3f570u;
                 result1 = 0x3fb20u;
             } else if (requestCommand == 0x8000059au) {
+                completion = 1u;
                 result0 = 0x3f648u;
                 result1 = 0x3fc50u;
             } else if (requestCommand == 0x80000593u) {
+                completion = 1u;
                 result0 = 0x410f0u;
                 result1 = 0x417c0u;
             } else if (requestCommand == 0x80000595u) {
+                completion = 1u;
                 result0 = 0x41060u;
                 result1 = 0x41bd0u;
             } else if (requestCommand == 0x80000003u) {
                 if (g_sifCommand3Completed) {
+                    completion = 1u;
                     result0 = 0x4f848u;
                     result1 = 0x4f890u;
                 } else {
                     g_sifCommand3Completed = true;
                 }
+            } else if (requestCommand == 0x80000006u) {
+                completion = 1u;
+                result0 = 0x2020d0u;
+            } else if (requestCommand == 0x80000900u) {
+                completion = 1u;
+                result0 = 0x60f38u;
+            } else if (requestCommand == 0x8000091bu) {
+                completion = 1u;
+                result0 = 0x61338u;
+            } else if (requestCommand == 0x80000400u) {
+                completion = 1u;
+                result0 = 0x5ad00u;
+            } else if (requestCommand == 0x123456u) {
+                completion = 1u;
+                result0 = 0x56500u;
+            } else if (requestCommand == 0x123457u) {
+                completion = 1u;
+                result0 = 0xd6e30u;
             }
         }
         const uint32_t responseWords[] = {
@@ -384,6 +408,7 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             0u,
             requestAddress,
             packetCommand,
+            completion,
             result0,
             result1,
             0u, 0u, 0u, 0u, 0u,
