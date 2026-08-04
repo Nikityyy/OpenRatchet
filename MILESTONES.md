@@ -186,6 +186,28 @@ stopped by harness `True`; logs are
 `build/native/test-logs/native-20260804-223936.stderr.log`. M2 acceptance did
 not pass because the host still used the fallback presentation path.
 
+Continuation note (2026-08-04, privileged GS fast-path investigation):
+
+- The native run was reproduced again after the PCSX2 DebugServer and PINE
+  connections were verified. The Release build passed, and the 10-second
+  harness run launched successfully, stayed alive for 10.12 seconds, and was
+  stopped by the harness. It reported 22 SIF completions and
+  `tick=120 pc=0x2017d8 dma=514 gif=513 gsw=0 vif=2`.
+- Ghidra and the checked-in GS stub show the reset packet carries A+D writes
+  for `PMODE`, `SMODE2`, `DISPFB1/2`, and `DISPLAY1/2`. The native GS decoder
+  already handles the display-buffer addresses `0x59` through `0x5c`, while
+  the `0x41`/`0x42` A+D IDs collide with ordinary packed-register IDs. A
+  root-only bridge attempt was tested and then discarded because this run
+  takes the optimized packed-GIF DMA path, which bypasses that callback.
+- The post-test log still reports `displayFbp=0`, `sourceFbp=0`, and
+  `preferred=0` for the uploaded frames. No `[gs:prim]` draw events were
+  observed, so authentic guest-produced framebuffer content is still not
+  demonstrated. M2 remains in progress.
+- The next concrete step is to trace the optimized packed-GIF DMA path at the
+  root-owned boundary and apply the missing privileged-register semantics
+  there, then verify VRAM/frame content and draw events against the live
+  PCSX2 GS state. No third-party or generated file was changed.
+
 Root-only replacement test:
 
 - Build and test repeated after moving the GS bridge out of the nested checkout.
