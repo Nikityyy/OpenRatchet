@@ -13,12 +13,10 @@ PCSX2 to establish expected behavior; test the actual fix in the native build.
 
 ## Current state
 
-- Native window opens, but shows the runtime's magenta fallback framebuffer.
-- The guest repeatedly reaches PC `0x11ac78`.
-- The observed counters are `dma=0`, `gif=0`, `gsw=0`, `vif=2`.
-- The immediate blocker is startup progress: identify what should update the
-  guest word at `0x154f80` and why that producer or synchronization path does
-  not complete.
+- Native startup progresses past the former `0x11ac78` wait.
+- The window still shows the runtime's magenta fallback framebuffer; authentic
+  rendering is the next milestone.
+- Native logs show SIF initialization and follow-up DMA activity.
 
 ## Milestones
 
@@ -39,7 +37,7 @@ Deliverable: a short baseline entry in the test-results section below.
 
 ### M1 — Native boot progresses past the current wait
 
-Status: `IN PROGRESS`
+Status: `DONE`
 
 Acceptance criteria:
 
@@ -50,6 +48,34 @@ Acceptance criteria:
 - PC `0x11ac78` is no longer the long-term execution state.
 - No unimplemented syscall or stub error is introduced.
 - Guest threads remain alive and make measurable progress for several seconds.
+
+Observed result:
+
+- Ghidra identified `FUN_0011a480` installing the missing `0x11a448` and
+  `0x11a428` handlers and registering DMAC handler `0x11a948`.
+- PCSX2 showed the equivalent original state with `0x154f80 = 1`.
+- Native startup stayed alive for 12 seconds with window title `OpenRatchet 2`.
+- Native stderr logged the verified INIT response injection, three SIF DMA
+  submissions, and `sceSifSetReg reg=0x80000002 ... value=0x1`.
+- No `unimplemented`, `stub`, `error`, or `failed` diagnostics were observed;
+  existing `SyscallOverride:fallback` diagnostics remain a limitation.
+
+Files changed for M1: `src/main.cpp`, `src/guest_overrides.h`, and
+`src/guest_overrides.cpp`.
+
+Build and launch commands:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+.\build\native\Release\openratchet.exe .\build\extracted\PS2_MAIN.ELF
+```
+
+The tested launch used the same executable and ELF arguments through a
+temporary log-capture process with the duplicate `Path`/`PATH` environment
+keys normalized for that child process.
+
+Test logs: `build/native/Release/m1-refactor-20260804-133534.stdout.log` and
+`build/native/Release/m1-refactor-20260804-133534.stderr.log`.
 
 ### M2 — First authentic native frame
 
@@ -138,9 +164,9 @@ Acceptance criteria:
 | Date | Milestone | Native result | PCSX2/reference result | Notes |
 |---|---|---|---|---|
 | 2026-08-04 | M0/M1 | Window opens; magenta fallback; stalls at `0x11ac78` | Not recorded in this run | `dma=0`, `gif=0`, `gsw=0`, `vif=2` |
+| 2026-08-04 | M1 | Startup passes the former wait; process alive 12s; SIF response and follow-up DMA logged | DebugServer connected; `0x154f80 = 1`; equivalent startup PC `0x118cc0` | M1 acceptance passed; framebuffer remains fallback |
 
 ## Blockers
 
-- Current: determine and repair the startup synchronization path associated
-  with guest address `0x154f80`.
-
+- None for M1. Next milestone: capture and enable the first authentic native
+  frame from guest DMA/GIF/GS activity (M2).

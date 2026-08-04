@@ -10,6 +10,7 @@
 #endif
 
 #include "ps2_runtime.h"
+#include "guest_overrides.h"
 
 namespace {
 void configureHostFloatingPoint() {
@@ -36,7 +37,8 @@ int main(int argc, char** argv) {
 
     ratchet::GuestMemory memory;
     PS2Runtime runtime;
-    if (!runtime.initialize("OpenRatchet 2")) {
+    ratchet::registerGuestBootstrapOverrides(runtime);
+    if (!runtime.initialize("OpenRatchet")) {
         std::cerr << "PS2 runtime initialization failed\n";
         return EXIT_FAILURE;
     }
@@ -44,6 +46,7 @@ int main(int argc, char** argv) {
         std::cerr << "Could not load guest ELF: " << elf << "\n";
         return EXIT_FAILURE;
     }
+    ratchet::registerGuestDmacOverride(runtime);
     runtime.run();
     return EXIT_SUCCESS;
 }

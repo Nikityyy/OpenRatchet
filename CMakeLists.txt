@@ -50,6 +50,7 @@ endif()
 
 add_executable(openratchet
     src/main.cpp
+    src/guest_overrides.cpp
     src/Memory.cpp
     ${RATCHET_GENERATED_SOURCES})
 target_include_directories(openratchet PRIVATE
@@ -57,6 +58,12 @@ target_include_directories(openratchet PRIVATE
     "${RATCHET_GENERATED_DIR}"
     "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
     "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel")
+target_precompile_headers(openratchet PRIVATE
+    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h"
+    "${RATCHET_GENERATED_DIR}/ps2_recompiled_functions.h"
+    "${RATCHET_GENERATED_DIR}/ps2_recompiled_stubs.h"
+    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_syscalls.h"
+    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_stubs.h")
 target_link_libraries(openratchet PRIVATE ps2_runtime)
 target_compile_definitions(openratchet PRIVATE
     RATCHET_BOOT_ELF="${RATCHET_BOOT_ELF}")
