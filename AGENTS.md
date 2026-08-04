@@ -18,6 +18,10 @@ at a time and make the game progressively functional and playable.
 - Verify an MCP connection before relying on its results. Use Ghidra and PCSX2
   whenever they provide useful evidence; host build diagnosis does not require
   them.
+- If the PCSX2 PINE MCP is unavailable, disconnected, or its handshake fails,
+  stop and ask the user before continuing. A listening PINE TCP port does not
+  count as a connection, and DebugServer or Ghidra availability does not make
+  it safe to continue without PINE.
 - If runtime/reference verification requires an unavailable MCP, report that
   and stop. Never invent MCP results.
 - Use existing shell commands and available MCP tools autonomously. This

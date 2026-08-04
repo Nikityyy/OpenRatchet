@@ -218,6 +218,40 @@ Root-only replacement test:
 - Logs: `build/native/test-logs/native-20260804-224407.stdout.log` and
   `build/native/test-logs/native-20260804-224407.stderr.log`.
 
+Continuation note (2026-08-05, native return-state investigation):
+
+- Verified connections before investigation: PCSX2 DebugServer and PINE both
+  reported connected for Ratchet & Clank (SCUS-97199), and Ghidra was active
+  on port 8193. The final PCSX2 status check later reported both channels
+  disconnected; runtime-dependent work stopped at that point.
+- Ghidra decompiled `FUN_00201650` and showed the original call
+  `FUN_001f97e8(0x1941c0,0xffffffff80808080,0x100)`. The native generated
+  path had not reached that fill because `FUN_0020b618` entered with return
+  address `0x2017ec` and exited with `ctx->pc=0`, leaving the only guest
+  thread at `0x2017a4`.
+- Root-owned `src/guest_overrides.cpp` now repairs that specific
+  `0x20b618` return state using the saved guest return-address vector. A
+  Release build passed, and the native run advanced to tick 480 with 211 SIF
+  completions (`dma=514`, `gif=513`, `gsw=0`, `vif=2`) instead of terminating
+  the guest thread at `0x2017a4`.
+- The native run still did not produce a nonzero framebuffer or primitive
+  draw event. Its first presentation probe remained 512x512 with
+  `nonBlackPixels=0` and `nonZeroVramBytes=0`. After the return repair, the
+  guest progressed into a repeated `0x80000006` SIF wait at PC `0x11caa0`.
+  The next step is to capture the original response/result-pointer behavior
+  for that request in PCSX2 and bridge it with real data; do not synthesize
+  the staging buffer or claim M2 acceptance.
+
+Build and test commands:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-native-test.ps1 -DurationSeconds 10
+```
+
+Latest logs: `build/native/test-logs/native-20260805-001658.stdout.log` and
+`build/native/test-logs/native-20260805-001658.stderr.log`.
+
 ### M3 — Title screen and input
 
 Status: `TODO`

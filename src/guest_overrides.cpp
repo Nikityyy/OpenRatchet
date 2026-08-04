@@ -10,9 +10,84 @@
 namespace ratchet {
 namespace {
 PS2Runtime::RecompiledFunction g_guest11a948Original = nullptr;
+PS2Runtime::RecompiledFunction g_guest121e40Original = nullptr;
+PS2Runtime::RecompiledFunction g_guest1f97e8Original = nullptr;
+PS2Runtime::RecompiledFunction g_guest20b618Original = nullptr;
 bool g_sifInitResponseInjected = false;
 bool g_sifCommandBridgeActive = false;
 bool g_sifCommand3Completed = false;
+bool g_guest121e40DiagnosticsLogged = false;
+bool g_imagePayloadDiagnosticsLogged = false;
+uint32_t g_imagePayloadDiagnosticsCount = 0u;
+uint32_t g_guest120788DiagnosticsCount = 0u;
+
+void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    static uint32_t count = 0u;
+    ++count;
+    const __m128i savedReturnAddress = GPR_VEC(ctx, 31);
+    if (count <= 4u) {
+        std::cerr << "[OpenRatchet:guest] 20b618 enter count=" << count
+                  << " a0=0x" << std::hex << GPR_U32(ctx, 4)
+                  << " a1=0x" << GPR_U32(ctx, 5)
+                  << " ra=0x" << GPR_U32(ctx, 31)
+                  << " pc=0x" << ctx->pc << std::dec << std::endl;
+    }
+    if (g_guest20b618Original != nullptr) {
+        g_guest20b618Original(rdram, ctx, runtime);
+    } else {
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+    const uint32_t savedReturnPc = _mm_extract_epi32(savedReturnAddress, 0);
+    if (ctx->pc == 0u && savedReturnPc != 0u) {
+        ctx->pc = savedReturnPc;
+        SET_GPR_VEC(ctx, 31, savedReturnAddress);
+        std::cerr << "[OpenRatchet:guest] 20b618 repaired return pc=0x"
+                  << std::hex << savedReturnPc << std::dec << std::endl;
+    }
+    if (count <= 4u) {
+        std::cerr << "[OpenRatchet:guest] 20b618 exit count=" << count
+                  << " pc=0x" << std::hex << ctx->pc
+                  << " v0=0x" << GPR_U32(ctx, 2) << std::dec << std::endl;
+    }
+}
+
+void guest_1f97e8(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const uint32_t originalDestination = GPR_U32(ctx, 4);
+    const uint32_t value = GPR_U32(ctx, 5);
+    const uint32_t size = GPR_U32(ctx, 6);
+    const bool correctsGeneratedCall =
+        originalDestination == GPR_U32(ctx, 29) &&
+        value == 0x80808080u &&
+        size == 0x100u;
+    const uint32_t destination = correctsGeneratedCall ? 0x1941c0u : originalDestination;
+    const bool tracksImageStaging = destination == 0x1941c0u;
+    if (tracksImageStaging) {
+        std::cerr << "[OpenRatchet:GS] staging fill before dst=0x" << std::hex
+                  << originalDestination << " effectiveDst=0x" << destination
+                  << " value=0x" << value << " size=0x" << size
+                  << (correctsGeneratedCall ? " corrected-generated-destination" : "")
+                  << std::dec << std::endl;
+    }
+
+    if (correctsGeneratedCall) {
+        SET_GPR_U32(ctx, 4, destination);
+    }
+    if (g_guest1f97e8Original != nullptr) {
+        g_guest1f97e8Original(rdram, ctx, runtime);
+    } else {
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+    if (correctsGeneratedCall) {
+        SET_GPR_U32(ctx, 4, originalDestination);
+    }
+
+    if (tracksImageStaging) {
+        uint32_t firstWord = 0u;
+        std::memcpy(&firstWord, rdram + destination, sizeof(firstWord));
+        std::cerr << "[OpenRatchet:GS] staging fill after firstWord=0x"
+                  << std::hex << firstWord << std::dec << std::endl;
+    }
+}
 
 void guest_11a428(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const uint32_t index = READ32(ADD32(GPR_U32(ctx, 4), 0x10u));
@@ -43,6 +118,27 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
 void guest_120788(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const uint32_t buffer = GPR_U32(ctx, 4) | 0x20000000u;
     const uint32_t firstSize = READ32(buffer);
+    const uint32_t secondSize = READ32(ADD32(buffer, 4u));
+    ++g_guest120788DiagnosticsCount;
+    if (g_guest120788DiagnosticsCount <= 12u) {
+        uint32_t firstNonZero = 0u;
+        uint32_t secondNonZero = 0u;
+        for (uint32_t i = 0u; i < firstSize && i < 0x4000u; ++i) {
+            firstNonZero += READ8(ADD32(buffer, 0x10u + i)) != 0u ? 1u : 0u;
+        }
+        for (uint32_t i = 0u; i < secondSize && i < 0x4000u; ++i) {
+            secondNonZero += READ8(ADD32(buffer, 0x50u + i)) != 0u ? 1u : 0u;
+        }
+        std::cerr << "[OpenRatchet:SIF] 120788 count=" << g_guest120788DiagnosticsCount
+                  << " buffer=0x" << std::hex << buffer
+                  << " firstSize=0x" << firstSize
+                  << " firstDst=0x" << READ32(ADD32(buffer, 8u))
+                  << " firstNonZero=" << std::dec << firstNonZero
+                  << " secondSize=0x" << std::hex << secondSize
+                  << " secondDst=0x" << READ32(ADD32(buffer, 0xcu))
+                  << " secondNonZero=" << std::dec << secondNonZero
+                  << std::endl;
+    }
     if (firstSize > 0u) {
         const uint32_t destination = READ32(ADD32(buffer, 8u));
         for (uint32_t i = 0u; i < firstSize; ++i) {
@@ -50,7 +146,6 @@ void guest_120788(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         }
     }
 
-    const uint32_t secondSize = READ32(ADD32(buffer, 4u));
     if (secondSize > 0u) {
         const uint32_t destination = READ32(ADD32(buffer, 0xcu));
         for (uint32_t i = 0u; i < secondSize; ++i) {
@@ -59,6 +154,79 @@ void guest_120788(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     }
 
     ctx->pc = 0x1206d8u;
+}
+
+void guest_121e40(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    if (g_guest121e40Original != nullptr) {
+        g_guest121e40Original(rdram, ctx, runtime);
+    } else {
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    const auto &gs = runtime->memory().gs();
+    std::cerr << "[OpenRatchet:GS] presentation setup pmode=0x"
+              << std::hex << gs.pmode
+              << " smode2=0x" << gs.smode2
+              << " dispfb1=0x" << gs.dispfb1
+              << " display1=0x" << gs.display1
+              << " dispfb2=0x" << gs.dispfb2
+              << " display2=0x" << gs.display2
+              << " bgcolor=0x" << gs.bgcolor
+              << std::dec << "\n";
+
+    if (!g_guest121e40DiagnosticsLogged) {
+        g_guest121e40DiagnosticsLogged = true;
+        runtime->gs().latchHostPresentationFrame();
+        std::vector<uint8_t> pixels;
+        uint32_t width = 0u;
+        uint32_t height = 0u;
+        uint32_t displayFbp = 0u;
+        uint32_t sourceFbp = 0u;
+        bool preferred = false;
+        const bool copied = runtime->gs().copyLatchedHostPresentationFrame(
+            pixels, width, height, &displayFbp, &sourceFbp, &preferred);
+        const GSDebugSnapshot snapshot = runtime->gs().getDebugSnapshot();
+        uint32_t nonBlackPixels = 0u;
+        uint64_t pixelHash = 1469598103934665603ull;
+        for (size_t i = 0; i + 3u < pixels.size(); i += 4u) {
+            if (pixels[i] != 0u || pixels[i + 1u] != 0u || pixels[i + 2u] != 0u) {
+                ++nonBlackPixels;
+            }
+            for (size_t channel = 0u; channel < 4u; ++channel) {
+                pixelHash ^= pixels[i + channel];
+                pixelHash *= 1099511628211ull;
+            }
+        }
+        runtime->gs().refreshDisplaySnapshot();
+        uint32_t vramSize = 0u;
+        const uint8_t *vram = runtime->gs().lockDisplaySnapshot(vramSize);
+        uint32_t nonZeroVramBytes = 0u;
+        uint32_t firstNonZeroVramOffset = 0xFFFFFFFFu;
+        if (vram != nullptr) {
+            for (uint32_t i = 0u; i < vramSize; ++i) {
+                if (vram[i] != 0u) {
+                    ++nonZeroVramBytes;
+                    if (firstNonZeroVramOffset == 0xFFFFFFFFu) {
+                        firstNonZeroVramOffset = i;
+                    }
+                }
+            }
+            runtime->gs().unlockDisplaySnapshot();
+        }
+        std::cerr << "[OpenRatchet:GS] presentation probe copied="
+                  << static_cast<uint32_t>(copied ? 1u : 0u)
+                  << " pixels=" << pixels.size()
+                  << " size=" << width << "x" << height
+                  << " displayFbp=" << displayFbp
+                  << " sourceFbp=" << sourceFbp
+                  << " preferred=" << static_cast<uint32_t>(preferred ? 1u : 0u)
+                  << " hasFrame=" << static_cast<uint32_t>(snapshot.hasHostPresentationFrame ? 1u : 0u)
+                  << " nonBlackPixels=" << nonBlackPixels
+                  << " pixelHash=0x" << std::hex << pixelHash << std::dec
+                  << " nonZeroVramBytes=" << nonZeroVramBytes
+                  << " firstNonZeroVramOffset=0x" << std::hex << firstNonZeroVramOffset << std::dec
+                  << std::endl;
+    }
 }
 
 void installGuestGraphicsBridge(PS2Runtime& runtime) {
@@ -78,6 +246,35 @@ void installGuestGraphicsBridge(PS2Runtime& runtime) {
         if (!isActiveImagePayload) {
             runtime.gs().processGIFPacket(data, sizeBytes);
             return;
+        }
+
+        ++g_imagePayloadDiagnosticsCount;
+        if (!g_imagePayloadDiagnosticsLogged ||
+            (g_imagePayloadDiagnosticsCount <= 8u) ||
+            ((g_imagePayloadDiagnosticsCount % 128u) == 0u)) {
+            g_imagePayloadDiagnosticsLogged = true;
+            uint32_t nonZeroBytes = 0u;
+            uint64_t payloadHash = 1469598103934665603ull;
+            for (uint32_t i = 0u; i < sizeBytes; ++i) {
+                if (data[i] != 0u) {
+                    ++nonZeroBytes;
+                }
+                payloadHash ^= data[i];
+                payloadHash *= 1099511628211ull;
+            }
+            std::cerr << "[OpenRatchet:GS] image payload size=" << sizeBytes
+                      << " count=" << g_imagePayloadDiagnosticsCount
+                      << " nonZeroBytes=" << nonZeroBytes
+                      << " hash=0x" << std::hex << payloadHash << std::dec
+                      << " transferPixels=" << snapshot.transferTotalPixels
+                      << " copiedPixels=" << snapshot.transferCopiedPixels
+                      << " bitblt=0x" << std::hex << snapshot.bitbltbuf.dbp
+                      << ":" << static_cast<uint32_t>(snapshot.bitbltbuf.dbw)
+                      << ":" << static_cast<uint32_t>(snapshot.bitbltbuf.dpsm)
+                      << " trxpos=0x" << snapshot.trxpos.dsax << ":" << snapshot.trxpos.dsay
+                      << " trxreg=0x" << snapshot.trxreg.rrw << ":" << snapshot.trxreg.rrh
+                      << std::dec
+                      << std::endl;
         }
 
         const uint32_t imageQwc = sizeBytes / 16u;
@@ -215,9 +412,15 @@ void registerGuestBootstrapOverrides(PS2Runtime& runtime) {
 
 void registerGuestDmacOverride(PS2Runtime& runtime) {
     g_guest11a948Original = runtime.lookupFunction(0x11a948u);
+    g_guest121e40Original = runtime.lookupFunction(0x121e40u);
+    g_guest1f97e8Original = runtime.lookupFunction(0x1f97e8u);
+    g_guest20b618Original = runtime.lookupFunction(0x20b618u);
     runtime.registerFunction(0x11a948u, guest_11a948);
     runtime.registerFunction(0x11cf10u, guest_11cf10);
     runtime.registerFunction(0x120788u, guest_120788);
+    runtime.registerFunction(0x121e40u, guest_121e40);
+    runtime.registerFunction(0x1f97e8u, guest_1f97e8);
+    runtime.registerFunction(0x20b618u, guest_20b618);
     installGuestGraphicsBridge(runtime);
 }
 }
