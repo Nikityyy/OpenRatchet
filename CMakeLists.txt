@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 project(OpenRatchet LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -51,6 +53,7 @@ endif()
 add_executable(openratchet
     src/main.cpp
     src/guest_overrides.cpp
+    src/sif_startup_responses.cpp
     src/Memory.cpp
     ${RATCHET_GENERATED_SOURCES})
 target_include_directories(openratchet PRIVATE
@@ -67,3 +70,11 @@ target_precompile_headers(openratchet PRIVATE
 target_link_libraries(openratchet PRIVATE ps2_runtime)
 target_compile_definitions(openratchet PRIVATE
     RATCHET_BOOT_ELF="${RATCHET_BOOT_ELF}")
+
+if(BUILD_TESTING)
+    add_executable(sif_startup_responses_tests
+        tests/sif_startup_responses_tests.cpp
+        src/sif_startup_responses.cpp)
+    target_include_directories(sif_startup_responses_tests PRIVATE src)
+    add_test(NAME sif_startup_responses COMMAND sif_startup_responses_tests)
+endif()

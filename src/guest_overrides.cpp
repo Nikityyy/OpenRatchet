@@ -1,6 +1,10 @@
 #include "guest_overrides.h"
 
+#include "guest_range.h"
+#include "sif_startup_responses.h"
+
 #include <cstring>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,7 +22,7 @@ PS2Runtime::RecompiledFunction g_guest1f97e8Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest20b618Original = nullptr;
 bool g_sifInitResponseInjected = false;
 bool g_sifCommandBridgeActive = false;
-bool g_sifCommand3Completed = false;
+SifStartupResponseResolver g_sifStartupResponseResolver;
 bool g_guest121e40DiagnosticsLogged = false;
 bool g_imagePayloadDiagnosticsLogged = false;
 uint32_t g_imagePayloadDiagnosticsCount = 0u;
@@ -27,7 +31,7 @@ uint32_t g_guest120788DiagnosticsCount = 0u;
 const std::vector<uint8_t>& getBootWad() {
     static const std::vector<uint8_t> data = [] {
         const std::filesystem::path path =
-            std::filesystem::current_path() / "build" / "extracted" / "wads2" / "wad2_0.wad";
+            std::filesystem::path(RATCHET_BOOT_ELF).parent_path() / "wads2" / "wad2_0.wad";
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         if (!input) {
             std::cerr << "[OpenRatchet:CDVD] missing boot WAD: " << path.string() << std::endl;
@@ -97,9 +101,11 @@ void completeGuestSprTransfer(PS2Runtime& runtime,
     const uint32_t sprAddress = runtime.memory().readIORegister(kSprChannelBase + 0x80u);
     const uint32_t sourceBase = inputAddress + 0x10u;
     const uint32_t sourceOffset = madr - sourceBase;
-    const uint32_t byteCount = qwc * 16u;
+    const bool hasValidTransferSize = qwc <= UINT32_MAX / 16u;
+    const uint32_t byteCount = hasValidTransferSize ? qwc * 16u : 0u;
     const bool isBootWadRange =
-        sourceOffset < bootWad.size() && byteCount <= bootWad.size() - sourceOffset;
+        madr >= sourceBase && hasValidTransferSize &&
+        isRangeWithin(sourceOffset, byteCount, bootWad.size());
 
     if ((chcr & 0x100u) != 0u && isBootWadRange && byteCount != 0u) {
         uint8_t* scratchpad = runtime.memory().getScratchpad();
@@ -126,6 +132,8 @@ void completeGuestSprTransfer(PS2Runtime& runtime,
                   << " copied=" << std::dec << static_cast<uint32_t>(isBootWadRange ? 1u : 0u)
                   << std::endl;
     }
+    // This bridge retains the observed whole-register clear for now. Replacing
+    // it with a bit-level completion update requires a DMAC reference capture.
     runtime.memory().writeIORegister(kSprChannelBase, 0u);
 }
 
@@ -178,10 +186,12 @@ void guest_12f208(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const bool referenceBootLoad =
         sourceSector == 0x3809u && sectorCount == bootWad.size() / 0x800u;
     const uint32_t loadDestination = destination;
-    const size_t availableBytes = 0x02000000u - loadDestination;
-    const size_t copyBytes = std::min(bootWad.size(), availableBytes);
-    if ((!nativeBootLoad && !referenceBootLoad) ||
-        loadDestination >= 0x02000000u || copyBytes < 0x2000u) {
+    constexpr size_t kGuestRamBytes = 0x02000000u;
+    if ((!nativeBootLoad && !referenceBootLoad) || loadDestination >= kGuestRamBytes) {
+        return;
+    }
+    const size_t copyBytes = std::min(bootWad.size(), kGuestRamBytes - loadDestination);
+    if (copyBytes < 0x2000u) {
         return;
     }
 
@@ -303,7 +313,7 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     // ponytail: bridge the absent async IOP-ready event; replace with real IOP status when available.
     g_sifInitResponseInjected = false;
     g_sifCommandBridgeActive = false;
-    g_sifCommand3Completed = false;
+    g_sifStartupResponseResolver.reset();
     WRITE32(0x12fbf0u, 0u);
     SET_GPR_U32(ctx, 2, 1u);
     ctx->pc = GPR_U32(ctx, 31);
@@ -557,53 +567,9 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         (packetCommand == 0x80000009u || packetCommand == 0x8000000au)) {
         const uint32_t requestAddress = READ32(packetAddress + 0x1cu);
         const uint32_t requestCommand = READ32(packetAddress + 0x20u);
-        uint32_t completion = 0u;
-        uint32_t result0 = 0u;
-        uint32_t result1 = 0u;
+        SifStartupResponse response;
         if (packetCommand == 0x80000009u) {
-            if (requestCommand == 0x80000592u) {
-                completion = 1u;
-                result0 = 0x3f570u;
-                result1 = 0x3fb20u;
-            } else if (requestCommand == 0x8000059au) {
-                completion = 1u;
-                result0 = 0x3f648u;
-                result1 = 0x3fc50u;
-            } else if (requestCommand == 0x80000593u) {
-                completion = 1u;
-                result0 = 0x410f0u;
-                result1 = 0x417c0u;
-            } else if (requestCommand == 0x80000595u) {
-                completion = 1u;
-                result0 = 0x41060u;
-                result1 = 0x41bd0u;
-            } else if (requestCommand == 0x80000003u) {
-                if (g_sifCommand3Completed) {
-                    completion = 1u;
-                    result0 = 0x4f848u;
-                    result1 = 0x4f890u;
-                } else {
-                    g_sifCommand3Completed = true;
-                }
-            } else if (requestCommand == 0x80000006u) {
-                completion = 1u;
-                result0 = 0x220d0u;
-            } else if (requestCommand == 0x80000900u) {
-                completion = 1u;
-                result0 = 0x60f38u;
-            } else if (requestCommand == 0x8000091bu) {
-                completion = 1u;
-                result0 = 0x61338u;
-            } else if (requestCommand == 0x80000400u) {
-                completion = 1u;
-                result0 = 0x5ad00u;
-            } else if (requestCommand == 0x123456u) {
-                completion = 1u;
-                result0 = 0x56500u;
-            } else if (requestCommand == 0x123457u) {
-                completion = 1u;
-                result0 = 0xd6e30u;
-            }
+            response = g_sifStartupResponseResolver.resolve(requestCommand);
         }
         const uint32_t responseWords[] = {
             packetCommand == 0x80000009u ? 0x40u : 0x1040u,
@@ -614,9 +580,9 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             0u,
             requestAddress,
             packetCommand,
-            completion,
-            result0,
-            result1,
+            response.completed ? 1u : 0u,
+            response.result0,
+            response.result1,
             0u, 0u, 0u, 0u, 0u,
         };
         for (uint32_t i = 0; i < sizeof(responseWords) / sizeof(responseWords[0]); ++i) {
@@ -624,7 +590,7 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         }
         std::cerr << "[OpenRatchet:SIF] injected completion for 0x"
                   << std::hex << packetCommand << " request=0x" << requestCommand
-                  << " result0=0x" << result0 << " result1=0x" << result1
+                  << " result0=0x" << response.result0 << " result1=0x" << response.result1
                   << std::dec << "\n";
     }
 
@@ -641,7 +607,7 @@ void registerGuestBootstrapOverrides(PS2Runtime& runtime) {
     runtime.registerFunction(0x11a448u, guest_11a448);
 }
 
-void registerGuestDmacOverride(PS2Runtime& runtime) {
+void registerGuestRuntimeOverrides(PS2Runtime& runtime) {
     g_guest11a948Original = runtime.lookupFunction(0x11a948u);
     g_guest12f208Original = runtime.lookupFunction(0x12f208u);
     g_guest121e40Original = runtime.lookupFunction(0x121e40u);

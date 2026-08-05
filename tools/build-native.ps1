@@ -1,13 +1,18 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [ValidateSet('openratchet', 'sif_startup_responses_tests')]
+    [string]$Target = 'openratchet',
+    # Use only when generated project metadata has changed and MSBuild's
+    # incremental tracking has not picked up a newly added source file.
+    [switch]$Rebuild
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $cachePath = Join-Path $root 'build\native\CMakeCache.txt'
-$project = Join-Path $root 'build\native\openratchet.vcxproj'
+$project = Join-Path $root "build\native\$Target.vcxproj"
 $elf = Join-Path $root 'build\extracted\PS2_MAIN.ELF'
 $log = Join-Path $root "build\native\build-$Configuration.log"
 
@@ -58,6 +63,7 @@ $timer = [Diagnostics.Stopwatch]::StartNew()
 & $msbuild $project `
     "/p:Configuration=$Configuration" `
     /p:Platform=x64 `
+    $(if ($Rebuild) { '/t:Rebuild' }) `
     /m `
     /v:minimal `
     "/flp:logfile=$log;verbosity=normal"

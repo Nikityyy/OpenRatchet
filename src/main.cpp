@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
         std::cerr << "Could not load guest ELF: " << elf << "\n";
         return EXIT_FAILURE;
     }
-    ratchet::registerGuestDmacOverride(runtime);
+    ratchet::registerGuestRuntimeOverrides(runtime);
     runtime.run();
     return EXIT_SUCCESS;
 }
