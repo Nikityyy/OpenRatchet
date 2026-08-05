@@ -30,10 +30,15 @@ struct SifRpcCallResponse {
 class SifRpcTransport {
 public:
     void recordBinding(uint32_t clientAddress, uint32_t serviceId);
+    void recordOutboundPayload(uint32_t remoteAddress,
+                               uint32_t size,
+                               const std::array<uint32_t, 4>& payloadWords);
     SifRpcCallResponse resolveCall(uint32_t clientAddress,
                                   uint32_t function,
                                   uint32_t receiveBuffer,
-                                  uint32_t receiveSize) const;
+                                  uint32_t receiveSize,
+                                  uint32_t remoteSendBuffer = 0u,
+                                  uint32_t sendSize = 0u) const;
     void reset();
 
 private:
@@ -42,7 +47,14 @@ private:
         uint32_t serviceId = 0u;
     };
 
+    struct OutboundPayload {
+        uint32_t remoteAddress = 0u;
+        uint32_t size = 0u;
+        std::array<uint32_t, 4> payloadWords{};
+    };
+
     std::array<Binding, 16> bindings_{};
+    std::array<OutboundPayload, 32> outboundPayloads_{};
 };
 
 inline bool makeSifRpcCompletionSizeWord(uint32_t payloadSize, uint32_t& word) {

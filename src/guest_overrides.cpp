@@ -4,6 +4,8 @@
 #include "sif_rpc_transport.h"
 #include "sif_startup_responses.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +19,7 @@
 namespace ratchet {
 namespace {
 PS2Runtime::RecompiledFunction g_guest11a948Original = nullptr;
+PS2Runtime::RecompiledFunction g_guest118b20Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest12f208Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest121e40Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest1f97e8Original = nullptr;
@@ -511,6 +514,44 @@ void installGuestGraphicsBridge(PS2Runtime& runtime) {
     });
 }
 
+void guest_118b20(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    constexpr size_t kGuestMemorySize = 0x02000000u;
+    constexpr uint32_t kDescriptorSize = 0x10u;
+    constexpr uint32_t kMaximumDescriptors = 32u;
+    constexpr uint32_t kCapturedPayloadBytes = 16u;
+
+    const uint32_t descriptorList = GPR_U32(ctx, 4);
+    const uint32_t descriptorCount = GPR_U32(ctx, 5);
+    const uint32_t boundedCount = std::min(descriptorCount, kMaximumDescriptors);
+    if (isRangeWithin(descriptorList,
+                      static_cast<size_t>(boundedCount) * kDescriptorSize,
+                      kGuestMemorySize)) {
+        for (uint32_t index = 0u; index < boundedCount; ++index) {
+            const uint32_t descriptor = descriptorList + index * kDescriptorSize;
+            const uint32_t source = READ32(descriptor);
+            const uint32_t destination = READ32(descriptor + 4u);
+            const uint32_t size = READ32(descriptor + 8u);
+            const uint32_t attributes = READ32(descriptor + 0xcu);
+            if (destination == 0u || size == 0u || (attributes & 0x44u) != 0u ||
+                !isRangeWithin(source, std::min(size, kCapturedPayloadBytes), kGuestMemorySize)) {
+                continue;
+            }
+            std::array<uint32_t, 4> payloadWords{};
+            for (uint32_t offset = 0u; offset + sizeof(uint32_t) <= size &&
+                 offset < kCapturedPayloadBytes; offset += sizeof(uint32_t)) {
+                payloadWords[offset / sizeof(uint32_t)] = READ32(source + offset);
+            }
+            g_sifRpcTransport.recordOutboundPayload(destination, size, payloadWords);
+        }
+    }
+
+    if (g_guest118b20Original != nullptr) {
+        g_guest118b20Original(rdram, ctx, runtime);
+    } else {
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+}
+
 void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     if (!g_sifInitResponseInjected &&
         READ32(0x154e48u) == 0x80000002u &&
@@ -571,6 +612,8 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         (packetCommand == 0x80000009u || packetCommand == 0x8000000au)) {
         const uint32_t clientAddress = READ32(packetAddress + 0x1cu);
         const uint32_t requestCommand = READ32(packetAddress + 0x20u);
+        const uint32_t remoteSendBuffer = READ32(packetAddress + 0x04u);
+        const uint32_t sendSize = READ32(packetAddress + 0x24u);
         const uint32_t receiveBuffer = READ32(packetAddress + 0x28u);
         const uint32_t receiveSize = READ32(packetAddress + 0x2cu);
         const uint32_t packetStatus = READ32(packetAddress + 0x10u);
@@ -581,7 +624,8 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         SifRpcCallResponse callResponse;
         if (packetCommand == 0x8000000au) {
             callResponse = g_sifRpcTransport.resolveCall(
-                clientAddress, requestCommand, receiveBuffer, receiveSize);
+                clientAddress, requestCommand, receiveBuffer, receiveSize,
+                remoteSendBuffer, sendSize);
         }
         const bool canCompleteCall = packetCommand != 0x8000000au ||
             canCompleteSifRpcCallWithoutPayload(
@@ -661,11 +705,13 @@ void registerGuestBootstrapOverrides(PS2Runtime& runtime) {
 }
 
 void registerGuestRuntimeOverrides(PS2Runtime& runtime) {
+    g_guest118b20Original = runtime.lookupFunction(0x118b20u);
     g_guest11a948Original = runtime.lookupFunction(0x11a948u);
     g_guest12f208Original = runtime.lookupFunction(0x12f208u);
     g_guest121e40Original = runtime.lookupFunction(0x121e40u);
     g_guest1f97e8Original = runtime.lookupFunction(0x1f97e8u);
     g_guest20b618Original = runtime.lookupFunction(0x20b618u);
+    runtime.registerFunction(0x118b20u, guest_118b20);
     runtime.registerFunction(0x11a948u, guest_11a948);
     runtime.registerFunction(0x12f208u, guest_12f208);
     runtime.registerFunction(0x11cf10u, guest_11cf10);

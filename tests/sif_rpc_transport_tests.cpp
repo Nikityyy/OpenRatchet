@@ -112,6 +112,26 @@ int main() {
     test.expect(!transport.resolveCall(0x132490u, 0x0eu, 0u, 0x4u).completed,
                 "missing startup service 0x80000595 receive buffer remains pending");
 
+    transport.recordBinding(0x158040u, 0x80000003u);
+    call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                 0x4f848u, 0x4u);
+    test.expect(!call.completed,
+                "payload-dependent service call remains pending without outbound data");
+    transport.recordOutboundPayload(0x4f848u, 0x4u, {0x1999u, 0u, 0u, 0u});
+    call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                 0x4f848u, 0x4u);
+    test.expect(call.completed && call.serviceId == 0x80000003u &&
+                    call.payloadSize == 0x4u && call.payloadWords[0] == 0x53300u,
+                "service 0x80000003 function 1 matches the reference request word");
+    test.expect(!transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                       0x4f848u, 0x8u).completed,
+                "payload-dependent service call rejects a mismatched send size");
+    transport.recordOutboundPayload(0x4f848u, 0x4u, {0x53300u, 0u, 0u, 0u});
+    call = transport.resolveCall(0x158040u, 2u, 0x158080u, 0x4u,
+                                 0x4f848u, 0x4u);
+    test.expect(call.completed && call.payloadSize == 0x4u && call.payloadWords[0] == 0u,
+                "service 0x80000003 function 2 matches the chained reference request word");
+
     transport.reset();
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u).completed,
                 "reset removes recorded bindings");
@@ -119,6 +139,9 @@ int main() {
                 "reset removes startup service binding");
     test.expect(!transport.resolveCall(0x132490u, 0x0eu, 0x131340u, 0x4u).completed,
                 "reset removes startup service 0x80000595 binding");
+    test.expect(!transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                       0x4f848u, 0x4u).completed,
+                "reset removes captured outbound payloads");
 
     if (test.failures != 0) {
         std::cerr << test.failures << " test check(s) failed\n";

@@ -62,9 +62,18 @@ M2 — First authentic native frame.
   payload. It advanced past that former wait into an uncaptured data-bearing
   call: client `0x158040`, function `0x01`, receive `0x158080`, size `4`,
   `status=5`, sequence `0x14`; it remained alive for 10.14 seconds.
+- Generated/Ghidra mapping proved client `0x158040` binds to service
+  `0x80000003`; PCSX2 function `0x01` consumed request word `0x1999` and
+  returned `0x53300`, while function `0x02` consumed `0x53300` and returned
+  `0`. Both emitted four-byte `0x80000008` responses.
+- Verification run `native-20260805-162020` completed 24 SIF packets. The
+  transport retained outbound DMA payloads by remote buffer and completed the
+  request-sensitive function-`0x01` shape before advancing to an uncaptured
+  call: client `0x158400`, function `0xff`, receive `0x158200`, size `4`,
+  `status=5`, sequence `0x16`; it remained alive for 10.17 seconds.
 - Latest verified logs:
-  `build/native/test-logs/native-20260805-155924.stdout.log` and
-  `build/native/test-logs/native-20260805-155924.stderr.log`.
+  `build/native/test-logs/native-20260805-162020.stdout.log` and
+  `build/native/test-logs/native-20260805-162020.stderr.log`.
 - The compact diagnostic now recognizes the direct SIF records: the latest run
   reported 15 completions and the exact next deferred call instead of zero.
 - The upgraded GhidraMCP handshake is verified through its stdio bridge and
@@ -101,15 +110,15 @@ M2 — First authentic native frame.
 
 ### Active divergence
 
-Service `0x80000593`, function `0x04`, now completes through the service
-provider with reference payload `{0}`. The next native packet remains
-authentically busy at packet `0x20155000`: client `0x158040`, function `0x01`,
-receive `0x158080`, size `4`, status `5`, sequence `0x14`. Its bound service
-and reference payload have not yet been characterized.
+Service `0x80000003`, functions `0x01` and `0x02`, now complete only when
+their captured outbound words match the reference chain. The next native packet
+remains authentically busy at packet `0x20155000`: client `0x158400`, function
+`0xff`, receive `0x158200`, size `4`, status `5`, sequence `0x16`. Its bound
+service and reference payload have not yet been characterized.
 
 ### Next experiment
 
-Map the deferred client `0x158040` packet through generated output and its
+Map the deferred client `0x158400` packet through generated output and its
 binding site, then perform one fresh PINE/DebugServer capture of only that
 forward-reachable call. Capture the service/function, send/receive data,
 response-ring transition, packet status, and client sequence before adding any
@@ -129,12 +138,14 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. It now uses stateful binding and service payload dispatch, but
   packet discovery must move to the SIF transfer boundary.
-- The declarative SIF compatibility table contains only five verified service
+- The declarative SIF compatibility table contains only seven verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
-  and service `0x80000595` function `0x0e` result `2`. Unsupported shapes
-  remain pending; replace the table when native IOP execution owns these
-  responses.
+  service `0x80000595` function `0x0e` result `2`, and service `0x80000003`
+  functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`). The last
+  two require the captured EE-to-IOP DMA word associated with the packet's
+  remote send buffer. Unsupported shapes remain pending; replace the table when
+  native IOP execution owns these responses.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
   with general CDVD sector/file I/O.
@@ -267,6 +278,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | Batched SIF/PINE workflow | Four verified responses consolidated into a declarative table; diagnostics reported 15 completions and exact deferred function `0x04`; focused tests and 10s run passed | Workflow delta passed; M2 not passed |
 | 2026-08-05 | GhidraMCP fork migration | Stdio bridge connected to `OpenRatchetTest`; metadata verified the extracted R5900 ELF and focused decompilation at `0x121630` | Static-reference tooling verified; M2 unchanged |
 | 2026-08-05 | Startup SIF characterization and function `0x04` | One PINE/DebugServer boot proved service `0x80000593`, function `0x04` writes `{0}` to `0x1324c0`; native completed it, reached 22 completions, and deferred the new client `0x158040` shape | Iteration delta passed; M2 not passed |
+| 2026-08-05 | Request-sensitive SIF service `0x80000003` | PCSX2 proved `0x1999 -> 0x53300` for function `1` and `0x53300 -> 0` for function `2`; native matched the DMA-captured request and advanced to client `0x158400` function `0xff` | Iteration delta passed; M2 not passed |
 
 ## Handoff format
 
