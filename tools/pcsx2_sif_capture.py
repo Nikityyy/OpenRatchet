@@ -9,7 +9,7 @@ import re
 import socket
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -158,10 +158,24 @@ class DebugServerClient:
     host: str = "127.0.0.1"
     port: int = 21512
     timeout: float = 5.0
+    # The patched DebugServer uses detached workers for socket requests.  Keep
+    # one command outstanding at a time and leave the worker enough time to
+    # retire before opening the next connection.
+    minimum_request_interval: float = 0.1
+    _last_request_started: float | None = field(default=None, init=False, repr=False)
+
+    def _wait_for_request_slot(self) -> None:
+        if self._last_request_started is None:
+            return
+        remaining = self.minimum_request_interval - (time.monotonic() - self._last_request_started)
+        if remaining > 0.0:
+            time.sleep(remaining)
 
     def request(self, command: str, *, cpu: str = "ee", **params: Any) -> dict[str, Any]:
         payload = {"cmd": command, "cpu": cpu, **params}
         raw = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+        self._wait_for_request_slot()
+        self._last_request_started = time.monotonic()
         try:
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as connection:
                 connection.settimeout(self.timeout)
@@ -390,6 +404,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, help="transcript path")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=21512)
+    parser.add_argument(
+        "--request-interval-ms",
+        type=int,
+        default=100,
+        help="minimum spacing between DebugServer requests (minimum: 100 ms)",
+    )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--validate-only", action="store_true")
     modes.add_argument("--arm-only", action="store_true")
@@ -397,13 +417,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.request_interval_ms < 100:
+            raise CaptureError("--request-interval-ms must be at least 100.")
         raw_manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
         manifest = validate_manifest(raw_manifest)
         if args.validate_only:
             print(f"Valid capture manifest: {manifest['name']} ({len(manifest['targets'])} targets)")
             return 0
 
-        client = DebugServerClient(args.host, args.port)
+        client = DebugServerClient(
+            args.host,
+            args.port,
+            minimum_request_interval=args.request_interval_ms / 1000.0,
+        )
         initial_status = client.status(manifest["cpu"])
         if not bool(initial_status.get("alive", True)):
             raise CaptureError("PCSX2 DebugServer is connected but the VM is not alive.")

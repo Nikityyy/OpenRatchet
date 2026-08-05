@@ -166,19 +166,24 @@ M2 — First authentic native frame.
 
 ### Active divergence
 
-Service `0x80000006`, function `0x06`, is now represented at the shared SIF
-transport boundary from a verified 0x200-byte request beginning `0x53300` and
-an eight-byte response `{0x19, 0}`; native replay is verified. The next
-authentic busy packet is service `0x80000003`, function `0x01`, with remote
-send `0x4f848`/`0x4`, receive `0x158080`/`0x4`, request word `0x1751d`, and
-sequence `0x19`.
+The next authentic busy packet is service `0x80000003`, function `0x01`, from
+generated callsite `0x11c914`: remote send `0x4f848`/`0x4`, receive
+`0x158080`/`0x4`, request word `0x1751d`, and sequence `0x19`.
+`FUN_00201520` forwards that payload unchanged through `FUN_0011c8c8`.
+It remains pending. A retry with general MCP breakpoint management armed
+`0x11c914` but PCSX2 crashed while adding `0x11c91c`; Windows Event 1000
+records `pcsx2-qt.exe` heap corruption (`0xc0000374`, `ntdll.dll`) at 19:03.
+`tools\\pcsx2_sif_capture.py` now enforces 100 ms spacing between direct
+DebugServer requests and rejects lower intervals before connecting; its unit
+tests cover the throttle. No fresh reference capture or SIF behavior change was
+made.
 
 ### Next experiment
 
-Map the new function-`0x01` callsite and its `0x1751d` payload provenance, then
-use one fresh PCSX2 capture boot to record its bound service, four-byte
-response, response-ring transition, packet status, and client sequence. Do
-not add another SIF table behavior before that capture.
+On a fresh PCSX2 boot, verify healthy PINE and DebugServer handshakes, then use
+only the throttled helper as the DebugServer owner to arm and capture the
+prepared `0x11c914` before/after pair. Abort on any connection failure; do not
+add a SIF table behavior before the response is captured.
 
 Iteration acceptance delta passed: native completed only the reference-verified
 function-`0x06` shape and advanced from sequence `0x17` without completing the

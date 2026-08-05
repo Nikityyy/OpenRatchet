@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,26 @@ class FakeClient:
 
 
 class CaptureTests(unittest.TestCase):
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.sent = bytearray()
+            self._responses = [b'{"ok":true}\n']
+
+        def __enter__(self) -> "CaptureTests.FakeSocket":
+            return self
+
+        def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def sendall(self, data: bytes) -> None:
+            self.sent.extend(data)
+
+        def recv(self, _size: int) -> bytes:
+            return self._responses.pop(0) if self._responses else b""
+
     def test_manifest_rejects_duplicate_target_names(self) -> None:
         raw = {
             "schema": 1,
@@ -136,6 +157,32 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(removed, ["0x00002000"])
         self.assertEqual(client.removed, [0x2000])
         self.assertEqual(client.breakpoints[0]["description"], "user breakpoint")
+
+    def test_debug_server_client_spaces_independent_connections(self) -> None:
+        first = self.FakeSocket()
+        second = self.FakeSocket()
+        client = capture.DebugServerClient(minimum_request_interval=0.1)
+
+        with mock.patch.object(capture.socket, "create_connection", side_effect=[first, second]) as connect, \
+             mock.patch.object(capture.time, "sleep") as sleep:
+            client.request("status")
+            client.request("list_breakpoints")
+
+        self.assertEqual(connect.call_count, 2)
+        sleep.assert_called_once()
+        self.assertGreater(sleep.call_args.args[0], 0.0)
+        self.assertIn(b'"cmd":"status"', first.sent)
+        self.assertIn(b'"cmd":"list_breakpoints"', second.sent)
+
+    def test_capture_rejects_unsafe_request_spacing_before_connecting(self) -> None:
+        manifest = REPO_ROOT / "tools" / "sif-capture.example.json"
+        with mock.patch.object(capture.socket, "create_connection") as connect:
+            result = capture.main(
+                [str(manifest), "--validate-only", "--request-interval-ms", "20"]
+            )
+
+        self.assertEqual(result, 1)
+        connect.assert_not_called()
 
 
 if __name__ == "__main__":
