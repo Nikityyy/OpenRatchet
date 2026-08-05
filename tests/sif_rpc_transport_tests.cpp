@@ -59,6 +59,20 @@ int main() {
     test.expect(!transport.resolveCall(0x159968u, 0u, 0u, 0x10u).completed,
                 "missing CDVD receive buffer remains pending");
 
+    transport.recordBinding(0x159990u, 0x8000059au);
+    call = transport.resolveCall(0x159990u, 0u, 0x1324c0u, 0x4u);
+    test.expect(call.completed && call.serviceId == 0x8000059au &&
+                    call.payloadSize == 0x4u && call.payloadWords[0] == 2u &&
+                    call.payloadWords[1] == 0u && call.payloadWords[2] == 0u &&
+                    call.payloadWords[3] == 0u,
+                "bound CDVD DiskReady call returns the reference four-byte payload");
+    test.expect(!transport.resolveCall(0x159990u, 1u, 0x1324c0u, 0x4u).completed,
+                "unsupported CDVD DiskReady function remains pending");
+    test.expect(!transport.resolveCall(0x159990u, 0u, 0x1324c0u, 0x10u).completed,
+                "mismatched CDVD DiskReady receive size remains pending");
+    test.expect(!transport.resolveCall(0x159990u, 0u, 0u, 0x4u).completed,
+                "missing CDVD DiskReady receive buffer remains pending");
+
     transport.reset();
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u).completed,
                 "reset removes recorded bindings");

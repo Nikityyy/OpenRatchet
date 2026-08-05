@@ -4,6 +4,8 @@ namespace ratchet {
 namespace {
 constexpr uint32_t kCdvdInitService = 0x80000592u;
 constexpr uint32_t kCdvdInitPayloadSize = 0x10u;
+constexpr uint32_t kCdvdDiskReadyService = 0x8000059au;
+constexpr uint32_t kCdvdDiskReadyPayloadSize = 0x4u;
 
 SifRpcCallResponse resolveCdvdInit(uint32_t function,
                                    uint32_t receiveBuffer,
@@ -22,6 +24,26 @@ SifRpcCallResponse resolveCdvdInit(uint32_t function,
         kCdvdInitService,
         kCdvdInitPayloadSize,
         {1u, 0x21du, 0x21du, 0u},
+    };
+}
+
+SifRpcCallResponse resolveCdvdDiskReady(uint32_t function,
+                                        uint32_t receiveBuffer,
+                                        uint32_t receiveSize) {
+    if (function != 0u || receiveBuffer == 0u || receiveSize != kCdvdDiskReadyPayloadSize) {
+        return {};
+    }
+
+    // PCSX2 PINE/DebugServer capture at generated call 0x121304: the bound
+    // service 0x8000059a receives function 0 with a four-byte buffer at
+    // 0x1324c0 and changes its first word from 1 to 2. This is CDVD service
+    // semantics, not a packet-specific completion; native IOP execution will
+    // replace the compatibility provider when it owns this response.
+    return {
+        true,
+        kCdvdDiskReadyService,
+        kCdvdDiskReadyPayloadSize,
+        {2u, 0u, 0u, 0u},
     };
 }
 }  // namespace
@@ -60,6 +82,9 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
 
     if (serviceId == kCdvdInitService) {
         return resolveCdvdInit(function, receiveBuffer, receiveSize);
+    }
+    if (serviceId == kCdvdDiskReadyService) {
+        return resolveCdvdDiskReady(function, receiveBuffer, receiveSize);
     }
     return {};
 }

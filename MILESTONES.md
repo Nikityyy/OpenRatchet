@@ -54,8 +54,8 @@ M2 — First authentic native frame.
   nonzero bytes, the copied frame has no non-black pixels, and no authentic
   primitive draw event was observed.
 - Latest verified logs:
-  `build/native/test-logs/native-20260805-141747.stdout.log` and
-  `build/native/test-logs/native-20260805-141747.stderr.log`.
+  `build/native/test-logs/native-20260805-144242.stdout.log` and
+  `build/native/test-logs/native-20260805-144242.stderr.log`.
 - PCSX2 PINE/DebugServer reference capture is connected to Ratchet & Clank.
   At `0x11a948`, response packet `0x20154d80` carried a data-bearing CALL
   for packet `0x20155000`: `status=0x5`, request `1`, receive `0x15afc0`,
@@ -63,29 +63,39 @@ M2 — First authentic native frame.
   ring header changed from `0x440` to `0x400` as the `0x40`-byte message was
   consumed; packet status became `0x4`, sequence became `0`, and the client
   first word was cleared.
+- Fresh PCSX2 PINE/DebugServer capture at generated `0x121304` proved the
+  CDVD DiskReady call: service `0x8000059a`, function `0`, client `0x159990`,
+  receive `0x1324c0`, size `4`. Stepping over it changed receive word
+  `1→2`, emitted the `0x80000008` response at `0x20154d80`, and changed the
+  request packet from bind `0x80000009` to call `0x8000000a`.
+- Verification run `native-20260805-144242` wrote the matching four-byte
+  DiskReady completion, advanced through the next bind (`0x80000593`), and
+  deferred only its subsequent unsupported call. The compact parser reported
+  zero SIF completions despite these direct runtime log records.
 
 ### Active divergence
 
-CDVD init now completes through the service-provider path. The next native
-packet remains authentically busy because CDVD DiskReady service `0x8000059a`
-has no provider: packet `0x20155000`, client `0x159990`, function `0`, receive
-`0x1324c0`, size `4`, status `5`, sequence `5`.
+CDVD DiskReady now completes through the service-provider path with the
+reference payload `{2}`. The next native packet remains authentically busy for
+the next bound service `0x80000593`: packet `0x20155000`, client `0x132d08`,
+function `0x22`, receive `0x1324c0`, size `4`, status `5`, sequence `9`.
 
 ### Next experiment
 
-Capture CDVD DiskReady service `0x8000059a`, function `0`, at its IOP handler
-and the matching PCSX2 EE response-ring transition. Then add that service result
-to the existing provider and require the native packet to transition from
-status `5` to `4`, clear sequence/client state, and advance to the next call.
+Capture the response for bound service `0x80000593`, function `0x22`, at the
+generated caller and matching PCSX2 response-ring transition. Add it only as a
+service-level provider after its payload is known, then require the native
+packet to leave status `5` and advance to the following call.
 
 Iteration acceptance delta:
 
-- native completes DiskReady with reference payload bytes;
+- native completes service `0x80000593`, function `0x22`, with reference
+  payload bytes;
 - packet/ring/client state matches the PCSX2 transition; and
 - M1 remains passed without synthetic completion of unsupported calls.
 
-The CDVD-init acceptance delta passed. Graphics-transfer counters were not
-reached in the bounded run, so M2 remains unpassed.
+The CDVD-init and DiskReady acceptance deltas passed. Graphics-transfer
+counters were not reached in the bounded run, so M2 remains unpassed.
 
 This iteration does not need to complete M2. If it exposes a different
 subsystem blocker, record that as the single next experiment and stop.
@@ -101,6 +111,9 @@ architecture:
 - The CDVD init provider reproduces the exact reference BIOS versions
   `0x21d/0x21d`. Replace those target-BIOS compatibility constants when native
   IOP module execution supplies the service response directly.
+- The CDVD DiskReady provider reproduces the verified function-0 result `2` for
+  a four-byte receive buffer. Replace it when native IOP module execution owns
+  the response directly.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
   with general CDVD sector/file I/O.
@@ -226,6 +239,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | SIF data-bearing completion deferral | 10.14s alive; startup bind completed; earlier CALL packet remained `status=0x5`, `busy=1`; target PC/graphics not captured | Evidence handoff; M2 not passed |
 | 2026-08-05 | PCSX2 SIF response-ring capture | `0x11a948` consumed a `0x40`-byte `0x80000008` response; packet status `0x5→0x4`, sequence `0x117ddd→0`, client word cleared | Evidence handoff; M2 not passed |
 | 2026-08-05 | Stateful CDVD init RPC payload | IOP handler proved `{1,0x21d,0x21d,0}`; unit tests passed; native copied 16 bytes, emitted `0x1040`, and advanced to DiskReady | Init delta passed; M2 not passed |
+| 2026-08-05 | DiskReady reference recapture | PINE/DebugServer handshake passed; post-boot IOP breakpoint `0x3f648` did not hit and `0x41378` was zero | Evidence handoff; exact payload still required |
+| 2026-08-05 | Stateful CDVD DiskReady RPC payload | PCSX2 at `0x121304` proved function `0` writes `{2}` to `0x1324c0`; native completed the call and reached bound service `0x80000593` | DiskReady delta passed; M2 not passed |
 
 ## Handoff format
 
