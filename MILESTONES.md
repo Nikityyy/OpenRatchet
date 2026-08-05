@@ -36,24 +36,26 @@ M2 — First authentic native frame.
 - Two authentic WAD-backed SPR windows were observed, decompression returned to
   `0x2017ec`, output at `0x500000` became nonzero, and later SIF descriptors
   contained nonzero payloads.
-- Before this iteration, the stable run reached guest PC `0x1198b0` after a synthetic
-  data-bearing SIF/RPC completion incorrectly cleared the guest packet busy
-  state; the bounded fix now defers that completion instead.
-- Verification run `native-20260805-131535` stayed alive for 10.14 seconds,
-  completed the startup bind, then logged an earlier data-bearing CALL at
-  packet `0x20155000` with receive `0x1324c0`, size `0x10`, status `0x5`, and
-  `busy=1`; no `0x1198b0` error was emitted, but the target PC was not captured.
-- Prior stable graphics baseline: 56 SIF completions, `dma=556`, `gif=513`,
-  `gsw=0`, `vif=2`; the bounded verification run captured no runtime tick or
-  graphics activity before the authentic pending call.
+- SIF transport now records successful client-to-service bindings and routes
+  data-bearing calls only to a service provider with a real payload.
+- PCSX2 IOP handler `0x3b094` proved CDVD init service `0x80000592`, function
+  `0`, returns `{1, 0x21d, 0x21d, 0}`; generated `FUN_00120eb0` proved Ratchet
+  consumes the two module-version fields and requires major version 2 or newer.
+- Verification run `native-20260805-141747` copied that 16-byte payload to the
+  guest receive buffer, emitted the size-derived `0x1040` response descriptor,
+  completed the previously deferred packet, and advanced to the next RPC bind
+  and call while remaining alive for 10.18 seconds.
+- Prior stable graphics baseline remains 56 SIF completions, `dma=556`,
+  `gif=513`, `gsw=0`, `vif=2`; the bounded run reached the next startup RPC
+  before graphics and therefore did not re-observe those counters.
 - Presentation still fails: the raw runtime tick contains
   `dispfb1=0x1400` and `display1=0x1bf27f00000000`, but the host presentation
   selection still reports `displayFbp=0` and `sourceFbp=0`; VRAM has no
   nonzero bytes, the copied frame has no non-black pixels, and no authentic
   primitive draw event was observed.
 - Latest verified logs:
-  `build/native/test-logs/native-20260805-131535.stdout.log` and
-  `build/native/test-logs/native-20260805-131535.stderr.log`.
+  `build/native/test-logs/native-20260805-141747.stdout.log` and
+  `build/native/test-logs/native-20260805-141747.stderr.log`.
 - PCSX2 PINE/DebugServer reference capture is connected to Ratchet & Clank.
   At `0x11a948`, response packet `0x20154d80` carried a data-bearing CALL
   for packet `0x20155000`: `status=0x5`, request `1`, receive `0x15afc0`,
@@ -64,31 +66,26 @@ M2 — First authentic native frame.
 
 ### Active divergence
 
-Native leaves SIF/RPC call packets (`0x8000000a`) pending when a nonzero
-receive payload is requested and no payload provider exists. This preserves the
-PCSX2 busy transition, but native has no reusable IOP provider that can produce
-the response payload and `0x80000008` ring message. The first deferred native
-call is earlier than the captured reference call (`receive=0x1324c0`,
-`size=0x10`, request `0`), so it remains pending.
+CDVD init now completes through the service-provider path. The next native
+packet remains authentically busy because CDVD DiskReady service `0x8000059a`
+has no provider: packet `0x20155000`, client `0x159990`, function `0`, receive
+`0x1324c0`, size `4`, status `5`, sequence `5`.
 
 ### Next experiment
 
-Add a reusable IOP/SIF payload provider at the SIF transfer boundary for the
-first deferred data-bearing call. It must emit the response payload and
-`0x80000008` ring descriptor only when a real service result exists, then
-compare ring-head advance, packet status/sequence, client clear, and receive
-bytes against the captured PCSX2 transition.
+Capture CDVD DiskReady service `0x8000059a`, function `0`, at its IOP handler
+and the matching PCSX2 EE response-ring transition. Then add that service result
+to the existing provider and require the native packet to transition from
+status `5` to `4`, clear sequence/client state, and advance to the next call.
 
 Iteration acceptance delta:
 
-- native leaves `0x1198b0` through the authentic path;
-- the affected data-bearing call state matches the PCSX2 capture; and
-- no existing M1 or graphics-transfer progress regresses.
+- native completes DiskReady with reference payload bytes;
+- packet/ring/client state matches the PCSX2 transition; and
+- M1 remains passed without synthetic completion of unsupported calls.
 
-This iteration proves the reference packet-clear transition and confirms that
-the native no-payload deferral is the correct safety behavior, but it does not
-capture the target PC or graphics-transfer non-regression. Treat this as an
-evidence handoff, not a complete acceptance pass; M2 remains unpassed.
+The CDVD-init acceptance delta passed. Graphics-transfer counters were not
+reached in the bounded run, so M2 remains unpassed.
 
 This iteration does not need to complete M2. If it exposes a different
 subsystem blocker, record that as the single next experiment and stop.
@@ -98,9 +95,12 @@ subsystem blocker, record that as the single next experiment and stop.
 These bridges enabled investigation but are not the desired full-port
 architecture:
 
-- `guest_11a948` scans fixed SIF pools and supplies startup compatibility
-  responses; it now defers data-bearing calls without an IOP payload. Replace
-  it with stateful SIF/RPC transport carrying real data.
+- `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
+  responses. It now uses stateful binding and service payload dispatch, but
+  packet discovery must move to the SIF transfer boundary.
+- The CDVD init provider reproduces the exact reference BIOS versions
+  `0x21d/0x21d`. Replace those target-BIOS compatibility constants when native
+  IOP module execution supplies the service response directly.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
   with general CDVD sector/file I/O.
@@ -225,6 +225,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | Boot WAD and SPR streaming | Authentic WAD data decompressed; `dma=556`; stalled at `0x1198b0` | Current state; M2 not passed |
 | 2026-08-05 | SIF data-bearing completion deferral | 10.14s alive; startup bind completed; earlier CALL packet remained `status=0x5`, `busy=1`; target PC/graphics not captured | Evidence handoff; M2 not passed |
 | 2026-08-05 | PCSX2 SIF response-ring capture | `0x11a948` consumed a `0x40`-byte `0x80000008` response; packet status `0x5→0x4`, sequence `0x117ddd→0`, client word cleared | Evidence handoff; M2 not passed |
+| 2026-08-05 | Stateful CDVD init RPC payload | IOP handler proved `{1,0x21d,0x21d,0}`; unit tests passed; native copied 16 bytes, emitted `0x1040`, and advanced to DiskReady | Init delta passed; M2 not passed |
 
 ## Handoff format
 

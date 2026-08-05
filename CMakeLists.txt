@@ -53,6 +53,7 @@ endif()
 add_executable(openratchet
     src/main.cpp
     src/guest_overrides.cpp
+    src/sif_rpc_transport.cpp
     src/sif_startup_responses.cpp
     src/Memory.cpp
     ${RATCHET_GENERATED_SOURCES})
@@ -79,7 +80,8 @@ if(BUILD_TESTING)
     add_test(NAME sif_startup_responses COMMAND sif_startup_responses_tests)
 
     add_executable(sif_rpc_transport_tests
-        tests/sif_rpc_transport_tests.cpp)
+        tests/sif_rpc_transport_tests.cpp
+        src/sif_rpc_transport.cpp)
     target_include_directories(sif_rpc_transport_tests PRIVATE src)
     add_test(NAME sif_rpc_transport COMMAND sif_rpc_transport_tests)
 endif()

@@ -24,6 +24,7 @@ PS2Runtime::RecompiledFunction g_guest20b618Original = nullptr;
 bool g_sifInitResponseInjected = false;
 bool g_sifCommandBridgeActive = false;
 SifStartupResponseResolver g_sifStartupResponseResolver;
+SifRpcTransport g_sifRpcTransport;
 bool g_guest121e40DiagnosticsLogged = false;
 bool g_imagePayloadDiagnosticsLogged = false;
 uint32_t g_imagePayloadDiagnosticsCount = 0u;
@@ -577,11 +578,15 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         const uint32_t clientPacket = clientAddress != 0u ? READ32(clientAddress) : 0u;
         const uint32_t clientSequence = clientAddress != 0u ? READ32(clientAddress + 4u) : 0u;
 
-        // The root bridge has no IOP payload provider. Do not manufacture an
-        // RPC return for a call that requests receive data: the original
-        // callback must leave the packet busy until authentic transport does.
-        if (packetCommand == 0x8000000au &&
-            !canCompleteSifRpcCallWithoutPayload(receiveBuffer, receiveSize, false)) {
+        SifRpcCallResponse callResponse;
+        if (packetCommand == 0x8000000au) {
+            callResponse = g_sifRpcTransport.resolveCall(
+                clientAddress, requestCommand, receiveBuffer, receiveSize);
+        }
+        const bool canCompleteCall = packetCommand != 0x8000000au ||
+            canCompleteSifRpcCallWithoutPayload(
+                receiveBuffer, receiveSize, callResponse.completed);
+        if (!canCompleteCall) {
             if (g_sifDeferredPayloadDiagnosticsCount < 8u) {
                 ++g_sifDeferredPayloadDiagnosticsCount;
                 std::cerr << "[OpenRatchet:SIF] deferred data-bearing CALL packet=0x"
@@ -601,10 +606,24 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             SifStartupResponse response;
             if (packetCommand == 0x80000009u) {
                 response = g_sifStartupResponseResolver.resolve(requestCommand);
+                if (response.completed) {
+                    g_sifRpcTransport.recordBinding(clientAddress, requestCommand);
+                }
+            }
+            if (callResponse.completed) {
+                for (uint32_t i = 0u; i < callResponse.payloadWords.size(); ++i) {
+                    WRITE32(receiveBuffer + i * 4u, callResponse.payloadWords[i]);
+                }
+            }
+            uint32_t completionSizeWord = 0x40u;
+            const uint32_t completionPayloadSize =
+                packetCommand == 0x8000000au ? callResponse.payloadSize : 0u;
+            if (!makeSifRpcCompletionSizeWord(completionPayloadSize, completionSizeWord)) {
+                completionSizeWord = 0x40u;
             }
             const uint32_t responseWords[] = {
-                packetCommand == 0x80000009u ? 0x40u : 0x1040u,
-                packetCommand == 0x80000009u ? 0u : 0x1324c0u,
+                completionSizeWord,
+                completionPayloadSize != 0u ? receiveBuffer : 0u,
                 0x80000008u, 0u,
                 0u,
                 packetCommand == 0x80000009u ? packetAddress : 0u,
@@ -621,6 +640,8 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             }
             std::cerr << "[OpenRatchet:SIF] injected completion for 0x"
                       << std::hex << packetCommand << " request=0x" << requestCommand
+                      << " service=0x" << callResponse.serviceId
+                      << " payload=0x" << callResponse.payloadSize
                       << " result0=0x" << response.result0 << " result1=0x" << response.result1
                       << std::dec << "\n";
         }
