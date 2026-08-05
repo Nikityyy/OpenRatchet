@@ -87,6 +87,17 @@ int main() {
     test.expect(!transport.resolveCall(0x132d08u, 0x22u, 0u, 0x4u).completed,
                 "missing startup service receive buffer remains pending");
 
+    call = transport.resolveCall(0x132d08u, 0x04u, 0x1324c0u, 0x4u);
+    test.expect(call.completed && call.serviceId == 0x80000593u &&
+                    call.payloadSize == 0x4u && call.payloadWords[0] == 0u &&
+                    call.payloadWords[1] == 0u && call.payloadWords[2] == 0u &&
+                    call.payloadWords[3] == 0u,
+                "bound startup service 0x80000593 function 0x04 returns the reference zero");
+    test.expect(!transport.resolveCall(0x132d08u, 0x04u, 0x1324c0u, 0x10u).completed,
+                "startup service function 0x04 with a mismatched receive size remains pending");
+    test.expect(!transport.resolveCall(0x132d08u, 0x04u, 0u, 0x4u).completed,
+                "startup service function 0x04 without a receive buffer remains pending");
+
     transport.recordBinding(0x132490u, 0x80000595u);
     call = transport.resolveCall(0x132490u, 0x0eu, 0x131340u, 0x4u);
     test.expect(call.completed && call.serviceId == 0x80000595u &&
