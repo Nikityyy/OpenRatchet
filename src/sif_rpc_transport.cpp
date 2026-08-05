@@ -6,6 +6,9 @@ constexpr uint32_t kCdvdInitService = 0x80000592u;
 constexpr uint32_t kCdvdInitPayloadSize = 0x10u;
 constexpr uint32_t kCdvdDiskReadyService = 0x8000059au;
 constexpr uint32_t kCdvdDiskReadyPayloadSize = 0x4u;
+constexpr uint32_t kStartupService80000593 = 0x80000593u;
+constexpr uint32_t kStartupService80000593Function22 = 0x22u;
+constexpr uint32_t kStartupService80000593PayloadSize = 0x4u;
 
 SifRpcCallResponse resolveCdvdInit(uint32_t function,
                                    uint32_t receiveBuffer,
@@ -44,6 +47,27 @@ SifRpcCallResponse resolveCdvdDiskReady(uint32_t function,
         kCdvdDiskReadyService,
         kCdvdDiskReadyPayloadSize,
         {2u, 0u, 0u, 0u},
+    };
+}
+
+SifRpcCallResponse resolveStartupService80000593(uint32_t function,
+                                                  uint32_t receiveBuffer,
+                                                  uint32_t receiveSize) {
+    if (function != kStartupService80000593Function22 || receiveBuffer == 0u ||
+        receiveSize != kStartupService80000593PayloadSize) {
+        return {};
+    }
+
+    // PCSX2 PINE/DebugServer capture at generated call 0x1213f8: the bound
+    // service 0x80000593 receives function 0x22 with a four-byte buffer at
+    // 0x1324c0 and changes its first word from 2 to 1. Keep this function-
+    // scoped compatibility provider separate until native IOP execution owns
+    // the service and its wider function surface.
+    return {
+        true,
+        kStartupService80000593,
+        kStartupService80000593PayloadSize,
+        {1u, 0u, 0u, 0u},
     };
 }
 }  // namespace
@@ -85,6 +109,9 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
     }
     if (serviceId == kCdvdDiskReadyService) {
         return resolveCdvdDiskReady(function, receiveBuffer, receiveSize);
+    }
+    if (serviceId == kStartupService80000593) {
+        return resolveStartupService80000593(function, receiveBuffer, receiveSize);
     }
     return {};
 }

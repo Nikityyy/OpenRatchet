@@ -68,6 +68,11 @@ successful MCP handshake.
 Use tools as bounded experiments:
 
 - Map a PC through PS2Recomp/generated output before broad Ghidra exploration.
+- Reuse one fresh PCSX2 boot across sequential forward-reachable captures.
+  Before asking for a reset, verify both MCP handshakes and arm the mapped
+  breakpoint; after a capture, leave the reference session paused and arm the
+  next proven target before resuming. Reset only when the target has already
+  executed or the required reference state is incompatible.
 - Prefer Ghidra dataflow/callgraph and focused decompilation over repeatedly
   decompiling neighboring functions.
 - Prefer conditional breakpoints, contiguous bulk reads, and PCSX2 memory diffs
