@@ -54,21 +54,30 @@ M2 — First authentic native frame.
 - Latest verified logs:
   `build/native/test-logs/native-20260805-131535.stdout.log` and
   `build/native/test-logs/native-20260805-131535.stderr.log`.
+- PCSX2 PINE/DebugServer reference capture is connected to Ratchet & Clank.
+  At `0x11a948`, response packet `0x20154d80` carried a data-bearing CALL
+  for packet `0x20155000`: `status=0x5`, request `1`, receive `0x15afc0`,
+  size `4`, sequence `0x117ddd`. After the handler reached `0x11aa54`, the
+  ring header changed from `0x440` to `0x400` as the `0x40`-byte message was
+  consumed; packet status became `0x4`, sequence became `0`, and the client
+  first word was cleared.
 
 ### Active divergence
 
-Native now leaves SIF/RPC call packets (`0x8000000a`) pending when a nonzero
-receive payload is requested and no payload provider exists. This matches the
-PCSX2 busy transition. The first deferred native call is earlier than the
-investigated reference call, so the remaining blocker is the missing
-authentic IOP payload transport and the original call remains unexercised.
+Native leaves SIF/RPC call packets (`0x8000000a`) pending when a nonzero
+receive payload is requested and no payload provider exists. This preserves the
+PCSX2 busy transition, but native has no reusable IOP provider that can produce
+the response payload and `0x80000008` ring message. The first deferred native
+call is earlier than the captured reference call (`receive=0x1324c0`,
+`size=0x10`, request `0`), so it remains pending.
 
 ### Next experiment
 
-Provide the authentic IOP payload through stateful SIF/RPC transport for the
-first deferred data-bearing call, then compare the return-ring bytes, sequence
-advance, and packet-clear transition against PCSX2 before revisiting the
-original reference call.
+Add a reusable IOP/SIF payload provider at the SIF transfer boundary for the
+first deferred data-bearing call. It must emit the response payload and
+`0x80000008` ring descriptor only when a real service result exists, then
+compare ring-head advance, packet status/sequence, client clear, and receive
+bytes against the captured PCSX2 transition.
 
 Iteration acceptance delta:
 
@@ -76,10 +85,10 @@ Iteration acceptance delta:
 - the affected data-bearing call state matches the PCSX2 capture; and
 - no existing M1 or graphics-transfer progress regresses.
 
-This run proves the busy/no-fabricated-return behavior for an earlier call and
-keeps M1 alive, but does not capture the target PC or graphics-transfer
-non-regression. Treat this as an evidence handoff, not a complete acceptance
-pass; M2 remains unpassed.
+This iteration proves the reference packet-clear transition and confirms that
+the native no-payload deferral is the correct safety behavior, but it does not
+capture the target PC or graphics-transfer non-regression. Treat this as an
+evidence handoff, not a complete acceptance pass; M2 remains unpassed.
 
 This iteration does not need to complete M2. If it exposes a different
 subsystem blocker, record that as the single next experiment and stop.
@@ -215,6 +224,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | `0x80000006` result pointer | Corrected reference-backed result pointer to `0x220d0` | M2 not passed |
 | 2026-08-05 | Boot WAD and SPR streaming | Authentic WAD data decompressed; `dma=556`; stalled at `0x1198b0` | Current state; M2 not passed |
 | 2026-08-05 | SIF data-bearing completion deferral | 10.14s alive; startup bind completed; earlier CALL packet remained `status=0x5`, `busy=1`; target PC/graphics not captured | Evidence handoff; M2 not passed |
+| 2026-08-05 | PCSX2 SIF response-ring capture | `0x11a948` consumed a `0x40`-byte `0x80000008` response; packet status `0x5→0x4`, sequence `0x117ddd→0`, client word cleared | Evidence handoff; M2 not passed |
 
 ## Handoff format
 
