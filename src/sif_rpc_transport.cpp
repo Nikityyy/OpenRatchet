@@ -9,6 +9,9 @@ constexpr uint32_t kCdvdDiskReadyPayloadSize = 0x4u;
 constexpr uint32_t kStartupService80000593 = 0x80000593u;
 constexpr uint32_t kStartupService80000593Function22 = 0x22u;
 constexpr uint32_t kStartupService80000593PayloadSize = 0x4u;
+constexpr uint32_t kStartupService80000595 = 0x80000595u;
+constexpr uint32_t kStartupService80000595Function0e = 0x0eu;
+constexpr uint32_t kStartupService80000595PayloadSize = 0x4u;
 
 SifRpcCallResponse resolveCdvdInit(uint32_t function,
                                    uint32_t receiveBuffer,
@@ -70,6 +73,27 @@ SifRpcCallResponse resolveStartupService80000593(uint32_t function,
         {1u, 0u, 0u, 0u},
     };
 }
+
+SifRpcCallResponse resolveStartupService80000595(uint32_t function,
+                                                  uint32_t receiveBuffer,
+                                                  uint32_t receiveSize) {
+    if (function != kStartupService80000595Function0e || receiveBuffer == 0u ||
+        receiveSize != kStartupService80000595PayloadSize) {
+        return {};
+    }
+
+    // PCSX2 PINE/DebugServer capture at generated call 0x120be4: the bound
+    // service 0x80000595 receives function 0x0e with a four-byte buffer at
+    // 0x131340 and changes its first word from 0 to 2. Keep this function-
+    // scoped compatibility provider separate until native IOP execution owns
+    // the service and its wider function surface.
+    return {
+        true,
+        kStartupService80000595,
+        kStartupService80000595PayloadSize,
+        {2u, 0u, 0u, 0u},
+    };
+}
 }  // namespace
 
 void SifRpcTransport::recordBinding(uint32_t clientAddress, uint32_t serviceId) {
@@ -112,6 +136,9 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
     }
     if (serviceId == kStartupService80000593) {
         return resolveStartupService80000593(function, receiveBuffer, receiveSize);
+    }
+    if (serviceId == kStartupService80000595) {
+        return resolveStartupService80000595(function, receiveBuffer, receiveSize);
     }
     return {};
 }

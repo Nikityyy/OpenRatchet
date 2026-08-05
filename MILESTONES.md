@@ -54,8 +54,8 @@ M2 — First authentic native frame.
   nonzero bytes, the copied frame has no non-black pixels, and no authentic
   primitive draw event was observed.
 - Latest verified logs:
-  `build/native/test-logs/native-20260805-145512.stdout.log` and
-  `build/native/test-logs/native-20260805-145512.stderr.log`.
+  `build/native/test-logs/native-20260805-150454.stdout.log` and
+  `build/native/test-logs/native-20260805-150454.stderr.log`.
 - PCSX2 PINE/DebugServer reference capture is connected to Ratchet & Clank.
   At `0x11a948`, response packet `0x20154d80` carried a data-bearing CALL
   for packet `0x20155000`: `status=0x5`, request `1`, receive `0x15afc0`,
@@ -77,34 +77,39 @@ M2 — First authentic native frame.
   word changed `2→1`, client sequence `8→9`, and the response ring emitted
   `0x80000008`. Native run `native-20260805-145512` completed that call and
   advanced to the next bound service while remaining alive for 10.18 seconds.
+- Fresh PCSX2 capture at generated `0x120be4` proved service `0x80000595`,
+  function `0x0e`, client `0x132490`, receive `0x131340`, size `4`: receive
+  word changed `0→2`, client sequence `0x0a→0x0b`, and the response ring
+  emitted `0x80000008`. Native run `native-20260805-150454` completed that
+  call, then deferred only service `0x80000593`, function `0x04`.
 
 ### Active divergence
 
-Service `0x80000593`, function `0x22`, now completes through the service
-provider with reference payload `{1}`. The next native packet remains
-authentically busy for bound service `0x80000595`: packet `0x20155000`, client
-`0x132490`, function `0x0e`, receive `0x131340`, size `4`, status `5`,
-sequence `0x0b`.
+Service `0x80000595`, function `0x0e`, now completes through the service
+provider with reference payload `{2}`. The next native packet remains
+authentically busy for bound service `0x80000593`: packet `0x20155000`, client
+`0x132d08`, function `0x04`, receive `0x1324c0`, size `4`, status `5`,
+sequence `0x0d`.
 
 ### Next experiment
 
-Map the generated caller for bound service `0x80000595`, function `0x0e`, then
-capture its PCSX2 response-ring transition and exact four-byte payload. Add it
-only as a service-level provider after its payload is known, then require the
-native packet to leave status `5` and advance to the following call. The
-reference session is paused after `0x1213f8`; arm the new forward-reachable
-target before resuming without a reset.
+Capture bound service `0x80000593`, function `0x04`, at generated call
+`0x12167c`, including its PCSX2 response-ring transition and exact four-byte
+payload. Add it only as a service-level provider after its payload is known,
+then require the native packet to leave status `5` and advance to the following
+call. The reference session is paused after `0x120be4`; arm the forward-
+reachable target before resuming without a reset.
 
 Iteration acceptance delta:
 
-- native completes service `0x80000595`, function `0x0e`, with reference
+- native completes service `0x80000593`, function `0x04`, with reference
   payload bytes;
 - packet/ring/client state matches the PCSX2 transition; and
 - M1 remains passed without synthetic completion of unsupported calls.
 
-The CDVD-init, DiskReady, and service-`0x80000593` acceptance deltas passed.
-Graphics-transfer counters were not reached in the bounded run, so M2 remains
-unpassed.
+The CDVD-init, DiskReady, service-`0x80000593` function-`0x22`, and
+service-`0x80000595` function-`0x0e` acceptance deltas passed. Graphics-
+transfer counters were not reached in the bounded run, so M2 remains unpassed.
 
 This iteration does not need to complete M2. If it exposes a different
 subsystem blocker, record that as the single next experiment and stop.
@@ -125,6 +130,9 @@ architecture:
   the response directly.
 - The service-`0x80000593` provider reproduces only verified function `0x22`
   result `1` for a four-byte receive buffer. Preserve the pending behavior for
+  its other functions until native IOP execution owns the service.
+- The service-`0x80000595` provider reproduces only verified function `0x0e`
+  result `2` for a four-byte receive buffer. Preserve the pending behavior for
   its other functions until native IOP execution owns the service.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
@@ -254,6 +262,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | DiskReady reference recapture | PINE/DebugServer handshake passed; post-boot IOP breakpoint `0x3f648` did not hit and `0x41378` was zero | Evidence handoff; exact payload still required |
 | 2026-08-05 | Stateful CDVD DiskReady RPC payload | PCSX2 at `0x121304` proved function `0` writes `{2}` to `0x1324c0`; native completed the call and reached bound service `0x80000593` | DiskReady delta passed; M2 not passed |
 | 2026-08-05 | Stateful service `0x80000593` RPC payload | PCSX2 at `0x1213f8` proved function `0x22` writes `{1}` to `0x1324c0`; native completed it and reached bound service `0x80000595` | Delta passed; M2 not passed |
+| 2026-08-05 | Stateful service `0x80000595` RPC payload | PCSX2 at `0x120be4` proved function `0x0e` writes `{2}` to `0x131340`; native completed it and reached service `0x80000593`, function `0x04` | Delta passed; M2 not passed |
 
 ## Handoff format
 
