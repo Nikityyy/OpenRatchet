@@ -76,6 +76,44 @@ M2 — First authentic native frame.
   active divergence: service `0x80000006`, function `0xff`, no send buffer or
   payload, receive `0x158200`, size `4`, `status=5`, sequence `0x16`, reason
   `unsupported-shape`. The compact diagnostic parses this record directly.
+- Native run `native-20260805-170627` confirmed the deferred
+  `0x80000006`/`0xff` shape after the real `0x80000003` function-1 transfer;
+  no unsupported call was synthetically completed.
+- `pcsx2-reset` MCP v0.1.5 completed both a no-breakpoint reset and a
+  preserved-permanent-breakpoint reset without crashing PCSX2. Its conservative
+  result intentionally does not claim reset completion proof.
+- One fresh PCSX2 characterization boot captured client `0x158400`, bound
+  service `0x80000006`, function `0xff`, receive `0x158200`, and size `4` at
+  `0x11b1c8`. The matching `0x80000008` response had SIF header `0x440` and
+  receive word `0x30343532`; three additional service-private words were
+  present beyond the declared four-byte transfer. Generated `0x11ca74` proves
+  its immediate caller consumes only that first word.
+- Verification run `native-20260805-175758` built and remained alive for
+  10.22 seconds; focused transport tests passed. It logged 21 SIF completions
+  and reached the existing unrecompiled `0x3fcb320` loop before replaying the
+  newly supported `0x80000006`/`0xff` shape, so native completion remains
+  unverified.
+- Follow-up `native-20260805-180745` again remained alive for 10.15 seconds,
+  completed 21 SIF operations, and reached the same target. Its temporary
+  response-handler probe showed entries at `0x11a948` with `ra=0` and
+  `sp=0x1fffff0`, including the invocation immediately before that target;
+  the bad continuation is therefore after callback return, not the new table
+  behavior itself. PCSX2 instead invoked callback targets `0x11ade0` and
+  `0x123d10` and had a saved outer return at live RAM `0x81fec`.
+- A fresh reset v0.1.5 boot reached the conditioned `sceSifSetDma` syscall at
+  `0x118b20`: `a0=0x1fff990`, `a1=2`, `ra=0x11a8a4`. Its descriptors were
+  `{0x15b080 -> 0x60f38, 0x400, 0}` and
+  `{0x20155000 -> 0x1dee0, 0x40, 0x44}`; SIF handler state contained the
+  response-ring pointers. This differs from the native failing submission
+  (`a0=0x1fff500`), so the two cannot yet be treated as equivalent. The same
+  bounded helper run did not reach its `0x11a948` callback condition in 120
+  seconds; temporary breakpoints were removed.
+- Native verification `native-20260805-182335` proved the same packet chain
+  reaches `guest_118b20` repeatedly and returns from the original syscall to
+  `0x11a8a4` (no `0x3fcb320` dispatch). It completed the verified
+  `0x80000006`/`0xff` response at sequence `0x16`, then advanced to the next
+  real pending call: function `0x06`, send `0x220d0`/`0x200`, receive
+  `0x158200`/`0x8`, sequence `0x17`.
 - `tools\pcsx2_sif_capture.py` is live-verified against DebugServer: it armed a
   conditional breakpoint, blocked to the hit, captured registers, an evaluated
   address and a contiguous memory window in one JSON transcript, then removed
@@ -86,22 +124,14 @@ M2 — First authentic native frame.
   After the EE/IOP deduplication fix, `preserve_breakpoints=true` rearmed that
   single breakpoint exactly once with its condition and description intact.
 - Latest verified logs:
-  `build/native/test-logs/native-20260805-162020.stdout.log` and
-  `build/native/test-logs/native-20260805-162020.stderr.log`.
+  `build/native/test-logs/native-20260805-182335.stdout.log` and
+  `build/native/test-logs/native-20260805-182335.stderr.log`.
 - The compact diagnostic now recognizes the direct SIF records: the latest run
-  reported 15 completions and the exact next deferred call instead of zero.
+  reported 25 completions and the exact next pending call instead of zero.
 - The upgraded GhidraMCP handshake is verified through its stdio bridge and
   plugin at `127.0.0.1:8089`: project `OpenRatchetTest` exposes
   `/PS2_MAIN.ELF`; metadata resolves to this repository's extracted ELF as
   little-endian `MIPS-R5900`; and focused decompilation at `0x121630` succeeds.
-- The last PCSX2 PINE/DebugServer reference capture was connected to Ratchet &
-  Clank; establish one fresh handshake before the next live batch and reuse it.
-  At `0x11a948`, response packet `0x20154d80` carried a data-bearing CALL
-  for packet `0x20155000`: `status=0x5`, request `1`, receive `0x15afc0`,
-  size `4`, sequence `0x117ddd`. After the handler reached `0x11aa54`, the
-  ring header changed from `0x440` to `0x400` as the `0x40`-byte message was
-  consumed; packet status became `0x4`, sequence became `0`, and the client
-  first word was cleared.
 - Fresh PCSX2 PINE/DebugServer capture at generated `0x121304` proved the
   CDVD DiskReady call: service `0x8000059a`, function `0`, client `0x159990`,
   receive `0x1324c0`, size `4`. Stepping over it changed receive word
@@ -124,28 +154,23 @@ M2 — First authentic native frame.
 
 ### Active divergence
 
-Service `0x80000003`, functions `0x01` and `0x02`, now complete only when
-their captured outbound words match the reference chain. The next native packet
-remains authentically busy at packet `0x20155000`: client `0x158400`, bound
-service `0x80000006`, function `0xff`, no send buffer/payload, receive
-`0x158200`, size `4`, status `5`, sequence `0x16`. Its reference response has
-not yet been characterized.
+Service `0x80000006`, function `0xff`, is now represented at the shared SIF
+transport boundary from a verified no-request, four-byte reference response:
+`0x30343532`; native replay is verified. The next authentic busy packet is the
+same client/service's data-bearing function `0x06`: send `0x220d0`, size
+`0x200`, receive `0x158200`, size `0x8`, `status=5`, sequence `0x17`.
 
 ### Next experiment
 
-Map client `0x158400` through generated output and its binding/callsite, plus
-all immediately forward-reachable SIF calls. Build one capture manifest from
-`tools\sif-capture.example.json`, verify both handshakes, reset with
-`preserve_breakpoints=true` after using the helper's `--arm-only` mode, then run
-its `--capture-only` mode once. Capture each call's service/function,
-send/receive data, response-ring transition, packet status, and client sequence
-before adding any service-table behavior. If ownership leaves SIF, stop and
-hand off that owning subsystem.
+Map function `0x06`'s generated callsite and payload provenance, then use one
+fresh PCSX2 capture boot to record its bound service, exact `0x200` request,
+eight-byte response, response-ring transition, packet status, and client
+sequence. Do not add another SIF table behavior before that capture.
 
-Iteration acceptance delta: native must complete only the newly reference-
-verified call shape and advance from the current `status=5` packet without
-synthetically completing unsupported calls. M1 remains passed; M2 remains
-unpassed because guest VRAM/frame presentation is still absent.
+Iteration acceptance delta passed: native completed only the reference-verified
+`0xff` shape and advanced from its `status=5` packet without completing the new
+unsupported function `0x06`. M1 remains passed; M2 remains unpassed because
+guest VRAM/frame presentation is still absent.
 
 ### Known temporary debt
 
@@ -155,14 +180,15 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. It now uses stateful binding and service payload dispatch, but
   packet discovery must move to the SIF transfer boundary.
-- The declarative SIF compatibility table contains only seven verified service
+- The declarative SIF compatibility table contains only eight verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
   service `0x80000595` function `0x0e` result `2`, and service `0x80000003`
-  functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`). The last
-  two require the captured EE-to-IOP DMA word associated with the packet's
-  remote send buffer. Unsupported shapes remain pending; replace the table when
-  native IOP execution owns these responses.
+  functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`), and
+  service `0x80000006` function `0xff` result `0x30343532`. The last two
+  `0x80000003` calls require the captured EE-to-IOP DMA word associated with
+  the packet's remote send buffer. Unsupported shapes remain pending; replace
+  the table when native IOP execution owns these responses.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
   with general CDVD sector/file I/O.

@@ -122,6 +122,15 @@ int main() {
     test.expect(!transport.resolveCall(0x132490u, 0x0eu, 0u, 0x4u).completed,
                 "missing startup service 0x80000595 receive buffer remains pending");
 
+    transport.recordBinding(0x158400u, 0x80000006u);
+    call = transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x4u);
+    test.expect(call.completed && call.serviceId == 0x80000006u &&
+                    call.payloadSize == 0x4u && call.payloadWords[0] == 0x30343532u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::Completed,
+                "service 0x80000006 function 0xff returns the captured four-byte result");
+    test.expect(!transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x10u).completed,
+                "service 0x80000006 function 0xff rejects a mismatched receive size");
+
     transport.recordBinding(0x158040u, 0x80000003u);
     call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
                                  0x4f848u, 0x4u);

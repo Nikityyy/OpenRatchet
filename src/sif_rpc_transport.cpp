@@ -18,12 +18,16 @@ struct VerifiedCallBehavior {
 // 0x121304; startup service calls at EE 0x1213f8, 0x120be4, and 0x12167c.
 // Native IOP execution should eventually replace this table by supplying the
 // responses.
-constexpr std::array<VerifiedCallBehavior, 7> kVerifiedCallBehaviors{{
+constexpr std::array<VerifiedCallBehavior, 8> kVerifiedCallBehaviors{{
     {0x80000592u, 0x00u, 0x10u, 0u, 0u, {1u, 0x21du, 0x21du, 0u}},
     {0x8000059au, 0x00u, 0x04u, 0u, 0u, {2u, 0u, 0u, 0u}},
     {0x80000593u, 0x22u, 0x04u, 0u, 0u, {1u, 0u, 0u, 0u}},
     {0x80000593u, 0x04u, 0x04u, 0u, 0u, {0u, 0u, 0u, 0u}},
     {0x80000595u, 0x0eu, 0x04u, 0u, 0u, {2u, 0u, 0u, 0u}},
+    // PCSX2 startup capture: client 0x158400, function 0xff, receive 0x158200
+    // (4 bytes). The IOP also leaves three service-private words beyond the
+    // declared four-byte SIF transfer; the caller consumes only this first word.
+    {0x80000006u, 0xffu, 0x04u, 0u, 0u, {0x30343532u, 0u, 0u, 0u}},
     {0x80000003u, 0x01u, 0x04u, 0x04u, 0x1999u, {0x53300u, 0u, 0u, 0u}},
     {0x80000003u, 0x02u, 0x04u, 0x04u, 0x53300u, {0u, 0u, 0u, 0u}},
 }};
