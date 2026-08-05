@@ -88,6 +88,7 @@ $summaryLines = @(
     'Alive at duration:',
     'Elapsed:',
     'SIF completions:',
+    'Latest deferred SIF:',
     'Latest runtime tick:',
     'Graphics activity:'
 )
@@ -116,6 +117,7 @@ function Write-RecentMatches([string]$title, [string[]]$lines, [string]$pattern,
 Write-RecentMatches 'Recent GS/GIF packets and registers' $stdoutLines '\[gs:(gif|reg|copy-reg)\]' $TailLines
 Write-RecentMatches 'Recent frame uploads' $stdoutLines '\[frame:upload\]' $TailLines
 Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLines
+Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF\].*(injected completion|deferred data-bearing CALL)' $TailLines
 Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines
 
 Write-Output ''

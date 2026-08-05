@@ -54,9 +54,16 @@ M2 — First authentic native frame.
   nonzero bytes, the copied frame has no non-black pixels, and no authentic
   primitive draw event was observed.
 - Latest verified logs:
-  `build/native/test-logs/native-20260805-150454.stdout.log` and
-  `build/native/test-logs/native-20260805-150454.stderr.log`.
-- PCSX2 PINE/DebugServer reference capture is connected to Ratchet & Clank.
+  `build/native/test-logs/native-20260805-151434.stdout.log` and
+  `build/native/test-logs/native-20260805-151434.stderr.log`.
+- The compact diagnostic now recognizes the direct SIF records: the latest run
+  reported 15 completions and the exact next deferred call instead of zero.
+- The upgraded GhidraMCP handshake is verified through its stdio bridge and
+  plugin at `127.0.0.1:8089`: project `OpenRatchetTest` exposes
+  `/PS2_MAIN.ELF`; metadata resolves to this repository's extracted ELF as
+  little-endian `MIPS-R5900`; and focused decompilation at `0x121630` succeeds.
+- The last PCSX2 PINE/DebugServer reference capture was connected to Ratchet &
+  Clank; establish one fresh handshake before the next live batch and reuse it.
   At `0x11a948`, response packet `0x20154d80` carried a data-bearing CALL
   for packet `0x20155000`: `status=0x5`, request `1`, receive `0x15afc0`,
   size `4`, sequence `0x117ddd`. After the handler reached `0x11aa54`, the
@@ -93,18 +100,31 @@ sequence `0x0d`.
 
 ### Next experiment
 
-Capture bound service `0x80000593`, function `0x04`, at generated call
-`0x12167c`, including its PCSX2 response-ring transition and exact four-byte
-payload. Add it only as a service-level provider after its payload is known,
-then require the native packet to leave status `5` and advance to the following
-call. The reference session is paused after `0x120be4`; arm the forward-
-reachable target before resuming without a reset.
+Perform one complete startup-SIF characterization boot. Before requesting a
+PCSX2 reset, search generated output for every startup callsite into
+`SifCallRpc`/`FUN_0011b1c8`, use the verified GhidraMCP only for unresolved
+reachability/dataflow, and arm every forward-reachable callsite in DebugServer.
+Known seeds include service-`0x80000593` calls at generated `0x12167c`
+(function `0x04`, receive size `4`), `0x121724` (function `0x16`, size `4`),
+and `0x1217f4` (function `0x01`, size `0x10`); they are not the inventory limit.
+
+After the complete breakpoint set is armed, request one reset. Reuse the same
+PINE/DebugServer sessions and continue breakpoint-to-breakpoint without another
+reset. For every encountered call, capture service/function, receive buffer and
+size, before/after payload bytes, response-ring transition, packet status, and
+client sequence. Stop only at graphics, a different owning subsystem, proven
+unreachability, or ambiguous evidence. Then add all and only verified behaviors
+to the declarative SIF table and perform one build and one native run.
 
 Iteration acceptance delta:
 
-- native completes service `0x80000593`, function `0x04`, with reference
-  payload bytes;
-- packet/ring/client state matches the PCSX2 transition; and
+- the pre-reset inventory and armed-breakpoint list cover every known
+  forward-reachable startup SIF callsite;
+- one reference boot produces a complete evidence row for every encountered
+  call without a reset or PINE reconnect between calls;
+- native completes every implemented batch entry with its reference payload;
+- the first packet leaves status `5` and reaches the first uncaptured call or
+  a different owning subsystem; and
 - M1 remains passed without synthetic completion of unsupported calls.
 
 The CDVD-init, DiskReady, service-`0x80000593` function-`0x22`, and
@@ -122,18 +142,11 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. It now uses stateful binding and service payload dispatch, but
   packet discovery must move to the SIF transfer boundary.
-- The CDVD init provider reproduces the exact reference BIOS versions
-  `0x21d/0x21d`. Replace those target-BIOS compatibility constants when native
-  IOP module execution supplies the service response directly.
-- The CDVD DiskReady provider reproduces the verified function-0 result `2` for
-  a four-byte receive buffer. Replace it when native IOP module execution owns
-  the response directly.
-- The service-`0x80000593` provider reproduces only verified function `0x22`
-  result `1` for a four-byte receive buffer. Preserve the pending behavior for
-  its other functions until native IOP execution owns the service.
-- The service-`0x80000595` provider reproduces only verified function `0x0e`
-  result `2` for a four-byte receive buffer. Preserve the pending behavior for
-  its other functions until native IOP execution owns the service.
+- The declarative SIF compatibility table contains only four verified service
+  behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
+  `2`, service `0x80000593` function `0x22` result `1`, and service
+  `0x80000595` function `0x0e` result `2`. Unsupported shapes remain pending;
+  replace the table when native IOP execution owns these responses.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
   with general CDVD sector/file I/O.
@@ -263,6 +276,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | Stateful CDVD DiskReady RPC payload | PCSX2 at `0x121304` proved function `0` writes `{2}` to `0x1324c0`; native completed the call and reached bound service `0x80000593` | DiskReady delta passed; M2 not passed |
 | 2026-08-05 | Stateful service `0x80000593` RPC payload | PCSX2 at `0x1213f8` proved function `0x22` writes `{1}` to `0x1324c0`; native completed it and reached bound service `0x80000595` | Delta passed; M2 not passed |
 | 2026-08-05 | Stateful service `0x80000595` RPC payload | PCSX2 at `0x120be4` proved function `0x0e` writes `{2}` to `0x131340`; native completed it and reached service `0x80000593`, function `0x04` | Delta passed; M2 not passed |
+| 2026-08-05 | Batched SIF/PINE workflow | Four verified responses consolidated into a declarative table; diagnostics reported 15 completions and exact deferred function `0x04`; focused tests and 10s run passed | Workflow delta passed; M2 not passed |
+| 2026-08-05 | GhidraMCP fork migration | Stdio bridge connected to `OpenRatchetTest`; metadata verified the extracted R5900 ELF and focused decompilation at `0x121630` | Static-reference tooling verified; M2 unchanged |
 
 ## Handoff format
 

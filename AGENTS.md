@@ -58,10 +58,19 @@ successful MCP handshake.
 - PCSX2 DebugServer normally uses port `21512`; PINE normally uses `28011`.
 - Both must report connected to Ratchet & Clank, including running/paused state,
   before reference-dependent runtime work.
+- PINE serves one client at a time. Connect once per PCSX2 process, then reuse
+  that MCP session and verify it with status/game queries. Do not issue another
+  connect while the first session is healthy; a second client can wait behind
+  the active socket and appear to time out. Reconnect only after a failed
+  session check, and restart PCSX2 only if that failed session cannot recover.
 - If PINE is disconnected or its handshake fails, stop and ask the user. Do not
   substitute DebugServer, Ghidra, or a listening port for PINE evidence.
-- Ghidra normally uses port `8193`. Prefer a direct status query for that known
-  instance; perform full instance discovery only if the direct query fails.
+- The current GhidraMCP fork uses a Codex-launched stdio bridge that connects
+  to the Ghidra plugin HTTP server at `127.0.0.1:8089`; port `8193` belonged to
+  the previous fork. Verify it with `list_instances`, require the connected
+  project to expose `/PS2_MAIN.ELF`, then confirm `get_metadata` reports the
+  repository's extracted ELF and `MIPS-R5900`. A bridge process or HTTP 200
+  alone is not sufficient.
 - If formatted GSPRIV output is blank, use the raw read-only DebugServer result
   and its `.value` fields. Never infer omitted values.
 
@@ -107,6 +116,35 @@ Default investigation budget for one iteration:
 - up to three directly relevant functions and three memory regions;
 - one temporary instrumentation change;
 - no more than two edit/build/test cycles.
+
+For a startup SIF/RPC chain, use one characterization boot rather than one boot
+per call:
+
+1. Before asking for a PCSX2 reset, search generated output for every known
+   startup callsite into `SifCallRpc`/`FUN_0011b1c8`. Record the call PC,
+   containing function, client, function number, send/receive pointers and
+   sizes when statically knowable.
+2. Use focused Ghidra callgraph/dataflow only where generated output does not
+   establish reachability or argument provenance. Classify all callsites that
+   are forward-reachable in the current startup path.
+3. Verify one PINE session and one DebugServer session, then arm breakpoints for
+   all forward-reachable callsites before the reset. Do not ask the user to
+   reset until the complete breakpoint set and capture fields are prepared.
+4. During one boot, continue from breakpoint to breakpoint without resetting
+   or opening another PINE connection. At every encountered call, capture the
+   bound service, function, receive size and buffer before/after, exact payload,
+   response-ring transition, packet status, and client sequence. Arm newly
+   proven forward targets while paused if static control flow requires it.
+5. End the capture only when startup reaches graphics, ownership changes away
+   from SIF, a statically inventoried target is proven unreachable, or evidence
+   becomes ambiguous. Clear temporary breakpoints afterward.
+6. Implement all captured behaviors at the shared subsystem/table boundary,
+   preserve pending behavior for uncaptured shapes, then use one build and one
+   native verification run for the batch.
+
+This protocol is one bounded subsystem iteration even when it captures several
+calls. A breakpoint hit alone is not evidence; every implemented table entry
+still requires its own verified request shape, payload, and state transition.
 
 Exceed a default only when new evidence gives a concrete reason. If the work
 branches into a second subsystem or stops converging, end with an evidence

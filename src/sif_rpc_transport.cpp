@@ -1,99 +1,26 @@
 #include "sif_rpc_transport.h"
 
+#include <array>
+
 namespace ratchet {
 namespace {
-constexpr uint32_t kCdvdInitService = 0x80000592u;
-constexpr uint32_t kCdvdInitPayloadSize = 0x10u;
-constexpr uint32_t kCdvdDiskReadyService = 0x8000059au;
-constexpr uint32_t kCdvdDiskReadyPayloadSize = 0x4u;
-constexpr uint32_t kStartupService80000593 = 0x80000593u;
-constexpr uint32_t kStartupService80000593Function22 = 0x22u;
-constexpr uint32_t kStartupService80000593PayloadSize = 0x4u;
-constexpr uint32_t kStartupService80000595 = 0x80000595u;
-constexpr uint32_t kStartupService80000595Function0e = 0x0eu;
-constexpr uint32_t kStartupService80000595PayloadSize = 0x4u;
+struct VerifiedCallBehavior {
+    uint32_t serviceId;
+    uint32_t function;
+    uint32_t receiveSize;
+    std::array<uint32_t, 4> payloadWords;
+};
 
-SifRpcCallResponse resolveCdvdInit(uint32_t function,
-                                   uint32_t receiveBuffer,
-                                   uint32_t receiveSize) {
-    if (function != 0u || receiveBuffer == 0u || receiveSize != kCdvdInitPayloadSize) {
-        return {};
-    }
-
-    // PCSX2 IOP handler 0x0003b094 returns these four words. The two 0x21d
-    // values are the versions reported by the loaded cdvd_ee_driver and
-    // cdvd_driver modules; the final word is the handler's non-verbose mode.
-    // Replace these target-BIOS compatibility values when native IOP module
-    // execution supplies the service response directly.
-    return {
-        true,
-        kCdvdInitService,
-        kCdvdInitPayloadSize,
-        {1u, 0x21du, 0x21du, 0u},
-    };
-}
-
-SifRpcCallResponse resolveCdvdDiskReady(uint32_t function,
-                                        uint32_t receiveBuffer,
-                                        uint32_t receiveSize) {
-    if (function != 0u || receiveBuffer == 0u || receiveSize != kCdvdDiskReadyPayloadSize) {
-        return {};
-    }
-
-    // PCSX2 PINE/DebugServer capture at generated call 0x121304: the bound
-    // service 0x8000059a receives function 0 with a four-byte buffer at
-    // 0x1324c0 and changes its first word from 1 to 2. This is CDVD service
-    // semantics, not a packet-specific completion; native IOP execution will
-    // replace the compatibility provider when it owns this response.
-    return {
-        true,
-        kCdvdDiskReadyService,
-        kCdvdDiskReadyPayloadSize,
-        {2u, 0u, 0u, 0u},
-    };
-}
-
-SifRpcCallResponse resolveStartupService80000593(uint32_t function,
-                                                  uint32_t receiveBuffer,
-                                                  uint32_t receiveSize) {
-    if (function != kStartupService80000593Function22 || receiveBuffer == 0u ||
-        receiveSize != kStartupService80000593PayloadSize) {
-        return {};
-    }
-
-    // PCSX2 PINE/DebugServer capture at generated call 0x1213f8: the bound
-    // service 0x80000593 receives function 0x22 with a four-byte buffer at
-    // 0x1324c0 and changes its first word from 2 to 1. Keep this function-
-    // scoped compatibility provider separate until native IOP execution owns
-    // the service and its wider function surface.
-    return {
-        true,
-        kStartupService80000593,
-        kStartupService80000593PayloadSize,
-        {1u, 0u, 0u, 0u},
-    };
-}
-
-SifRpcCallResponse resolveStartupService80000595(uint32_t function,
-                                                  uint32_t receiveBuffer,
-                                                  uint32_t receiveSize) {
-    if (function != kStartupService80000595Function0e || receiveBuffer == 0u ||
-        receiveSize != kStartupService80000595PayloadSize) {
-        return {};
-    }
-
-    // PCSX2 PINE/DebugServer capture at generated call 0x120be4: the bound
-    // service 0x80000595 receives function 0x0e with a four-byte buffer at
-    // 0x131340 and changes its first word from 0 to 2. Keep this function-
-    // scoped compatibility provider separate until native IOP execution owns
-    // the service and its wider function surface.
-    return {
-        true,
-        kStartupService80000595,
-        kStartupService80000595PayloadSize,
-        {2u, 0u, 0u, 0u},
-    };
-}
+// Each row is service-level compatibility evidence, not a packet/address
+// bypass. PCSX2 proved, in order: CDVD init at IOP 0x3b094; DiskReady at EE
+// 0x121304; startup service calls at EE 0x1213f8 and 0x120be4. Native IOP
+// execution should eventually replace this table by supplying the responses.
+constexpr std::array<VerifiedCallBehavior, 4> kVerifiedCallBehaviors{{
+    {0x80000592u, 0x00u, 0x10u, {1u, 0x21du, 0x21du, 0u}},
+    {0x8000059au, 0x00u, 0x04u, {2u, 0u, 0u, 0u}},
+    {0x80000593u, 0x22u, 0x04u, {1u, 0u, 0u, 0u}},
+    {0x80000595u, 0x0eu, 0x04u, {2u, 0u, 0u, 0u}},
+}};
 }  // namespace
 
 void SifRpcTransport::recordBinding(uint32_t clientAddress, uint32_t serviceId) {
@@ -128,17 +55,14 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
         }
     }
 
-    if (serviceId == kCdvdInitService) {
-        return resolveCdvdInit(function, receiveBuffer, receiveSize);
+    if (receiveBuffer == 0u) {
+        return {};
     }
-    if (serviceId == kCdvdDiskReadyService) {
-        return resolveCdvdDiskReady(function, receiveBuffer, receiveSize);
-    }
-    if (serviceId == kStartupService80000593) {
-        return resolveStartupService80000593(function, receiveBuffer, receiveSize);
-    }
-    if (serviceId == kStartupService80000595) {
-        return resolveStartupService80000595(function, receiveBuffer, receiveSize);
+    for (const VerifiedCallBehavior& behavior : kVerifiedCallBehaviors) {
+        if (behavior.serviceId == serviceId && behavior.function == function &&
+            behavior.receiveSize == receiveSize) {
+            return {true, behavior.serviceId, behavior.receiveSize, behavior.payloadWords};
+        }
     }
     return {};
 }

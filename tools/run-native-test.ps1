@@ -157,7 +157,11 @@ $tickMatches = [regex]::Matches(
 )
 $sifMatches = [regex]::Matches(
     $combinedText,
-    'injected completion for 0x([0-9a-fA-F]+)\s+request=0x([0-9a-fA-F]+)\s+result0=0x([0-9a-fA-F]+)\s+result1=0x([0-9a-fA-F]+)'
+    'injected completion for 0x([0-9a-fA-F]+)\s+request=0x([0-9a-fA-F]+)\s+service=0x([0-9a-fA-F]+)\s+payload=0x([0-9a-fA-F]+)\s+result0=0x([0-9a-fA-F]+)\s+result1=0x([0-9a-fA-F]+)'
+)
+$sifDeferredMatches = [regex]::Matches(
+    $combinedText,
+    'deferred data-bearing CALL\s+packet=0x([0-9a-fA-F]+)\s+client=0x([0-9a-fA-F]+)\s+request=0x([0-9a-fA-F]+)\s+receive=0x([0-9a-fA-F]+)\s+size=0x([0-9a-fA-F]+)\s+status=0x([0-9a-fA-F]+)\s+sequence=0x([0-9a-fA-F]+)'
 )
 $diagnostics = @(
     ($combinedText -split '\r?\n') |
@@ -209,9 +213,18 @@ if ($graphicsActivity) {
 if ($sifMatches.Count -gt 0) {
     Write-Output '  Recent SIF completions:'
     $sifMatches | Select-Object -Last 8 | ForEach-Object {
-        Write-Output ("    packet=0x{0} request=0x{1} result0=0x{2} result1=0x{3}" -f `
-            $_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value, $_.Groups[4].Value)
+        Write-Output ("    packet=0x{0} request=0x{1} service=0x{2} payload=0x{3} result0=0x{4} result1=0x{5}" -f `
+            $_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value, `
+            $_.Groups[4].Value, $_.Groups[5].Value, $_.Groups[6].Value)
     }
+}
+
+if ($sifDeferredMatches.Count -gt 0) {
+    $deferred = $sifDeferredMatches[$sifDeferredMatches.Count - 1]
+    Write-Output ("  Latest deferred SIF: packet=0x{0} client=0x{1} request=0x{2} receive=0x{3} size=0x{4} status=0x{5} sequence=0x{6}" -f `
+        $deferred.Groups[1].Value, $deferred.Groups[2].Value, $deferred.Groups[3].Value, `
+        $deferred.Groups[4].Value, $deferred.Groups[5].Value, $deferred.Groups[6].Value, `
+        $deferred.Groups[7].Value)
 }
 
 if ($diagnostics.Count -gt 0) {
