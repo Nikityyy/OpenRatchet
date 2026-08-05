@@ -113,6 +113,21 @@ Use tools as bounded experiments:
   general PCSX2 MCP debugger calls concurrently. After capture, verify the MCP
   session and reconnect only DebugServer (`mode=debug`) if that side failed;
   do not reconnect a healthy PINE client.
+- DebugServer capture ownership is exclusive. In this environment, combining
+  the persistent general `pcsx2` DebugServer client with the helper's direct
+  socket reproduced PCSX2 heap-corruption crashes while arming breakpoints.
+  Prefer one client for the complete experiment. If the helper cannot own the
+  connection safely, use one bounded MCP-only capture: arm, read pre-state,
+  step/continue, read post-state, and remove its breakpoints.
+- Do not use the `pcsx2-reset` helper for this capture path. After the complete
+  permanent breakpoint set is armed through the owning client, send the
+  configured PCSX2 reset hotkey once (`Ctrl+Shift+F12`), make no DebugServer
+  request for 10 seconds, reconnect DebugServer once, list breakpoints, add
+  only genuinely missing entries, then capture. Preserve the healthy PINE
+  session throughout.
+- A PCSX2 crash is a hard stop for that debugger method. Inspect the Windows
+  crash event and PCSX2 log, document the failure, and change the method before
+  retrying; never repeat the suspected trigger in the same iteration.
 - Define the breakpoint, registers, memory ranges, expected transition, and
   cleanup before running a reference capture.
 - Persist useful Ghidra names/comments when doing so will prevent rediscovery.

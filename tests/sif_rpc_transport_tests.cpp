@@ -130,6 +130,28 @@ int main() {
                 "service 0x80000006 function 0xff returns the captured four-byte result");
     test.expect(!transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x10u).completed,
                 "service 0x80000006 function 0xff rejects a mismatched receive size");
+    call = transport.resolveCall(0x158400u, 0x06u, 0x158200u, 0x8u,
+                                 0x220d0u, 0x200u);
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMissing,
+                "service 0x80000006 function 6 waits for its captured outbound request");
+    transport.recordOutboundPayload(0x220d0u, 0x200u,
+                                    {0x53300u, 0u, 0x8001f150u, 0x10u});
+    call = transport.resolveCall(0x158400u, 0x06u, 0x158200u, 0x8u,
+                                 0x220d0u, 0x200u);
+    test.expect(call.completed && call.serviceId == 0x80000006u &&
+                    call.payloadSize == 0x8u && call.payloadWords[0] == 0x19u &&
+                    call.payloadWords[1] == 0u && call.requestPayloadAvailable &&
+                    call.requestPayloadSize == 0x200u &&
+                    call.requestPayloadWords[0] == 0x53300u,
+                "service 0x80000006 function 6 matches the captured 0x200-byte request");
+    transport.recordOutboundPayload(0x220d0u, 0x200u,
+                                    {0x53301u, 0u, 0x8001f150u, 0x10u});
+    call = transport.resolveCall(0x158400u, 0x06u, 0x158200u, 0x8u,
+                                 0x220d0u, 0x200u);
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch,
+                "service 0x80000006 function 6 rejects an uncaptured request shape");
 
     transport.recordBinding(0x158040u, 0x80000003u);
     call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,

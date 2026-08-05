@@ -114,6 +114,18 @@ M2 — First authentic native frame.
   `0x80000006`/`0xff` response at sequence `0x16`, then advanced to the next
   real pending call: function `0x06`, send `0x220d0`/`0x200`, receive
   `0x158200`/`0x8`, sequence `0x17`.
+- Fresh PCSX2 capture at generated `0x11cd2c` proved client `0x158400`, bound
+  service `0x80000006`, function `0x06`: the 0x200-byte EE-to-IOP transfer to
+  remote `0x220d0` begins `{0x53300, 0, 0x8001f150, 0x10}` and returns eight
+  bytes `{0x19, 0}`. At `0x11cd34`, the receive word changed
+  `0x53300 -> 0x19`, the client sequence advanced, and the response ring
+  emitted an eight-byte `0x80000008` descriptor to `0x158200`.
+- Verification run `native-20260805-184849` completed that exact function-6
+  shape at sequence `0x17`, then completed chained service `0x80000003`
+  function `0x02` at sequence `0x18`, and remained alive for 10.11 seconds.
+  It now defers the next real request-sensitive call: service `0x80000003`,
+  function `0x01`, remote send `0x4f848`/`0x4`, receive `0x158080`/`0x4`,
+  request word `0x1751d`, sequence `0x19`.
 - `tools\pcsx2_sif_capture.py` is live-verified against DebugServer: it armed a
   conditional breakpoint, blocked to the hit, captured registers, an evaluated
   address and a contiguous memory window in one JSON transcript, then removed
@@ -154,23 +166,24 @@ M2 — First authentic native frame.
 
 ### Active divergence
 
-Service `0x80000006`, function `0xff`, is now represented at the shared SIF
-transport boundary from a verified no-request, four-byte reference response:
-`0x30343532`; native replay is verified. The next authentic busy packet is the
-same client/service's data-bearing function `0x06`: send `0x220d0`, size
-`0x200`, receive `0x158200`, size `0x8`, `status=5`, sequence `0x17`.
+Service `0x80000006`, function `0x06`, is now represented at the shared SIF
+transport boundary from a verified 0x200-byte request beginning `0x53300` and
+an eight-byte response `{0x19, 0}`; native replay is verified. The next
+authentic busy packet is service `0x80000003`, function `0x01`, with remote
+send `0x4f848`/`0x4`, receive `0x158080`/`0x4`, request word `0x1751d`, and
+sequence `0x19`.
 
 ### Next experiment
 
-Map function `0x06`'s generated callsite and payload provenance, then use one
-fresh PCSX2 capture boot to record its bound service, exact `0x200` request,
-eight-byte response, response-ring transition, packet status, and client
-sequence. Do not add another SIF table behavior before that capture.
+Map the new function-`0x01` callsite and its `0x1751d` payload provenance, then
+use one fresh PCSX2 capture boot to record its bound service, four-byte
+response, response-ring transition, packet status, and client sequence. Do
+not add another SIF table behavior before that capture.
 
 Iteration acceptance delta passed: native completed only the reference-verified
-`0xff` shape and advanced from its `status=5` packet without completing the new
-unsupported function `0x06`. M1 remains passed; M2 remains unpassed because
-guest VRAM/frame presentation is still absent.
+function-`0x06` shape and advanced from sequence `0x17` without completing the
+new unsupported function-`0x01` request. M1 remains passed; M2 remains
+unpassed because guest VRAM/frame presentation is still absent.
 
 ### Known temporary debt
 
@@ -180,15 +193,16 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. It now uses stateful binding and service payload dispatch, but
   packet discovery must move to the SIF transfer boundary.
-- The declarative SIF compatibility table contains only eight verified service
+- The declarative SIF compatibility table contains only nine verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
   service `0x80000595` function `0x0e` result `2`, and service `0x80000003`
   functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`), and
-  service `0x80000006` function `0xff` result `0x30343532`. The last two
-  `0x80000003` calls require the captured EE-to-IOP DMA word associated with
-  the packet's remote send buffer. Unsupported shapes remain pending; replace
-  the table when native IOP execution owns these responses.
+  service `0x80000006` function `0xff` result `0x30343532` and function `0x06`
+  (`0x53300 -> {0x19, 0}`). The request-sensitive calls require the captured
+  EE-to-IOP DMA word associated with the packet's remote send buffer.
+  Unsupported shapes remain pending; replace the table when native IOP
+  execution owns these responses.
 - `guest_12f208` loads a named boot WAD from the configured extracted-media
   directory and recognizes startup-specific sector/argument patterns. Replace
   with general CDVD sector/file I/O.
