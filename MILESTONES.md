@@ -472,3 +472,54 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\diagnose-native.
 Build log: `build/native/build-Release.log`. Post-fix logs:
 `build/native/test-logs/native-20260805-011651.stdout.log` and
 `build/native/test-logs/native-20260805-011651.stderr.log`.
+
+Continuation note (2026-08-05, boot WAD and SPR streaming):
+
+- Static/reference investigation identified two missing native behaviors in
+  the startup resource path. Ghidra `FUN_0020b618` submits a 0x200-QWC SPR
+  transfer from `a0+0x10` and then streams additional 0x2000-byte windows;
+  the native MMIO layer left the SPR CHCR start bit set and never populated
+  scratchpad. PCSX2 memory at `0x1fa7000` matched the repository asset
+  `build/extracted/wads2/wad2_0.wad` byte-for-byte at the WAD header/payload
+  prefix.
+- Root-owned `src/guest_overrides.cpp` now loads the extracted boot WAD at
+  the guest `0x12f208` startup load boundary, refills the scratchpad from the
+  guest SPR register state, and resumes the generated decompressor across its
+  known SPR wait/interior PCs. No generated or third-party file was changed.
+- The final Release build passed. The 10-second diagnostic launched and stayed
+  alive for 10.11 seconds before the harness stopped it cleanly. It recorded
+  56 SIF completions and `tick=120 pc=0x1198b0 dma=556 gif=513 gsw=0 vif=2`.
+  The log shows two authentic WAD-backed SPR windows (`sourceOffset=0x0` and
+  `0x2000`), decompressor return `pc=0x2017ec`, nonzero output at `0x500000`,
+  and nonzero SIF payload descriptors such as `src=0x552640 size=0x1999`.
+- M2 acceptance still does not pass. The run remains stalled at
+  `0x1198b0`; frame uploads still report `displayFbp=0`, `sourceFbp=0`, and
+  `preferred=0`, while the presentation probe remains zero non-black pixels
+  and zero nonzero VRAM bytes. The earlier image-payload diagnostics remain
+  zero because the GS staging/presentation path has not yet produced an
+  authentic framebuffer.
+- PCSX2 cleanup was completed after tracing: DebugServer and PINE remain
+  connected for Ratchet & Clank (SCUS-97199), Ghidra port 8193 is idle, and no
+  breakpoints or watchpoints remain.
+
+Build and test commands for this continuation:
+
+```powershell
+.\tools\build-native.cmd -Configuration Release
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\diagnose-native.ps1 -DurationSeconds 10
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-native-test.ps1 -DurationSeconds 30
+```
+
+Build log: `build/native/build-Release.log`. Final diagnostic logs:
+`build/native/test-logs/native-20260805-015843.stdout.log` and
+`build/native/test-logs/native-20260805-015843.stderr.log`. The 30-second
+stability run used the same executable and logged
+`native-20260805-015716.stdout.log` and
+`native-20260805-015716.stderr.log`; it stayed alive but made no progress
+past `tick=120`.
+
+The next concrete M2 action is to trace the post-decompression
+`0x80000006`/staging path and the first subsequent GS upload, then replace the
+startup-specific WAD fallback with the matching general CDVD/IOP data path.
+Do not claim M2 until display/source addresses, nonzero VRAM, and a
+non-fallback frame are observed.

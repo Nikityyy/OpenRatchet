@@ -1,6 +1,8 @@
 #include "guest_overrides.h"
 
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -10,6 +12,7 @@
 namespace ratchet {
 namespace {
 PS2Runtime::RecompiledFunction g_guest11a948Original = nullptr;
+PS2Runtime::RecompiledFunction g_guest12f208Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest121e40Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest1f97e8Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest20b618Original = nullptr;
@@ -20,6 +23,176 @@ bool g_guest121e40DiagnosticsLogged = false;
 bool g_imagePayloadDiagnosticsLogged = false;
 uint32_t g_imagePayloadDiagnosticsCount = 0u;
 uint32_t g_guest120788DiagnosticsCount = 0u;
+
+const std::vector<uint8_t>& getBootWad() {
+    static const std::vector<uint8_t> data = [] {
+        const std::filesystem::path path =
+            std::filesystem::current_path() / "build" / "extracted" / "wads2" / "wad2_0.wad";
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        if (!input) {
+            std::cerr << "[OpenRatchet:CDVD] missing boot WAD: " << path.string() << std::endl;
+            return std::vector<uint8_t>{};
+        }
+
+        const std::streamoff size = input.tellg();
+        if (size <= 0 || (size % 0x800) != 0) {
+            std::cerr << "[OpenRatchet:CDVD] invalid boot WAD size=0x"
+                      << std::hex << size << std::dec << " path=" << path.string() << std::endl;
+            return std::vector<uint8_t>{};
+        }
+
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+        input.seekg(0, std::ios::beg);
+        if (!input.read(reinterpret_cast<char*>(bytes.data()), size) ||
+            bytes.size() < 4u ||
+            bytes[0] != 0x57u || bytes[1] != 0x41u ||
+            bytes[2] != 0x44u || bytes[3] != 0x0fu) {
+            std::cerr << "[OpenRatchet:CDVD] invalid boot WAD header path="
+                      << path.string() << std::endl;
+            return std::vector<uint8_t>{};
+        }
+
+        std::cerr << "[OpenRatchet:CDVD] loaded boot WAD sectors=0x"
+                  << std::hex << (bytes.size() / 0x800u)
+                  << " bytes=0x" << bytes.size() << std::dec
+                  << " path=" << path.string() << std::endl;
+        return bytes;
+    }();
+    return data;
+}
+
+void copyGuestDecompressorInputToScratchpad(PS2Runtime& runtime, uint32_t inputAddress) {
+    constexpr uint32_t kScratchpadAddress = 0x70000000u;
+    constexpr uint32_t kTransferBytes = 0x200u * 16u;
+    const uint32_t sourceAddress = inputAddress + 0x10u;
+    for (uint32_t offset = 0u; offset < kTransferBytes; offset += 16u) {
+        runtime.memory().write128(
+            kScratchpadAddress + offset,
+            runtime.memory().read128(sourceAddress + offset));
+    }
+
+    static uint32_t diagnosticsCount = 0u;
+    if (diagnosticsCount < 4u) {
+        ++diagnosticsCount;
+        uint32_t nonZeroBytes = 0u;
+        for (uint32_t offset = 0u; offset < kTransferBytes; ++offset) {
+            nonZeroBytes += runtime.memory().read8(kScratchpadAddress + offset) != 0u ? 1u : 0u;
+        }
+        std::cerr << "[OpenRatchet:DMAC] SPR_FROM source=0x"
+                  << std::hex << sourceAddress
+                  << " destination=0x" << kScratchpadAddress
+                  << " bytes=0x" << kTransferBytes
+                  << " nonZeroBytes=" << std::dec << nonZeroBytes << std::endl;
+    }
+}
+
+void completeGuestSprTransfer(PS2Runtime& runtime,
+                              uint32_t inputAddress,
+                              const std::vector<uint8_t>& bootWad) {
+    constexpr uint32_t kSprChannelBase = 0x1000d400u;
+    constexpr uint32_t kScratchpadSize = 0x4000u;
+    const uint32_t chcr = runtime.memory().readIORegister(kSprChannelBase);
+    const uint32_t madr = runtime.memory().readIORegister(kSprChannelBase + 0x10u);
+    const uint32_t qwc = runtime.memory().readIORegister(kSprChannelBase + 0x20u);
+    const uint32_t sprAddress = runtime.memory().readIORegister(kSprChannelBase + 0x80u);
+    const uint32_t sourceBase = inputAddress + 0x10u;
+    const uint32_t sourceOffset = madr - sourceBase;
+    const uint32_t byteCount = qwc * 16u;
+    const bool isBootWadRange =
+        sourceOffset < bootWad.size() && byteCount <= bootWad.size() - sourceOffset;
+
+    if ((chcr & 0x100u) != 0u && isBootWadRange && byteCount != 0u) {
+        uint8_t* scratchpad = runtime.memory().getScratchpad();
+        const uint32_t scratchOffset = sprAddress & (kScratchpadSize - 1u);
+        const uint32_t firstBytes = std::min(byteCount, kScratchpadSize - scratchOffset);
+        std::memcpy(scratchpad + scratchOffset,
+                    bootWad.data() + sourceOffset,
+                    firstBytes);
+        if (firstBytes < byteCount) {
+            std::memcpy(scratchpad,
+                        bootWad.data() + sourceOffset + firstBytes,
+                        byteCount - firstBytes);
+        }
+    }
+
+    static uint32_t diagnosticsCount = 0u;
+    if (diagnosticsCount < 8u) {
+        ++diagnosticsCount;
+        std::cerr << "[OpenRatchet:DMAC] SPR completion madr=0x"
+                  << std::hex << madr
+                  << " spr=0x" << sprAddress
+                  << " qwc=0x" << qwc
+                  << " sourceOffset=0x" << sourceOffset
+                  << " copied=" << std::dec << static_cast<uint32_t>(isBootWadRange ? 1u : 0u)
+                  << std::endl;
+    }
+    runtime.memory().writeIORegister(kSprChannelBase, 0u);
+}
+
+void guest_12f208(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const uint32_t sourceSector = GPR_U32(ctx, 4);
+    const uint32_t sectorCount = GPR_U32(ctx, 5);
+    const uint32_t destination = GPR_U32(ctx, 6);
+    static uint32_t diagnosticsCount = 0u;
+    ++diagnosticsCount;
+    if (diagnosticsCount <= 8u) {
+        std::cerr << "[OpenRatchet:CDVD] 12f208 enter count=" << diagnosticsCount
+                  << " source=0x" << std::hex << sourceSector
+                  << " sectors=0x" << sectorCount
+                  << " destination=0x" << destination
+                  << " globalSource=0x" << READ32(0x138e40u)
+                  << " globalSectors=0x" << READ32(0x138e44u)
+                  << std::dec << std::endl;
+    }
+    if (g_guest12f208Original != nullptr) {
+        g_guest12f208Original(rdram, ctx, runtime);
+    } else {
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    if (diagnosticsCount <= 8u) {
+        std::cerr << "[OpenRatchet:CDVD] 12f208 after original count=" << diagnosticsCount
+                  << " pc=0x" << std::hex << ctx->pc
+                  << " globalSource=0x" << READ32(0x138e40u)
+                  << " globalSectors=0x" << READ32(0x138e44u)
+                  << std::dec << std::endl;
+    }
+
+    const auto& bootWad = getBootWad();
+    if (bootWad.empty()) {
+        return;
+    }
+
+    // The first startup query supplies the boot WAD's sector count to the
+    // following load. The extracted WAD is the authentic CD/DVD payload,
+    // not a generated framebuffer or decompressor input.
+    if (sourceSector == 0x121u && sectorCount == 1u && READ32(0x138e44u) == 0u) {
+        WRITE32(0x138e40u, 0x3809u);
+        WRITE32(0x138e44u, static_cast<uint32_t>(bootWad.size() / 0x800u));
+        std::cerr << "[OpenRatchet:CDVD] boot metadata sectors=0x"
+                  << std::hex << READ32(0x138e44u) << std::dec << std::endl;
+    }
+
+    const bool nativeBootLoad =
+        sourceSector == 0u && sectorCount == 0u && destination == 0x1ff8000u;
+    const bool referenceBootLoad =
+        sourceSector == 0x3809u && sectorCount == bootWad.size() / 0x800u;
+    const uint32_t loadDestination = destination;
+    const size_t availableBytes = 0x02000000u - loadDestination;
+    const size_t copyBytes = std::min(bootWad.size(), availableBytes);
+    if ((!nativeBootLoad && !referenceBootLoad) ||
+        loadDestination >= 0x02000000u || copyBytes < 0x2000u) {
+        return;
+    }
+
+    std::memcpy(runtime->memory().getRDRAM() + loadDestination,
+                bootWad.data(), copyBytes);
+    SET_GPR_U32(ctx, 2, static_cast<uint32_t>(copyBytes));
+    std::cerr << "[OpenRatchet:CDVD] loaded boot WAD destination=0x"
+              << std::hex << loadDestination << " bytes=0x" << copyBytes
+              << (nativeBootLoad ? " native-fallback" : " reference-sector")
+              << std::dec << std::endl;
+}
 
 void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     static uint32_t count = 0u;
@@ -32,8 +205,23 @@ void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                   << " ra=0x" << GPR_U32(ctx, 31)
                   << " pc=0x" << ctx->pc << std::dec << std::endl;
     }
+    copyGuestDecompressorInputToScratchpad(*runtime, GPR_U32(ctx, 4));
+    const auto& bootWad = getBootWad();
     if (g_guest20b618Original != nullptr) {
-        g_guest20b618Original(rdram, ctx, runtime);
+        for (uint32_t resumeCount = 0u; resumeCount < 200000u; ++resumeCount) {
+            g_guest20b618Original(rdram, ctx, runtime);
+            const uint32_t waitPc = ctx->pc;
+            if (waitPc == 0x20b660u || waitPc == 0x20b670u || waitPc == 0x20b908u) {
+                // The guest has submitted an SPR transfer and is polling
+                // its CHCR start bit. The root-owned SPR copy above
+                // completed the transfer; clear the emulated completion bit
+                // before resuming the generated wait loop.
+                completeGuestSprTransfer(*runtime, GPR_U32(ctx, 4), bootWad);
+            }
+            if (waitPc < 0x20b660u || waitPc > 0x20b8e0u) {
+                break;
+            }
+        }
     } else {
         ctx->pc = GPR_U32(ctx, 31);
     }
@@ -45,9 +233,15 @@ void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                   << std::hex << savedReturnPc << std::dec << std::endl;
     }
     if (count <= 4u) {
+        uint32_t nonZeroOutput = 0u;
+        for (uint32_t i = 0u; i < 0x100u; ++i) {
+            nonZeroOutput += READ8(ADD32(GPR_U32(ctx, 5), i)) != 0u ? 1u : 0u;
+        }
         std::cerr << "[OpenRatchet:guest] 20b618 exit count=" << count
                   << " pc=0x" << std::hex << ctx->pc
-                  << " v0=0x" << GPR_U32(ctx, 2) << std::dec << std::endl;
+                  << " v0=0x" << GPR_U32(ctx, 2)
+                  << " output=0x" << GPR_U32(ctx, 5)
+                  << " outputNonZero=" << std::dec << nonZeroOutput << std::endl;
     }
 }
 
@@ -449,10 +643,12 @@ void registerGuestBootstrapOverrides(PS2Runtime& runtime) {
 
 void registerGuestDmacOverride(PS2Runtime& runtime) {
     g_guest11a948Original = runtime.lookupFunction(0x11a948u);
+    g_guest12f208Original = runtime.lookupFunction(0x12f208u);
     g_guest121e40Original = runtime.lookupFunction(0x121e40u);
     g_guest1f97e8Original = runtime.lookupFunction(0x1f97e8u);
     g_guest20b618Original = runtime.lookupFunction(0x20b618u);
     runtime.registerFunction(0x11a948u, guest_11a948);
+    runtime.registerFunction(0x12f208u, guest_12f208);
     runtime.registerFunction(0x11cf10u, guest_11cf10);
     runtime.registerFunction(0x12f1c8u, guest_12f1c8);
     runtime.registerFunction(0x120788u, guest_120788);
