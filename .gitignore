@@ -19,6 +19,7 @@ cmake-build-*/
 ps2_log.txt
 *.dmp
 *.dump
+/build/reference-captures/
 
 # Game Dumps & ROMs
 *.iso

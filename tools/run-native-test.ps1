@@ -163,6 +163,10 @@ $sifDeferredMatches = [regex]::Matches(
     $combinedText,
     'deferred data-bearing CALL\s+packet=0x([0-9a-fA-F]+)\s+client=0x([0-9a-fA-F]+)\s+request=0x([0-9a-fA-F]+)\s+receive=0x([0-9a-fA-F]+)\s+size=0x([0-9a-fA-F]+)\s+status=0x([0-9a-fA-F]+)\s+sequence=0x([0-9a-fA-F]+)'
 )
+$sifRpcTraceMatches = [regex]::Matches(
+    $combinedText,
+    '\[OpenRatchet:SIF:RPC\]\s+([^\r\n]+)'
+)
 $diagnostics = @(
     ($combinedText -split '\r?\n') |
         Where-Object { $_ -match '(?i)\b(unimplemented|stub|failed|error)\b' } |
@@ -225,6 +229,11 @@ if ($sifDeferredMatches.Count -gt 0) {
         $deferred.Groups[1].Value, $deferred.Groups[2].Value, $deferred.Groups[3].Value, `
         $deferred.Groups[4].Value, $deferred.Groups[5].Value, $deferred.Groups[6].Value, `
         $deferred.Groups[7].Value)
+}
+
+if ($sifRpcTraceMatches.Count -gt 0) {
+    $rpcTrace = $sifRpcTraceMatches[$sifRpcTraceMatches.Count - 1].Groups[1].Value
+    Write-Output "  Latest SIF RPC trace: $rpcTrace"
 }
 
 if ($diagnostics.Count -gt 0) {

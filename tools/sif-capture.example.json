@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "name": "service-80000003-function-1-example",
+  "cpu": "ee",
+  "timeout_seconds": 120,
+  "poll_interval_ms": 20,
+  "cleanup": true,
+  "targets": [
+    {
+      "name": "before-call",
+      "address": "0x0011c914",
+      "condition": "",
+      "register_categories": [0],
+      "expressions": {
+        "client": "a0",
+        "function": "a1",
+        "send_buffer": "a3"
+      },
+      "memory": [
+        {
+          "name": "client",
+          "address": "0x00158040",
+          "length": 64
+        },
+        {
+          "name": "send",
+          "address": "0x001580c0",
+          "length": 16
+        },
+        {
+          "name": "receive-before",
+          "address": "0x00158080",
+          "length": 16
+        },
+        {
+          "name": "response-ring-before",
+          "address": "0x20154d80",
+          "length": 128
+        }
+      ]
+    },
+    {
+      "name": "after-call",
+      "address": "0x0011c91c",
+      "condition": "",
+      "register_categories": [0],
+      "expressions": {},
+      "memory": [
+        {
+          "name": "client",
+          "address": "0x00158040",
+          "length": 64
+        },
+        {
+          "name": "receive-after",
+          "address": "0x00158080",
+          "length": 16
+        },
+        {
+          "name": "response-ring-after",
+          "address": "0x20154d80",
+          "length": 128
+        }
+      ]
+    }
+  ]
+}

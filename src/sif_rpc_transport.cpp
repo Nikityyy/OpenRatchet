@@ -29,6 +29,28 @@ constexpr std::array<VerifiedCallBehavior, 7> kVerifiedCallBehaviors{{
 }};
 }  // namespace
 
+const char* sifRpcCallDispositionName(SifRpcCallDisposition disposition) {
+    switch (disposition) {
+    case SifRpcCallDisposition::Completed:
+        return "matched";
+    case SifRpcCallDisposition::UnboundClient:
+        return "unbound-client";
+    case SifRpcCallDisposition::NoResponsePayloadRequired:
+        return "no-response-payload";
+    case SifRpcCallDisposition::MissingReceiveBuffer:
+        return "missing-receive-buffer";
+    case SifRpcCallDisposition::UnsupportedShape:
+        return "unsupported-shape";
+    case SifRpcCallDisposition::RequestSizeMismatch:
+        return "request-size-mismatch";
+    case SifRpcCallDisposition::RequestPayloadMissing:
+        return "request-payload-missing";
+    case SifRpcCallDisposition::RequestPayloadMismatch:
+        return "request-payload-mismatch";
+    }
+    return "unknown";
+}
+
 void SifRpcTransport::recordBinding(uint32_t clientAddress, uint32_t serviceId) {
     if (clientAddress == 0u || serviceId == 0u) {
         return;
@@ -78,36 +100,77 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
                                                 uint32_t receiveSize,
                                                 uint32_t remoteSendBuffer,
                                                 uint32_t sendSize) const {
-    uint32_t serviceId = 0u;
+    SifRpcCallResponse response;
     for (const Binding& binding : bindings_) {
         if (binding.clientAddress == clientAddress) {
-            serviceId = binding.serviceId;
+            response.serviceId = binding.serviceId;
             break;
         }
     }
 
-    if (receiveBuffer == 0u) {
-        return {};
+    if (response.serviceId == 0u) {
+        return response;
     }
+    if (receiveSize == 0u) {
+        response.disposition = SifRpcCallDisposition::NoResponsePayloadRequired;
+        return response;
+    }
+    if (receiveBuffer == 0u) {
+        response.disposition = SifRpcCallDisposition::MissingReceiveBuffer;
+        return response;
+    }
+
+    response.disposition = SifRpcCallDisposition::UnsupportedShape;
     for (const VerifiedCallBehavior& behavior : kVerifiedCallBehaviors) {
+        if (behavior.serviceId != response.serviceId || behavior.function != function ||
+            behavior.receiveSize != receiveSize) {
+            continue;
+        }
+
+        if (behavior.requestSize == 0u) {
+            response.completed = true;
+            response.payloadSize = behavior.receiveSize;
+            response.payloadWords = behavior.payloadWords;
+            response.disposition = SifRpcCallDisposition::Completed;
+            return response;
+        }
+
+        if (sendSize != behavior.requestSize) {
+            response.disposition = SifRpcCallDisposition::RequestSizeMismatch;
+            continue;
+        }
+
         const OutboundPayload* outboundPayload = nullptr;
-        if (behavior.requestSize != 0u) {
-            for (const OutboundPayload& payload : outboundPayloads_) {
-                if (payload.remoteAddress == remoteSendBuffer && payload.size == sendSize) {
-                    outboundPayload = &payload;
-                    break;
-                }
+        for (const OutboundPayload& payload : outboundPayloads_) {
+            if (payload.remoteAddress == remoteSendBuffer) {
+                outboundPayload = &payload;
+                break;
             }
         }
-        if (behavior.serviceId == serviceId && behavior.function == function &&
-            behavior.receiveSize == receiveSize &&
-            (behavior.requestSize == 0u ||
-             (sendSize == behavior.requestSize && outboundPayload != nullptr &&
-              outboundPayload->payloadWords[0] == behavior.requestWord0))) {
-            return {true, behavior.serviceId, behavior.receiveSize, behavior.payloadWords};
+        if (outboundPayload == nullptr) {
+            response.disposition = SifRpcCallDisposition::RequestPayloadMissing;
+            continue;
         }
+
+        response.requestPayloadAvailable = true;
+        response.requestPayloadSize = outboundPayload->size;
+        response.requestPayloadWords = outboundPayload->payloadWords;
+        if (outboundPayload->size != sendSize) {
+            response.disposition = SifRpcCallDisposition::RequestSizeMismatch;
+            continue;
+        }
+        if (outboundPayload->payloadWords[0] != behavior.requestWord0) {
+            response.disposition = SifRpcCallDisposition::RequestPayloadMismatch;
+            continue;
+        }
+
+        response.completed = true;
+        response.payloadSize = behavior.receiveSize;
+        response.payloadWords = behavior.payloadWords;
+        response.disposition = SifRpcCallDisposition::Completed;
+        return response;
     }
-    return {};
+    return response;
 }
 
 void SifRpcTransport::reset() {

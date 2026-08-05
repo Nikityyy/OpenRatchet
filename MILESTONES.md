@@ -71,6 +71,20 @@ M2 — First authentic native frame.
   request-sensitive function-`0x01` shape before advancing to an uncaptured
   call: client `0x158400`, function `0xff`, receive `0x158200`, size `4`,
   `status=5`, sequence `0x16`; it remained alive for 10.17 seconds.
+- Tooling verification run `native-20260805-165344` remained alive for 10.20
+  seconds with 24 SIF completions and emitted one structured record for the
+  active divergence: service `0x80000006`, function `0xff`, no send buffer or
+  payload, receive `0x158200`, size `4`, `status=5`, sequence `0x16`, reason
+  `unsupported-shape`. The compact diagnostic parses this record directly.
+- `tools\pcsx2_sif_capture.py` is live-verified against DebugServer: it armed a
+  conditional breakpoint, blocked to the hit, captured registers, an evaluated
+  address and a contiguous memory window in one JSON transcript, then removed
+  its breakpoint while preserving unrelated state. Capture transcripts under
+  `build\reference-captures` are ignored by Git.
+- The `pcsx2-reset` MCP performed a real reset to `0xbfc00000` and its blocking
+  continue stopped at the expected conditional EE breakpoint `0x118cb0`.
+  After the EE/IOP deduplication fix, `preserve_breakpoints=true` rearmed that
+  single breakpoint exactly once with its condition and description intact.
 - Latest verified logs:
   `build/native/test-logs/native-20260805-162020.stdout.log` and
   `build/native/test-logs/native-20260805-162020.stderr.log`.
@@ -112,18 +126,21 @@ M2 — First authentic native frame.
 
 Service `0x80000003`, functions `0x01` and `0x02`, now complete only when
 their captured outbound words match the reference chain. The next native packet
-remains authentically busy at packet `0x20155000`: client `0x158400`, function
-`0xff`, receive `0x158200`, size `4`, status `5`, sequence `0x16`. Its bound
-service and reference payload have not yet been characterized.
+remains authentically busy at packet `0x20155000`: client `0x158400`, bound
+service `0x80000006`, function `0xff`, no send buffer/payload, receive
+`0x158200`, size `4`, status `5`, sequence `0x16`. Its reference response has
+not yet been characterized.
 
 ### Next experiment
 
-Map the deferred client `0x158400` packet through generated output and its
-binding site, then perform one fresh PINE/DebugServer capture of only that
-forward-reachable call. Capture the service/function, send/receive data,
-response-ring transition, packet status, and client sequence before adding any
-new service-table behavior. If it is not a SIF/RPC call, stop and hand off the
-new owning subsystem instead.
+Map client `0x158400` through generated output and its binding/callsite, plus
+all immediately forward-reachable SIF calls. Build one capture manifest from
+`tools\sif-capture.example.json`, verify both handshakes, reset with
+`preserve_breakpoints=true` after using the helper's `--arm-only` mode, then run
+its `--capture-only` mode once. Capture each call's service/function,
+send/receive data, response-ring transition, packet status, and client sequence
+before adding any service-table behavior. If ownership leaves SIF, stop and
+hand off that owning subsystem.
 
 Iteration acceptance delta: native must complete only the newly reference-
 verified call shape and advance from the current `status=5` packet without
@@ -258,6 +275,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File .\tools\run-native-test.ps1 -DurationSeconds 10
 ```
 
+Validate and run a prepared multi-breakpoint SIF capture manifest:
+
+```powershell
+python .\tools\pcsx2_sif_capture.py <manifest.json> --validate-only
+python .\tools\pcsx2_sif_capture.py <manifest.json> --arm-only
+# Call pcsx2_system_reset(preserve_breakpoints=true), then:
+python .\tools\pcsx2_sif_capture.py <manifest.json> --capture-only `
+    --output .\build\reference-captures\capture.json
+```
+
 ## Latest evidence
 
 | Date | Iteration | Result | Acceptance |
@@ -279,6 +306,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 | 2026-08-05 | GhidraMCP fork migration | Stdio bridge connected to `OpenRatchetTest`; metadata verified the extracted R5900 ELF and focused decompilation at `0x121630` | Static-reference tooling verified; M2 unchanged |
 | 2026-08-05 | Startup SIF characterization and function `0x04` | One PINE/DebugServer boot proved service `0x80000593`, function `0x04` writes `{0}` to `0x1324c0`; native completed it, reached 22 completions, and deferred the new client `0x158040` shape | Iteration delta passed; M2 not passed |
 | 2026-08-05 | Request-sensitive SIF service `0x80000003` | PCSX2 proved `0x1999 -> 0x53300` for function `1` and `0x53300 -> 0` for function `2`; native matched the DMA-captured request and advanced to client `0x158400` function `0xff` | Iteration delta passed; M2 not passed |
+| 2026-08-05 | Batched capture and structured RPC diagnostics | Live DebugServer smoke produced and cleaned an ordered JSON capture; native run `165344` exposed service `0x80000006` and the complete deferred request in one record; build and 3 tests passed | Tooling delta passed; M2 unchanged |
 
 ## Handoff format
 

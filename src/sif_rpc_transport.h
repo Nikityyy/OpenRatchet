@@ -5,6 +5,19 @@
 
 namespace ratchet {
 
+enum class SifRpcCallDisposition {
+    Completed,
+    UnboundClient,
+    NoResponsePayloadRequired,
+    MissingReceiveBuffer,
+    UnsupportedShape,
+    RequestSizeMismatch,
+    RequestPayloadMissing,
+    RequestPayloadMismatch,
+};
+
+const char* sifRpcCallDispositionName(SifRpcCallDisposition disposition);
+
 // A synthetic RPC completion with no payload is only valid for calls that do
 // not request receive data. A real transport can complete data-bearing calls
 // once it has both the payload and a destination buffer.
@@ -22,6 +35,10 @@ struct SifRpcCallResponse {
     uint32_t serviceId = 0u;
     uint32_t payloadSize = 0u;
     std::array<uint32_t, 4> payloadWords{};
+    SifRpcCallDisposition disposition = SifRpcCallDisposition::UnboundClient;
+    bool requestPayloadAvailable = false;
+    uint32_t requestPayloadSize = 0u;
+    std::array<uint32_t, 4> requestPayloadWords{};
 };
 
 // Tracks the service bound to each EE RPC client and routes calls to a

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -41,7 +42,9 @@ int main() {
 
     ratchet::SifRpcTransport transport;
     auto call = transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u);
-    test.expect(!call.completed, "unbound client remains pending");
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::UnboundClient,
+                "unbound client remains pending with a diagnostic disposition");
 
     transport.recordBinding(0x159968u, 0x80000592u);
     call = transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u);
@@ -52,12 +55,19 @@ int main() {
                     call.payloadWords[2] == 0x21du &&
                     call.payloadWords[3] == 0u,
                 "bound CDVD init call returns the reference service payload");
-    test.expect(!transport.resolveCall(0x159968u, 1u, 0x1324c0u, 0x10u).completed,
-                "unsupported CDVD function remains pending");
+    call = transport.resolveCall(0x159968u, 1u, 0x1324c0u, 0x10u);
+    test.expect(!call.completed && call.serviceId == 0x80000592u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape,
+                "unsupported CDVD function retains its bound service and reason");
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x0cu).completed,
                 "mismatched CDVD receive size remains pending");
     test.expect(!transport.resolveCall(0x159968u, 0u, 0u, 0x10u).completed,
                 "missing CDVD receive buffer remains pending");
+    call = transport.resolveCall(0x159968u, 1u, 0u, 0u);
+    test.expect(!call.completed &&
+                    call.disposition ==
+                        ratchet::SifRpcCallDisposition::NoResponsePayloadRequired,
+                "zero-size response has a distinct transport-completion reason");
 
     transport.recordBinding(0x159990u, 0x8000059au);
     call = transport.resolveCall(0x159990u, 0u, 0x1324c0u, 0x4u);
@@ -115,17 +125,30 @@ int main() {
     transport.recordBinding(0x158040u, 0x80000003u);
     call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
                                  0x4f848u, 0x4u);
-    test.expect(!call.completed,
-                "payload-dependent service call remains pending without outbound data");
+    test.expect(!call.completed && call.serviceId == 0x80000003u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMissing,
+                "payload-dependent service call reports missing outbound data");
     transport.recordOutboundPayload(0x4f848u, 0x4u, {0x1999u, 0u, 0u, 0u});
     call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
                                  0x4f848u, 0x4u);
     test.expect(call.completed && call.serviceId == 0x80000003u &&
-                    call.payloadSize == 0x4u && call.payloadWords[0] == 0x53300u,
+                    call.payloadSize == 0x4u && call.payloadWords[0] == 0x53300u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::Completed &&
+                    call.requestPayloadAvailable && call.requestPayloadSize == 0x4u &&
+                    call.requestPayloadWords[0] == 0x1999u,
                 "service 0x80000003 function 1 matches the reference request word");
-    test.expect(!transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
-                                       0x4f848u, 0x8u).completed,
-                "payload-dependent service call rejects a mismatched send size");
+    call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                 0x4f848u, 0x8u);
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestSizeMismatch,
+                "payload-dependent service call reports a mismatched send size");
+    transport.recordOutboundPayload(0x4f848u, 0x4u, {0x1234u, 0u, 0u, 0u});
+    call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                 0x4f848u, 0x4u);
+    test.expect(!call.completed && call.requestPayloadAvailable &&
+                    call.requestPayloadWords[0] == 0x1234u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch,
+                "payload-dependent service call reports the mismatched request word");
     transport.recordOutboundPayload(0x4f848u, 0x4u, {0x53300u, 0u, 0u, 0u});
     call = transport.resolveCall(0x158040u, 2u, 0x158080u, 0x4u,
                                  0x4f848u, 0x4u);
@@ -142,6 +165,11 @@ int main() {
     test.expect(!transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
                                        0x4f848u, 0x4u).completed,
                 "reset removes captured outbound payloads");
+
+    test.expect(std::string(ratchet::sifRpcCallDispositionName(
+                    ratchet::SifRpcCallDisposition::RequestPayloadMismatch)) ==
+                    "request-payload-mismatch",
+                "RPC dispositions have stable structured-log names");
 
     if (test.failures != 0) {
         std::cerr << test.failures << " test check(s) failed\n";

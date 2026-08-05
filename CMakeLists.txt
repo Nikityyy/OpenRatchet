@@ -84,4 +84,13 @@ if(BUILD_TESTING)
         src/sif_rpc_transport.cpp)
     target_include_directories(sif_rpc_transport_tests PRIVATE src)
     add_test(NAME sif_rpc_transport COMMAND sif_rpc_transport_tests)
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME pcsx2_sif_capture
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/pcsx2_sif_capture_tests.py")
+        set_tests_properties(pcsx2_sif_capture PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
 endif()

@@ -33,6 +33,12 @@ bool g_imagePayloadDiagnosticsLogged = false;
 uint32_t g_imagePayloadDiagnosticsCount = 0u;
 uint32_t g_guest120788DiagnosticsCount = 0u;
 uint32_t g_sifDeferredPayloadDiagnosticsCount = 0u;
+uint32_t g_lastSifRpcTracePacket = 0u;
+uint32_t g_lastSifRpcTraceSequence = 0u;
+uint32_t g_lastSifRpcTraceFunction = 0u;
+SifRpcCallDisposition g_lastSifRpcTraceDisposition =
+    SifRpcCallDisposition::UnboundClient;
+bool g_hasSifRpcTrace = false;
 
 const std::vector<uint8_t>& getBootWad() {
     static const std::vector<uint8_t> data = [] {
@@ -320,6 +326,7 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     g_sifInitResponseInjected = false;
     g_sifCommandBridgeActive = false;
     g_sifDeferredPayloadDiagnosticsCount = 0u;
+    g_hasSifRpcTrace = false;
     g_sifStartupResponseResolver.reset();
     WRITE32(0x12fbf0u, 0u);
     SET_GPR_U32(ctx, 2, 1u);
@@ -626,6 +633,47 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             callResponse = g_sifRpcTransport.resolveCall(
                 clientAddress, requestCommand, receiveBuffer, receiveSize,
                 remoteSendBuffer, sendSize);
+
+            const bool canCompleteCall = canCompleteSifRpcCallWithoutPayload(
+                receiveBuffer, receiveSize, callResponse.completed);
+
+            const bool traceChanged = !g_hasSifRpcTrace ||
+                packetAddress != g_lastSifRpcTracePacket ||
+                packetSequence != g_lastSifRpcTraceSequence ||
+                requestCommand != g_lastSifRpcTraceFunction ||
+                callResponse.disposition != g_lastSifRpcTraceDisposition;
+            if (traceChanged) {
+                g_hasSifRpcTrace = true;
+                g_lastSifRpcTracePacket = packetAddress;
+                g_lastSifRpcTraceSequence = packetSequence;
+                g_lastSifRpcTraceFunction = requestCommand;
+                g_lastSifRpcTraceDisposition = callResponse.disposition;
+                std::cerr << "[OpenRatchet:SIF:RPC] disposition="
+                          << (canCompleteCall ? "completed" : "pending")
+                          << " reason=" << sifRpcCallDispositionName(callResponse.disposition)
+                          << " packet=0x" << std::hex << packetAddress
+                          << " client=0x" << clientAddress
+                          << " service=0x" << callResponse.serviceId
+                          << " function=0x" << requestCommand
+                          << " send=0x" << remoteSendBuffer
+                          << " sendSize=0x" << sendSize
+                          << " requestPayloadAvailable="
+                          << (callResponse.requestPayloadAvailable ? 1u : 0u)
+                          << " requestPayloadSize=0x" << callResponse.requestPayloadSize
+                          << " requestWords=0x" << callResponse.requestPayloadWords[0]
+                          << ",0x" << callResponse.requestPayloadWords[1]
+                          << ",0x" << callResponse.requestPayloadWords[2]
+                          << ",0x" << callResponse.requestPayloadWords[3]
+                          << " receive=0x" << receiveBuffer
+                          << " receiveSize=0x" << receiveSize
+                          << " status=0x" << packetStatus
+                          << " sequence=0x" << packetSequence
+                          << " clientPacket=0x" << clientPacket
+                          << " clientSequence=0x" << clientSequence
+                          << " busy=" << ((packetStatus & 1u) != 0u ? 1u : 0u)
+                          << " responseSize=0x" << callResponse.payloadSize
+                          << std::dec << "\n";
+            }
         }
         const bool canCompleteCall = packetCommand != 0x8000000au ||
             canCompleteSifRpcCallWithoutPayload(

@@ -63,8 +63,22 @@ successful MCP handshake.
   connect while the first session is healthy; a second client can wait behind
   the active socket and appear to time out. Reconnect only after a failed
   session check, and restart PCSX2 only if that failed session cannot recover.
+- The current general `pcsx2` MCP leaks its previous PINE socket when
+  `pcsx2_connect` is called again. Never reconnect both interfaces merely to
+  refresh DebugServer. If DebugServer alone was displaced, reconnect with
+  `mode=debug`; preserve the healthy PINE session. A direct PINE title handshake
+  on 2026-08-05 proved PCSX2 healthy while redundant MCP connects were timing
+  out, so do not ask the user to restart PCSX2 until the MCP session itself has
+  been ruled out.
 - If PINE is disconnected or its handshake fails, stop and ask the user. Do not
   substitute DebugServer, Ghidra, or a listening port for PINE evidence.
+- The `pcsx2-reset` MCP exposes `pcsx2_system_reset` and
+  `pcsx2_continue_until_breakpoint`. Both reset and blocking continue were
+  verified against Ratchet & Clank on 2026-08-05. Breakpoint preservation was
+  reverified after its EE/IOP deduplication fix: one permanent conditional EE
+  breakpoint was rearmed exactly once with its condition and description, and
+  blocking continue hit it. Arm the complete permanent breakpoint set first,
+  then reset with `preserve_breakpoints=true`.
 - The current GhidraMCP fork uses a Codex-launched stdio bridge that connects
   to the Ghidra plugin HTTP server at `127.0.0.1:8089`; port `8193` belonged to
   the previous fork. Verify it with `list_instances`, require the connected
@@ -86,6 +100,19 @@ Use tools as bounded experiments:
   decompiling neighboring functions.
 - Prefer conditional breakpoints, contiguous bulk reads, and PCSX2 memory diffs
   over repeated `continue -> status -> read` polling.
+- For a multi-call SIF capture, copy `tools\sif-capture.example.json` to the
+  ignored `build\reference-captures` directory, replace it with the statically
+  mapped targets/ranges, validate with
+  `python tools\pcsx2_sif_capture.py <manifest> --validate-only`, arm with
+  `--arm-only`, reset with breakpoint preservation, then capture with
+  `--capture-only`. The helper blocks through ordered hits, captures
+  registers/expressions/contiguous memory into one JSON transcript, preserves
+  unrelated breakpoints, and removes only its own breakpoints. Generated
+  transcripts are Git-ignored.
+- The batch helper connects directly to DebugServer while it runs. Do not issue
+  general PCSX2 MCP debugger calls concurrently. After capture, verify the MCP
+  session and reconnect only DebugServer (`mode=debug`) if that side failed;
+  do not reconnect a healthy PINE client.
 - Define the breakpoint, registers, memory ranges, expected transition, and
   cleanup before running a reference capture.
 - Persist useful Ghidra names/comments when doing so will prevent rediscovery.
