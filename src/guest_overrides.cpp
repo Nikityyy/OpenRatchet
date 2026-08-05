@@ -1,6 +1,7 @@
 #include "guest_overrides.h"
 
 #include "guest_range.h"
+#include "sif_rpc_transport.h"
 #include "sif_startup_responses.h"
 
 #include <cstring>
@@ -27,6 +28,7 @@ bool g_guest121e40DiagnosticsLogged = false;
 bool g_imagePayloadDiagnosticsLogged = false;
 uint32_t g_imagePayloadDiagnosticsCount = 0u;
 uint32_t g_guest120788DiagnosticsCount = 0u;
+uint32_t g_sifDeferredPayloadDiagnosticsCount = 0u;
 
 const std::vector<uint8_t>& getBootWad() {
     static const std::vector<uint8_t> data = [] {
@@ -313,6 +315,7 @@ void guest_11cf10(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     // ponytail: bridge the absent async IOP-ready event; replace with real IOP status when available.
     g_sifInitResponseInjected = false;
     g_sifCommandBridgeActive = false;
+    g_sifDeferredPayloadDiagnosticsCount = 0u;
     g_sifStartupResponseResolver.reset();
     WRITE32(0x12fbf0u, 0u);
     SET_GPR_U32(ctx, 2, 1u);
@@ -536,11 +539,11 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             const uint32_t candidate = pool + slot * 0x40u;
             const uint32_t command = READ32(candidate + 8u);
             if (command == 0x80000009u || command == 0x8000000au) {
-                const uint32_t requestAddress = READ32(candidate + 0x1cu);
+                const uint32_t clientAddress = READ32(candidate + 0x1cu);
                 // The original response callback clears the request object's first
                 // word after consuming it. Do not re-bridge the stale outbound
                 // packet when the runtime dispatches the response DMA locally.
-                if (requestAddress == 0u || READ32(requestAddress) == 0u) {
+                if (clientAddress == 0u || READ32(clientAddress) == 0u) {
                     continue;
                 }
                 packetAddress = candidate;
@@ -565,33 +568,62 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
 
     if (responseAddress != 0u &&
         (packetCommand == 0x80000009u || packetCommand == 0x8000000au)) {
-        const uint32_t requestAddress = READ32(packetAddress + 0x1cu);
+        const uint32_t clientAddress = READ32(packetAddress + 0x1cu);
         const uint32_t requestCommand = READ32(packetAddress + 0x20u);
-        SifStartupResponse response;
-        if (packetCommand == 0x80000009u) {
-            response = g_sifStartupResponseResolver.resolve(requestCommand);
+        const uint32_t receiveBuffer = READ32(packetAddress + 0x28u);
+        const uint32_t receiveSize = READ32(packetAddress + 0x2cu);
+        const uint32_t packetStatus = READ32(packetAddress + 0x10u);
+        const uint32_t packetSequence = READ32(packetAddress + 0x18u);
+        const uint32_t clientPacket = clientAddress != 0u ? READ32(clientAddress) : 0u;
+        const uint32_t clientSequence = clientAddress != 0u ? READ32(clientAddress + 4u) : 0u;
+
+        // The root bridge has no IOP payload provider. Do not manufacture an
+        // RPC return for a call that requests receive data: the original
+        // callback must leave the packet busy until authentic transport does.
+        if (packetCommand == 0x8000000au &&
+            !canCompleteSifRpcCallWithoutPayload(receiveBuffer, receiveSize, false)) {
+            if (g_sifDeferredPayloadDiagnosticsCount < 8u) {
+                ++g_sifDeferredPayloadDiagnosticsCount;
+                std::cerr << "[OpenRatchet:SIF] deferred data-bearing CALL packet=0x"
+                          << std::hex << packetAddress
+                          << " client=0x" << clientAddress
+                          << " request=0x" << requestCommand
+                          << " receive=0x" << receiveBuffer
+                          << " size=0x" << receiveSize
+                          << " status=0x" << packetStatus
+                          << " sequence=0x" << packetSequence
+                          << " clientPacket=0x" << clientPacket
+                          << " clientSequence=0x" << clientSequence
+                          << " busy=" << ((packetStatus & 1u) != 0u ? 1u : 0u)
+                          << std::dec << "\n";
+            }
+        } else {
+            SifStartupResponse response;
+            if (packetCommand == 0x80000009u) {
+                response = g_sifStartupResponseResolver.resolve(requestCommand);
+            }
+            const uint32_t responseWords[] = {
+                packetCommand == 0x80000009u ? 0x40u : 0x1040u,
+                packetCommand == 0x80000009u ? 0u : 0x1324c0u,
+                0x80000008u, 0u,
+                0u,
+                packetCommand == 0x80000009u ? packetAddress : 0u,
+                0u,
+                clientAddress,
+                packetCommand,
+                response.completed ? 1u : 0u,
+                response.result0,
+                response.result1,
+                0u, 0u, 0u, 0u, 0u,
+            };
+            for (uint32_t i = 0; i < sizeof(responseWords) / sizeof(responseWords[0]); ++i) {
+                WRITE32(responseAddress + i * 4u, responseWords[i]);
+            }
+            std::cerr << "[OpenRatchet:SIF] injected completion for 0x"
+                      << std::hex << packetCommand << " request=0x" << requestCommand
+                      << " result0=0x" << response.result0 << " result1=0x" << response.result1
+                      << std::dec << "\n";
         }
-        const uint32_t responseWords[] = {
-            packetCommand == 0x80000009u ? 0x40u : 0x1040u,
-            packetCommand == 0x80000009u ? 0u : 0x1324c0u,
-            0x80000008u, 0u,
-            0u,
-            packetCommand == 0x80000009u ? packetAddress : 0u,
-            0u,
-            requestAddress,
-            packetCommand,
-            response.completed ? 1u : 0u,
-            response.result0,
-            response.result1,
-            0u, 0u, 0u, 0u, 0u,
-        };
-        for (uint32_t i = 0; i < sizeof(responseWords) / sizeof(responseWords[0]); ++i) {
-            WRITE32(responseAddress + i * 4u, responseWords[i]);
-        }
-        std::cerr << "[OpenRatchet:SIF] injected completion for 0x"
-                  << std::hex << packetCommand << " request=0x" << requestCommand
-                  << " result0=0x" << response.result0 << " result1=0x" << response.result1
-                  << std::dec << "\n";
     }
 
     if (g_guest11a948Original != nullptr) {

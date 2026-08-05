@@ -77,4 +77,9 @@ if(BUILD_TESTING)
         src/sif_startup_responses.cpp)
     target_include_directories(sif_startup_responses_tests PRIVATE src)
     add_test(NAME sif_startup_responses COMMAND sif_startup_responses_tests)
+
+    add_executable(sif_rpc_transport_tests
+        tests/sif_rpc_transport_tests.cpp)
+    target_include_directories(sif_rpc_transport_tests PRIVATE src)
+    add_test(NAME sif_rpc_transport COMMAND sif_rpc_transport_tests)
 endif()

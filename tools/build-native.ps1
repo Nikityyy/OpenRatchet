@@ -2,8 +2,8 @@
 param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
     [string]$Configuration = 'Release',
-    [ValidateSet('openratchet', 'sif_startup_responses_tests')]
-    [string]$Target = 'openratchet',
+    [ValidateSet('ALL_BUILD', 'openratchet', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
+    [string]$Target = 'ALL_BUILD',
     # Use only when generated project metadata has changed and MSBuild's
     # incremental tracking has not picked up a newly added source file.
     [switch]$Rebuild
