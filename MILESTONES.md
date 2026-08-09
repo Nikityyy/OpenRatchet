@@ -205,6 +205,12 @@ M2 — First authentic native frame.
 - Native verification `native-20260809-143510` remained alive for 10.11
   seconds with 27 SIF completions, graphics activity, tick 120, and only
   `0x1751d` pending at sequence `0x19`.
+- The same reference boot next proved service `0x80000400`, function `0x01`,
+  client `0x159a00`: a zeroed `0x30`-byte request at `0x5ad00` returned `0`
+  to `0x15afc0`/`0x4`, emitted a `0x400` callback descriptor, and cleared the
+  client active word. No fifth distinct SIF pair appeared in the next 45
+  seconds. Native `native-20260809-144721` retained 27 completions, graphics
+  activity, tick 120, and the same evidence-gated `0x1751d` wait.
 
 ### Active divergence
 
@@ -226,15 +232,18 @@ this state. No reference result for request `0x1751d` is available. The latest
 dispatcher capture classified both the `0x8000091a` loop and the already
 supported `0x80000595`/function-`0x0e` call; the follow-up captured and
 implemented only `0x80000595`/function-`0x01`'s verified zero-output shape.
+The next forward reference call was the newly implemented
+`0x80000400`/function-`0x01` behavior; it occurs later than native's wait and
+therefore does not provide a result for `0x1751d`.
 
 ### Next experiment
 
-On the current paused reference boot, resume the captured callback and arm
-`0x11a948 -> 0x11ade0` only for a client/request pair other than
-`0x15b008`/`0x8000091a`, `0x132490`/`0x0e`, and `0x132490`/`0x01`. Capture
-that distinct request's send/receive buffers and response; do not repeat a
-known path or add a SIF table behavior before the new call's request and
-response are captured.
+Treat `0x1751d` as a possible native-state divergence rather than assuming a
+missing response. Map its producer through generated `FUN_00201520` and the
+root boot-WAD/CDVD bridge, then compare the corresponding loaded reference
+state. Acceptance is identifying the authentic reference request at that
+state or proving which native payload/asset transition creates the unmatched
+word before adding another SIF response.
 
 Iteration acceptance delta passed: native completed only the reference-verified
 function-`0x06` shape and advanced from sequence `0x17` without completing the
@@ -257,11 +266,12 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. Descriptor construction now has a tested SIF transport boundary,
   but packet discovery must move to the SIF transfer boundary.
-- The declarative SIF compatibility table contains only ten verified service
+- The declarative SIF compatibility table contains only eleven verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
   service `0x80000595` function `0x0e` result `2` and function `0x01`
-  (zero-output 24-byte request), and service `0x80000003`
+  (zero-output 24-byte request), service `0x80000400` function `0x01`
+  (`0x30`-byte zero request -> `0`), and service `0x80000003`
   functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`), and
   service `0x80000006` function `0xff` result `0x30343532` and function `0x06`
   (`0x53300 -> {0x19, 0}`). The request-sensitive calls require the captured
@@ -412,6 +422,7 @@ python .\tools\pcsx2_sif_capture.py <manifest.json> --capture-only `
 | 2026-08-05 | Startup SIF characterization and function `0x04` | One PINE/DebugServer boot proved service `0x80000593`, function `0x04` writes `{0}` to `0x1324c0`; native completed it, reached 22 completions, and deferred the new client `0x158040` shape | Iteration delta passed; M2 not passed |
 | 2026-08-05 | Request-sensitive SIF service `0x80000003` | PCSX2 proved `0x1999 -> 0x53300` for function `1` and `0x53300 -> 0` for function `2`; native matched the DMA-captured request and advanced to client `0x158400` function `0xff` | Iteration delta passed; M2 not passed |
 | 2026-08-05 | Batched capture and structured RPC diagnostics | Live DebugServer smoke produced and cleaned an ordered JSON capture; native run `165344` exposed service `0x80000006` and the complete deferred request in one record; build and 3 tests passed | Tooling delta passed; M2 unchanged |
+| 2026-08-09 | Forward SIF characterization | PCSX2 proved service `0x80000400` function `1` returns `0`; native run `144721` passed with 27 completions and still deferred only `0x1751d` | New service delta passed; `0x1751d` response remains unproven; M2 not passed |
 
 ## Handoff format
 

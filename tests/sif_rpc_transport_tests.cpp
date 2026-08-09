@@ -171,6 +171,19 @@ int main() {
     test.expect(!transport.resolveCall(0x132490u, 0x01u, 0u, 0u, 0x41bd0u, 0x14u).completed,
                 "zero-receive service call rejects a mismatched outbound length");
 
+    transport.recordBinding(0x159a00u, 0x80000400u);
+    transport.recordOutboundPayload(0x5ad00u, 0x30u, {0u, 0u, 0u, 0u});
+    call = transport.resolveCall(0x159a00u, 0x01u, 0x15afc0u, 0x04u,
+                                 0x5ad00u, 0x30u);
+    test.expect(call.completed && call.serviceId == 0x80000400u &&
+                    call.payloadSize == 0x04u && call.payloadWords[0] == 0u &&
+                    call.requestPayloadAvailable && call.requestPayloadSize == 0x30u,
+                "captured service 0x80000400 function 1 returns its zero result");
+    transport.recordOutboundPayload(0x5ad00u, 0x30u, {1u, 0u, 0u, 0u});
+    test.expect(!transport.resolveCall(0x159a00u, 0x01u, 0x15afc0u, 0x04u,
+                                      0x5ad00u, 0x30u).completed,
+                "service 0x80000400 function 1 rejects an uncaptured request word");
+
     transport.recordBinding(0x158400u, 0x80000006u);
     call = transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x4u);
     test.expect(call.completed && call.serviceId == 0x80000006u &&
