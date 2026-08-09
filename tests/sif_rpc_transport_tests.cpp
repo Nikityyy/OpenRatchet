@@ -35,22 +35,35 @@ int main() {
 
     uint32_t completionSizeWord = 0u;
     test.expect(ratchet::makeSifRpcCompletionSizeWord(0x10u, completionSizeWord) &&
-                    completionSizeWord == 0x1040u,
-                "16-byte payload produces the observed SIF completion size word");
+                    completionSizeWord == 0x1000u,
+                "16-byte CALL payload produces the reference size word without a BIND flag");
+    test.expect(ratchet::makeSifRpcCompletionSizeWord(0x400u, completionSizeWord) &&
+                    completionSizeWord == 0x40000u,
+                "0x400-byte CALL payload matches the repeated IOP-loop descriptor");
     test.expect(!ratchet::makeSifRpcCompletionSizeWord(0x01000000u, completionSizeWord),
                 "payload size that cannot fit the SIF header is rejected");
 
     const auto callResponsePacket = ratchet::makeSifRpcResponsePacket(
-        0x8u, 0x158200u, 0x8000000au, 0x20155000u, 0x158400u,
+        0x4u, 0x131340u, 0x8000000au, 0x20155000u, 0x132490u,
         true, 0xdeadbeefu, 0xcafebabeu);
-    test.expect(callResponsePacket[0] == 0x840u &&
-                    callResponsePacket[1] == 0x158200u &&
+    test.expect(callResponsePacket[0] == 0x400u &&
+                    callResponsePacket[1] == 0x131340u &&
                     callResponsePacket[2] == 0x80000008u &&
-                    callResponsePacket[7] == 0x158400u &&
+                    callResponsePacket[7] == 0x132490u &&
                     callResponsePacket[8] == 0x8000000au &&
                     callResponsePacket[9] == 0u &&
                     callResponsePacket[10] == 0u && callResponsePacket[11] == 0u,
-                "CALL response uses the captured descriptor layout and callback-owned completion");
+                "CALL response matches the captured descriptor layout and callback-owned completion");
+
+    const auto callIngressPacket = ratchet::makeSifRpcIngressPacket(
+        0x4u, 0x131340u, 0x8000000au, 0x20155000u, 0x132490u,
+        true, 0xdeadbeefu, 0xcafebabeu);
+    test.expect(callIngressPacket[0] == 0x40u &&
+                    callIngressPacket[1] == callResponsePacket[1] &&
+                    callIngressPacket[2] == callResponsePacket[2] &&
+                    callIngressPacket[7] == callResponsePacket[7] &&
+                    callIngressPacket[8] == callResponsePacket[8],
+                "native bridge ingress retains the command receiver's 64-byte envelope");
 
     const auto bindResponsePacket = ratchet::makeSifRpcResponsePacket(
         0u, 0u, 0x80000009u, 0x20155000u, 0x158040u,

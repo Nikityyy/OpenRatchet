@@ -183,11 +183,19 @@ M2 — First authentic native frame.
   client `0x15b008`, command `0x8000000a`, request `0x8000091a`, send
   `0x60f38`/`0x400`, receive `0x15b080`/`0x400`. The response descriptor at
   `0x81f30` has a zero word 9 and is consumed through the callback.
-- Native response-descriptor construction now lives in the tested
-  `SifRpcTransport` boundary rather than the `guest_11a948` hook. Release
-  build and `sif_rpc_transport` test passed; native verification
-  `native-20260809-133727` remained alive for 10.18 seconds with 27 SIF
-  completions and deferred only the known `0x1751d` request at sequence `0x19`.
+- The sequence-gated capture
+  `sif-next-distinct-response-capture.json` observed `0x3139c5 -> 0x3139c8`,
+  but the same client, request, send/receive buffers, and response descriptor.
+  It classifies that transition as an IOP-loop repeat, not a new SIF behavior.
+- A bounded MCP-only capture then reached the already mapped client `0x132490`,
+  service `0x80000595`, function `0x0e`: receive `0x131340`/`0x4` became `2`;
+  both the response ring and callback argument carried `0x400`, not `0x440`.
+  That is a post-DMA callback descriptor. Generated `0x11a948` instead needs
+  a `0x40` direct-ingress envelope to copy its 64-byte command.
+- `SifRpcTransport` now tests those distinct descriptor and ingress layouts;
+  native verification `native-20260809-142345` remained alive for 10.12
+  seconds with 27 SIF completions, graphics activity, and only the known
+  `0x1751d` request pending at sequence `0x19`.
 
 ### Active divergence
 
@@ -205,15 +213,18 @@ function-`0x01` callsite. The response word at offset `0x24` can validly be
 zero: reference dispatch instead invokes `0x11ade0`, which signals the client
 and clears its active packet. Therefore no missing completion-bit producer
 exists, and `0x11c914` remains unproven as a forward-reachable callsite from
-this state. No reference result for request `0x1751d` is available.
+this state. No reference result for request `0x1751d` is available. The latest
+dispatcher capture classified both the `0x8000091a` loop and the already
+supported `0x80000595`/function-`0x0e` call without producing a new service
+behavior.
 
 ### Next experiment
 
 On the current paused reference boot, resume the captured callback and arm
-`0x11a948 -> 0x11ade0` only when packet sequence at `0x20155018` changes from
-`0x3139c5`. Capture that distinct request's send/receive buffers and response;
-do not repeat the known `0x8000091a` response or add a SIF table behavior
-before the new call's request and response are captured.
+`0x11a948 -> 0x11ade0` only for a client/request pair other than
+`0x15b008`/`0x8000091a` and `0x132490`/`0x0e`. Capture that distinct request's
+send/receive buffers and response; do not repeat either known path or add a
+SIF table behavior before the new call's request and response are captured.
 
 Iteration acceptance delta passed: native completed only the reference-verified
 function-`0x06` shape and advanced from sequence `0x17` without completing the
@@ -221,9 +232,12 @@ new unsupported function-`0x01` request. M1 remains passed; M2 remains
 unpassed because guest VRAM/frame presentation is still absent. This iteration
 also passed its evidence delta: the reference response dispatcher cleared an
 active client packet only after `0x11ade0` processed its `0x80000008` response.
-The current code acceptance delta passed: native response descriptors use the
-captured CALL layout through `SifRpcTransport` and the known startup chain
-still reaches only the evidence-gated sequence-`0x19` request.
+The follow-up evidence delta also passed: a changed response sequence alone was
+classified as the same request, preventing a duplicate SIF implementation.
+The current code acceptance delta passed: `SifRpcTransport` distinguishes the
+captured CALL descriptor from the generated receiver's direct-ingress envelope,
+and the known startup chain still reaches only the evidence-gated
+sequence-`0x19` request.
 
 ### Known temporary debt
 

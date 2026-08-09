@@ -78,7 +78,10 @@ inline bool makeSifRpcCompletionSizeWord(uint32_t payloadSize, uint32_t& word) {
     if (payloadSize > 0x00ffffffu) {
         return false;
     }
-    word = (payloadSize << 8u) | 0x40u;
+    // PCSX2 callback captures encode CALL payload length in bits 8..31 only:
+    // 4 bytes -> 0x400 and 0x400 bytes -> 0x40000. The 0x40 control header
+    // belongs to a zero-payload BIND descriptor, not to a CALL completion.
+    word = payloadSize << 8u;
     return true;
 }
 
@@ -96,12 +99,12 @@ inline std::array<uint32_t, 17> makeSifRpcResponsePacket(
     bool bindCompleted,
     uint32_t bindResult0,
     uint32_t bindResult1) {
-    uint32_t sizeWord = 0x40u;
-    if (!makeSifRpcCompletionSizeWord(payloadSize, sizeWord)) {
-        sizeWord = 0x40u;
+    const bool isBind = packetCommand == 0x80000009u;
+    uint32_t sizeWord = isBind ? 0x40u : 0u;
+    if (!isBind && !makeSifRpcCompletionSizeWord(payloadSize, sizeWord)) {
+        sizeWord = 0u;
     }
 
-    const bool isBind = packetCommand == 0x80000009u;
     return {
         sizeWord,
         payloadSize != 0u ? receiveBuffer : 0u,
@@ -117,6 +120,27 @@ inline std::array<uint32_t, 17> makeSifRpcResponsePacket(
         isBind ? bindResult1 : 0u,
         0u, 0u, 0u, 0u, 0u,
     };
+}
+
+// The root bridge writes directly into the queue consumed by generated
+// FUN_0011a948. That queue's low byte is a 16-byte packet count, so the
+// 64-byte ingress packet must retain 0x40 even though the later callback
+// descriptor encodes a CALL payload as size << 8. Native IOP/DMA ownership
+// should remove this representation boundary.
+inline std::array<uint32_t, 17> makeSifRpcIngressPacket(
+    uint32_t payloadSize,
+    uint32_t receiveBuffer,
+    uint32_t packetCommand,
+    uint32_t requestPacket,
+    uint32_t clientAddress,
+    bool bindCompleted,
+    uint32_t bindResult0,
+    uint32_t bindResult1) {
+    auto packet = makeSifRpcResponsePacket(
+        payloadSize, receiveBuffer, packetCommand, requestPacket, clientAddress,
+        bindCompleted, bindResult0, bindResult1);
+    packet[0] = 0x40u;
+    return packet;
 }
 
 }  // namespace ratchet

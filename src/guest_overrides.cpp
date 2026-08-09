@@ -709,7 +709,7 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
             }
             const uint32_t completionPayloadSize =
                 packetCommand == 0x8000000au ? callResponse.payloadSize : 0u;
-            const auto responseWords = makeSifRpcResponsePacket(
+            const auto responseWords = makeSifRpcIngressPacket(
                 completionPayloadSize, receiveBuffer, packetCommand, packetAddress,
                 clientAddress, response.completed, response.result0, response.result1);
             for (uint32_t i = 0; i < responseWords.size(); ++i) {
