@@ -55,7 +55,7 @@ public:
                                   uint32_t receiveBuffer,
                                   uint32_t receiveSize,
                                   uint32_t remoteSendBuffer = 0u,
-                                  uint32_t sendSize = 0u) const;
+                                  uint32_t sendSize = 0u);
     void reset();
 
 private:
@@ -72,6 +72,8 @@ private:
 
     std::array<Binding, 16> bindings_{};
     std::array<OutboundPayload, 32> outboundPayloads_{};
+    uint32_t iopHeapActiveAddress_ = 0u;
+    uint32_t iopHeapActiveSize_ = 0u;
 };
 
 inline bool makeSifRpcCompletionSizeWord(uint32_t payloadSize, uint32_t& word) {

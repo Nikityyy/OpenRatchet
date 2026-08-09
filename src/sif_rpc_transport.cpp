@@ -19,7 +19,7 @@ struct VerifiedCallBehavior {
 // 0x121304; startup service calls at EE 0x1213f8, 0x120be4, and 0x12167c.
 // Native IOP execution should eventually replace this table by supplying the
 // responses.
-constexpr std::array<VerifiedCallBehavior, 11> kVerifiedCallBehaviors{{
+constexpr std::array<VerifiedCallBehavior, 9> kVerifiedCallBehaviors{{
     {0x80000592u, 0x00u, 0x10u, 0u, false, 0u, {1u, 0x21du, 0x21du, 0u}},
     {0x8000059au, 0x00u, 0x04u, 0u, false, 0u, {2u, 0u, 0u, 0u}},
     {0x80000593u, 0x22u, 0x04u, 0u, false, 0u, {1u, 0u, 0u, 0u}},
@@ -39,9 +39,15 @@ constexpr std::array<VerifiedCallBehavior, 11> kVerifiedCallBehaviors{{
     // PCSX2 startup capture at EE 0x11cd2c: a 0x200-byte request transported
     // to the bound remote buffer begins with 0x53300 and returns {0x19, 0}.
     {0x80000006u, 0x06u, 0x08u, 0x200u, true, 0x53300u, {0x19u, 0u, 0u, 0u}},
-    {0x80000003u, 0x01u, 0x04u, 0x04u, true, 0x1999u, {0x53300u, 0u, 0u, 0u}},
-    {0x80000003u, 0x02u, 0x04u, 0x04u, true, 0x53300u, {0u, 0u, 0u, 0u}},
 }};
+
+// Generated FUN_0011c8c8 and FUN_0011c938 are the EE wrappers for the
+// IOP Heap_lib allocation/free RPC service 0x80000003. PCSX2 proved the first
+// allocation returns this base and that function 2 frees the returned pointer.
+// The startup path has one live allocation at a time, so reuse the verified
+// base only after its matching free. Replace this conservative model when
+// native IOP/Heap_lib execution owns the service.
+constexpr uint32_t kVerifiedIopHeapBase = 0x00053300u;
 }  // namespace
 
 const char* sifRpcCallDispositionName(SifRpcCallDisposition disposition) {
@@ -114,7 +120,7 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
                                                 uint32_t receiveBuffer,
                                                 uint32_t receiveSize,
                                                 uint32_t remoteSendBuffer,
-                                                uint32_t sendSize) const {
+                                                uint32_t sendSize) {
     SifRpcCallResponse response;
     for (const Binding& binding : bindings_) {
         if (binding.clientAddress == clientAddress) {
@@ -132,6 +138,59 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
     }
 
     response.disposition = SifRpcCallDisposition::UnsupportedShape;
+    if (response.serviceId == 0x80000003u && (function == 1u || function == 2u)) {
+        if (receiveSize != 4u) {
+            return response;
+        }
+        if (sendSize != 4u) {
+            response.disposition = SifRpcCallDisposition::RequestSizeMismatch;
+            return response;
+        }
+
+        const OutboundPayload* outboundPayload = nullptr;
+        for (const OutboundPayload& payload : outboundPayloads_) {
+            if (payload.remoteAddress == remoteSendBuffer) {
+                outboundPayload = &payload;
+                break;
+            }
+        }
+        if (outboundPayload == nullptr) {
+            response.disposition = SifRpcCallDisposition::RequestPayloadMissing;
+            return response;
+        }
+
+        response.requestPayloadAvailable = true;
+        response.requestPayloadSize = outboundPayload->size;
+        response.requestPayloadWords = outboundPayload->payloadWords;
+        if (outboundPayload->size != sendSize) {
+            response.disposition = SifRpcCallDisposition::RequestSizeMismatch;
+            return response;
+        }
+
+        const uint32_t requestWord = outboundPayload->payloadWords[0];
+        if (function == 1u) {
+            if (requestWord == 0u || iopHeapActiveAddress_ != 0u) {
+                return response;
+            }
+            iopHeapActiveAddress_ = kVerifiedIopHeapBase;
+            iopHeapActiveSize_ = requestWord;
+            response.payloadWords[0] = iopHeapActiveAddress_;
+        } else {
+            if (requestWord == 0u || requestWord != iopHeapActiveAddress_) {
+                response.disposition = SifRpcCallDisposition::RequestPayloadMismatch;
+                return response;
+            }
+            iopHeapActiveAddress_ = 0u;
+            iopHeapActiveSize_ = 0u;
+            response.payloadWords[0] = 0u;
+        }
+
+        response.completed = true;
+        response.payloadSize = 4u;
+        response.disposition = SifRpcCallDisposition::Completed;
+        return response;
+    }
+
     for (const VerifiedCallBehavior& behavior : kVerifiedCallBehaviors) {
         if (behavior.serviceId != response.serviceId || behavior.function != function ||
             behavior.receiveSize != receiveSize) {
@@ -191,6 +250,8 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
 void SifRpcTransport::reset() {
     bindings_ = {};
     outboundPayloads_ = {};
+    iopHeapActiveAddress_ = 0u;
+    iopHeapActiveSize_ = 0u;
 }
 
 }  // namespace ratchet

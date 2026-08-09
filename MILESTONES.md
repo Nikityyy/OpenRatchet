@@ -214,49 +214,30 @@ M2 — First authentic native frame.
 
 ### Active divergence
 
-The next authentic busy packet is service `0x80000003`, function `0x01`, from
-generated callsite `0x11c914`: remote send `0x4f848`/`0x4`, receive
-`0x158080`/`0x4`, request word `0x1751d`, and sequence `0x19`.
-`FUN_00201520` forwards that payload unchanged through `FUN_0011c8c8`.
-It remains pending. The throttled helper armed the complete `0x11c914` /
-`0x11c91c` pair after verified PINE and DebugServer handshakes, then a fresh
-PCSX2 boot ran for its full 120-second capture window without reaching either
-target; DebugServer remained alive and running at `0x12de80`. The helper-owned
-breakpoints were removed. Generated output and the subsequent capture prove
-`0x12de80` is `FUN_0012de70`, a SIF completion poll over `0x15ebc0`, not the
-function-`0x01` callsite. The response word at offset `0x24` can validly be
-zero: reference dispatch instead invokes `0x11ade0`, which signals the client
-and clears its active packet. Therefore no missing completion-bit producer
-exists, and `0x11c914` remains unproven as a forward-reachable callsite from
-this state. No reference result for request `0x1751d` is available. The latest
-dispatcher capture classified both the `0x8000091a` loop and the already
-supported `0x80000595`/function-`0x0e` call; the follow-up captured and
-implemented only `0x80000595`/function-`0x01`'s verified zero-output shape.
-The next forward reference call was the newly implemented
-`0x80000400`/function-`0x01` behavior; it occurs later than native's wait and
-therefore does not provide a result for `0x1751d`.
+Generated `sub_00201520` proved `0x1751d` is an IOP heap allocation size: it
+calls service `0x80000003` function `1`, DMAs that many bytes to the returned
+address, waits, then calls function `2` to free it. PCSX2 exposed `Heap_lib`,
+and the previously captured `0x1999 -> 0x53300` allocation/free sequence fixes
+the allocator base and lifecycle. Replacing the request-specific rows with a
+one-live-block allocator advanced native from sequence `0x19` to `0x37`.
+
+The new busy packet is client `0x15b008`, bound service `0x80000900`, function
+`0x80000963`: send `0x60f38`/`0x400`, receive `0x15b080`/`0x400`, status `5`,
+sequence `0x37`. No response payload or transition for this function has been
+captured, so it remains pending.
 
 ### Next experiment
 
-Treat `0x1751d` as a possible native-state divergence rather than assuming a
-missing response. Map its producer through generated `FUN_00201520` and the
-root boot-WAD/CDVD bridge, then compare the corresponding loaded reference
-state. Acceptance is identifying the authentic reference request at that
-state or proving which native payload/asset transition creates the unmatched
-word before adding another SIF response.
+On the current paused reference boot, arm `0x11a948 -> 0x11ade0` for client
+`0x15b008`, function `0x80000963`. Capture the complete `0x400`-byte request,
+receive buffer before/after, callback descriptor, packet status, and client
+clear transition. Do not reuse the known `0x8000091a` response for this new
+function.
 
-Iteration acceptance delta passed: native completed only the reference-verified
-function-`0x06` shape and advanced from sequence `0x17` without completing the
-new unsupported function-`0x01` request. M1 remains passed; M2 remains
-unpassed because guest VRAM/frame presentation is still absent. This iteration
-also passed its evidence delta: the reference response dispatcher cleared an
-active client packet only after `0x11ade0` processed its `0x80000008` response.
-The follow-up evidence delta also passed: a changed response sequence alone was
-classified as the same request, preventing a duplicate SIF implementation.
-The current code acceptance delta passed: `SifRpcTransport` distinguishes the
-captured CALL descriptor from the generated receiver's direct-ingress envelope,
-completes only the captured zero-output service shape, and the known startup
-chain still reaches only the evidence-gated sequence-`0x19` request.
+Iteration acceptance delta passed: `native-20260809-145217` remained alive for
+10.23 seconds, increased from 27 to 57 SIF completions, advanced `0x19 -> 0x37`,
+and retained graphics activity at tick 120. M1 remains passed; M2 remains
+unpassed because guest VRAM is still zero and no authentic frame is presented.
 
 ### Known temporary debt
 
@@ -266,13 +247,13 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. Descriptor construction now has a tested SIF transport boundary,
   but packet discovery must move to the SIF transfer boundary.
-- The declarative SIF compatibility table contains only eleven verified service
+- The SIF compatibility layer contains only eleven verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
   service `0x80000595` function `0x0e` result `2` and function `0x01`
   (zero-output 24-byte request), service `0x80000400` function `0x01`
-  (`0x30`-byte zero request -> `0`), and service `0x80000003`
-  functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`), and
+  (`0x30`-byte zero request -> `0`), and stateful service `0x80000003`
+  allocation/free with one verified live block at `0x53300`, and
   service `0x80000006` function `0xff` result `0x30343532` and function `0x06`
   (`0x53300 -> {0x19, 0}`). The request-sensitive calls require the captured
   EE-to-IOP DMA word associated with the packet's remote send buffer.
@@ -423,6 +404,7 @@ python .\tools\pcsx2_sif_capture.py <manifest.json> --capture-only `
 | 2026-08-05 | Request-sensitive SIF service `0x80000003` | PCSX2 proved `0x1999 -> 0x53300` for function `1` and `0x53300 -> 0` for function `2`; native matched the DMA-captured request and advanced to client `0x158400` function `0xff` | Iteration delta passed; M2 not passed |
 | 2026-08-05 | Batched capture and structured RPC diagnostics | Live DebugServer smoke produced and cleaned an ordered JSON capture; native run `165344` exposed service `0x80000006` and the complete deferred request in one record; build and 3 tests passed | Tooling delta passed; M2 unchanged |
 | 2026-08-09 | Forward SIF characterization | PCSX2 proved service `0x80000400` function `1` returns `0`; native run `144721` passed with 27 completions and still deferred only `0x1751d` | New service delta passed; `0x1751d` response remains unproven; M2 not passed |
+| 2026-08-09 | Stateful IOP heap RPC | Generated alloc/DMA/free flow plus PCSX2 `Heap_lib` evidence replaced fixed request rows; native run `145217` advanced `0x19 -> 0x37` with 57 completions | Allocator delta passed; new `0x80000963` response required; M2 not passed |
 
 ## Handoff format
 

@@ -240,13 +240,19 @@ int main() {
                                  0x4f848u, 0x4u);
     test.expect(!call.completed && call.requestPayloadAvailable &&
                     call.requestPayloadWords[0] == 0x1234u &&
-                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch,
-                "payload-dependent service call reports the mismatched request word");
+                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape,
+                "IOP heap service leaves a concurrent allocation pending");
     transport.recordOutboundPayload(0x4f848u, 0x4u, {0x53300u, 0u, 0u, 0u});
     call = transport.resolveCall(0x158040u, 2u, 0x158080u, 0x4u,
                                  0x4f848u, 0x4u);
     test.expect(call.completed && call.payloadSize == 0x4u && call.payloadWords[0] == 0u,
                 "service 0x80000003 function 2 matches the chained reference request word");
+    transport.recordOutboundPayload(0x4f848u, 0x4u, {0x1751du, 0u, 0u, 0u});
+    call = transport.resolveCall(0x158040u, 1u, 0x158080u, 0x4u,
+                                 0x4f848u, 0x4u);
+    test.expect(call.completed && call.payloadWords[0] == 0x53300u &&
+                    call.requestPayloadWords[0] == 0x1751du,
+                "IOP heap service reuses the verified base after the matching free");
 
     transport.reset();
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u).completed,
