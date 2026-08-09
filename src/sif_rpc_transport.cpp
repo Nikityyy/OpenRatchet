@@ -137,6 +137,22 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
         return response;
     }
 
+    // Request capture is transport evidence, independent of whether service
+    // semantics are implemented. Keep it available on unsupported calls so a
+    // new RPC shape can be characterized without completing it speculatively.
+    const OutboundPayload* outboundPayload = nullptr;
+    if (remoteSendBuffer != 0u) {
+        for (const OutboundPayload& payload : outboundPayloads_) {
+            if (payload.remoteAddress == remoteSendBuffer) {
+                outboundPayload = &payload;
+                response.requestPayloadAvailable = true;
+                response.requestPayloadSize = payload.size;
+                response.requestPayloadWords = payload.payloadWords;
+                break;
+            }
+        }
+    }
+
     response.disposition = SifRpcCallDisposition::UnsupportedShape;
     if (response.serviceId == 0x80000003u && (function == 1u || function == 2u)) {
         if (receiveSize != 4u) {
@@ -147,21 +163,11 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
             return response;
         }
 
-        const OutboundPayload* outboundPayload = nullptr;
-        for (const OutboundPayload& payload : outboundPayloads_) {
-            if (payload.remoteAddress == remoteSendBuffer) {
-                outboundPayload = &payload;
-                break;
-            }
-        }
         if (outboundPayload == nullptr) {
             response.disposition = SifRpcCallDisposition::RequestPayloadMissing;
             return response;
         }
 
-        response.requestPayloadAvailable = true;
-        response.requestPayloadSize = outboundPayload->size;
-        response.requestPayloadWords = outboundPayload->payloadWords;
         if (outboundPayload->size != sendSize) {
             response.disposition = SifRpcCallDisposition::RequestSizeMismatch;
             return response;
@@ -210,21 +216,11 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
             continue;
         }
 
-        const OutboundPayload* outboundPayload = nullptr;
-        for (const OutboundPayload& payload : outboundPayloads_) {
-            if (payload.remoteAddress == remoteSendBuffer) {
-                outboundPayload = &payload;
-                break;
-            }
-        }
         if (outboundPayload == nullptr) {
             response.disposition = SifRpcCallDisposition::RequestPayloadMissing;
             continue;
         }
 
-        response.requestPayloadAvailable = true;
-        response.requestPayloadSize = outboundPayload->size;
-        response.requestPayloadWords = outboundPayload->payloadWords;
         if (outboundPayload->size != sendSize) {
             response.disposition = SifRpcCallDisposition::RequestSizeMismatch;
             continue;

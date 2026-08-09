@@ -211,6 +211,14 @@ M2 — First authentic native frame.
   client active word. No fifth distinct SIF pair appeared in the next 45
   seconds. Native `native-20260809-144721` retained 27 completions, graphics
   activity, tick 120, and the same evidence-gated `0x1751d` wait.
+- The current reference boot did not execute the exact client `0x15b008`,
+  function `0x80000963` condition in 55 seconds; PCSX2 remained healthy and
+  the two temporary receiver/callback breakpoints were cleared.
+- Native verification `native-20260809-152941` proved the stalled call's
+  outbound DMA is retained as a `0x400`-byte request whose captured first four
+  words are zero. The transport now exposes those words for unsupported calls
+  without completing them; 57 prior completions and graphics activity were
+  unchanged.
 
 ### Active divergence
 
@@ -223,21 +231,25 @@ one-live-block allocator advanced native from sequence `0x19` to `0x37`.
 
 The new busy packet is client `0x15b008`, bound service `0x80000900`, function
 `0x80000963`: send `0x60f38`/`0x400`, receive `0x15b080`/`0x400`, status `5`,
-sequence `0x37`. No response payload or transition for this function has been
-captured, so it remains pending.
+sequence `0x37`. Native proves the request size and its first four zero words;
+the remaining request bytes are not yet captured. The current reference state
+did not reach the condition, and no response payload or callback transition
+has been captured, so the call correctly remains pending.
 
 ### Next experiment
 
-On the current paused reference boot, arm `0x11a948 -> 0x11ade0` for client
-`0x15b008`, function `0x80000963`. Capture the complete `0x400`-byte request,
-receive buffer before/after, callback descriptor, packet status, and client
-clear transition. Do not reuse the known `0x8000091a` response for this new
-function.
+The current reference state is incompatible with the target. After verifying
+both MCP handshakes, arm the producer callsite plus `0x11a948 -> 0x11ade0` for
+client `0x15b008`, function `0x80000963`, then perform one preserved-breakpoint
+reset. Capture the complete `0x400`-byte request, receive buffer before/after,
+callback descriptor, packet status, and client clear transition in that one
+boot. Do not reuse the known `0x8000091a` response.
 
-Iteration acceptance delta passed: `native-20260809-145217` remained alive for
-10.23 seconds, increased from 27 to 57 SIF completions, advanced `0x19 -> 0x37`,
-and retained graphics activity at tick 120. M1 remains passed; M2 remains
-unpassed because guest VRAM is still zero and no authentic frame is presented.
+Iteration acceptance delta passed: `native-20260809-152941` remained alive for
+10.11 seconds, retained 57 SIF completions, and changed the target request from
+unavailable to `requestPayloadAvailable=1`, size `0x400`, words `{0,0,0,0}`.
+M1 remains passed; M2 remains unpassed because guest VRAM is still zero and no
+authentic frame is presented.
 
 ### Known temporary debt
 
@@ -405,6 +417,7 @@ python .\tools\pcsx2_sif_capture.py <manifest.json> --capture-only `
 | 2026-08-05 | Batched capture and structured RPC diagnostics | Live DebugServer smoke produced and cleaned an ordered JSON capture; native run `165344` exposed service `0x80000006` and the complete deferred request in one record; build and 3 tests passed | Tooling delta passed; M2 unchanged |
 | 2026-08-09 | Forward SIF characterization | PCSX2 proved service `0x80000400` function `1` returns `0`; native run `144721` passed with 27 completions and still deferred only `0x1751d` | New service delta passed; `0x1751d` response remains unproven; M2 not passed |
 | 2026-08-09 | Stateful IOP heap RPC | Generated alloc/DMA/free flow plus PCSX2 `Heap_lib` evidence replaced fixed request rows; native run `145217` advanced `0x19 -> 0x37` with 57 completions | Allocator delta passed; new `0x80000963` response required; M2 not passed |
+| 2026-08-09 | Unsupported RPC request evidence | Shared routing now retains request metadata before service matching; native run `152941` proved the `0x80000963` request is 0x400 bytes and begins with four zero words | Evidence delta passed; reference response still required; M2 not passed |
 
 ## Handoff format
 

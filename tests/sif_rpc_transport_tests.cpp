@@ -188,7 +188,8 @@ int main() {
     call = transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x4u);
     test.expect(call.completed && call.serviceId == 0x80000006u &&
                     call.payloadSize == 0x4u && call.payloadWords[0] == 0x30343532u &&
-                    call.disposition == ratchet::SifRpcCallDisposition::Completed,
+                    call.disposition == ratchet::SifRpcCallDisposition::Completed &&
+                    !call.requestPayloadAvailable,
                 "service 0x80000006 function 0xff returns the captured four-byte result");
     test.expect(!transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x10u).completed,
                 "service 0x80000006 function 0xff rejects a mismatched receive size");
@@ -253,6 +254,18 @@ int main() {
     test.expect(call.completed && call.payloadWords[0] == 0x53300u &&
                     call.requestPayloadWords[0] == 0x1751du,
                 "IOP heap service reuses the verified base after the matching free");
+
+    transport.recordBinding(0x15b008u, 0x80000900u);
+    transport.recordOutboundPayload(0x60f38u, 0x400u,
+                                    {0x80000963u, 0x11223344u, 0x55667788u, 0x99aabbccu});
+    call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
+                                 0x60f38u, 0x400u);
+    test.expect(!call.completed && call.serviceId == 0x80000900u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape &&
+                    call.requestPayloadAvailable && call.requestPayloadSize == 0x400u &&
+                    call.requestPayloadWords[0] == 0x80000963u &&
+                    call.requestPayloadWords[3] == 0x99aabbccu,
+                "unsupported service retains captured request evidence");
 
     transport.reset();
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u).completed,
