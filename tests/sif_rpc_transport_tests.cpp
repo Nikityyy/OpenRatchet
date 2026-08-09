@@ -22,10 +22,10 @@ struct TestContext {
 int main() {
     TestContext test;
 
-    test.expect(ratchet::canCompleteSifRpcCallWithoutPayload(0x133100u, 0u, false),
-                "zero receive size completes without payload and with a buffer");
-    test.expect(ratchet::canCompleteSifRpcCallWithoutPayload(0u, 0u, false),
-                "zero receive size completes without payload and without a buffer");
+    test.expect(!ratchet::canCompleteSifRpcCallWithoutPayload(0x133100u, 0u, false),
+                "unverified zero receive size remains pending with a buffer");
+    test.expect(ratchet::canCompleteSifRpcCallWithoutPayload(0u, 0u, true),
+                "verified zero receive size completes without a buffer");
     test.expect(!ratchet::canCompleteSifRpcCallWithoutPayload(0x133100u, 0x0cu, false),
                 "nonzero receive size defers without payload");
     test.expect(!ratchet::canCompleteSifRpcCallWithoutPayload(0u, 0x0cu, true),
@@ -158,6 +158,18 @@ int main() {
                 "mismatched startup service 0x80000595 receive size remains pending");
     test.expect(!transport.resolveCall(0x132490u, 0x0eu, 0u, 0x4u).completed,
                 "missing startup service 0x80000595 receive buffer remains pending");
+    transport.recordOutboundPayload(0x41bd0u, 0x18u, {0u, 0u, 0u, 0u});
+    call = transport.resolveCall(0x132490u, 0x01u, 0u, 0u, 0x41bd0u, 0x18u);
+    test.expect(call.completed && call.serviceId == 0x80000595u &&
+                    call.payloadSize == 0u && call.requestPayloadAvailable &&
+                    call.requestPayloadSize == 0x18u &&
+                    call.disposition == ratchet::SifRpcCallDisposition::Completed,
+                "captured zero-receive service call completes only after its request matches");
+    transport.recordOutboundPayload(0x41bd0u, 0x18u, {1u, 0u, 0u, 0u});
+    test.expect(transport.resolveCall(0x132490u, 0x01u, 0u, 0u, 0x41bd0u, 0x18u).completed,
+                "verified zero-receive service call accepts its runtime-owned request contents");
+    test.expect(!transport.resolveCall(0x132490u, 0x01u, 0u, 0u, 0x41bd0u, 0x14u).completed,
+                "zero-receive service call rejects a mismatched outbound length");
 
     transport.recordBinding(0x158400u, 0x80000006u);
     call = transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x4u);

@@ -18,16 +18,16 @@ enum class SifRpcCallDisposition {
 
 const char* sifRpcCallDispositionName(SifRpcCallDisposition disposition);
 
-// A synthetic RPC completion with no payload is only valid for calls that do
-// not request receive data. A real transport can complete data-bearing calls
-// once it has both the payload and a destination buffer.
+// A synthetic RPC completion is valid only after the transport matched a
+// verified call shape. Zero-size receives still need that proof; otherwise an
+// unsupported no-output call must remain pending.
 inline bool canCompleteSifRpcCallWithoutPayload(uint32_t receiveBuffer,
                                                 uint32_t receiveSize,
-                                                bool payloadAvailable) {
+                                                bool responseVerified) {
     if (receiveSize == 0u) {
-        return true;
+        return responseVerified;
     }
-    return payloadAvailable && receiveBuffer != 0u;
+    return responseVerified && receiveBuffer != 0u;
 }
 
 struct SifRpcCallResponse {

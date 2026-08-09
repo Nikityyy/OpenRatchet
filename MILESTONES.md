@@ -196,6 +196,15 @@ M2 — First authentic native frame.
   native verification `native-20260809-142345` remained alive for 10.12
   seconds with 27 SIF completions, graphics activity, and only the known
   `0x1751d` request pending at sequence `0x19`.
+- Bounded MCP-only capture proved another `0x80000595` call: client `0x132490`,
+  function `0x01`, send `0x41bd0`/`0x18`, zero receive. Its 24-byte reference
+  request was zeroed, its callback descriptor had zero payload, and the
+  callback cleared `0x20155000 -> 0` for that client. Native owns different
+  request words for the same service/function/length, so only that no-output
+  shape is completed; other zero-receive calls now remain pending.
+- Native verification `native-20260809-143510` remained alive for 10.11
+  seconds with 27 SIF completions, graphics activity, tick 120, and only
+  `0x1751d` pending at sequence `0x19`.
 
 ### Active divergence
 
@@ -215,16 +224,17 @@ and clears its active packet. Therefore no missing completion-bit producer
 exists, and `0x11c914` remains unproven as a forward-reachable callsite from
 this state. No reference result for request `0x1751d` is available. The latest
 dispatcher capture classified both the `0x8000091a` loop and the already
-supported `0x80000595`/function-`0x0e` call without producing a new service
-behavior.
+supported `0x80000595`/function-`0x0e` call; the follow-up captured and
+implemented only `0x80000595`/function-`0x01`'s verified zero-output shape.
 
 ### Next experiment
 
 On the current paused reference boot, resume the captured callback and arm
 `0x11a948 -> 0x11ade0` only for a client/request pair other than
-`0x15b008`/`0x8000091a` and `0x132490`/`0x0e`. Capture that distinct request's
-send/receive buffers and response; do not repeat either known path or add a
-SIF table behavior before the new call's request and response are captured.
+`0x15b008`/`0x8000091a`, `0x132490`/`0x0e`, and `0x132490`/`0x01`. Capture
+that distinct request's send/receive buffers and response; do not repeat a
+known path or add a SIF table behavior before the new call's request and
+response are captured.
 
 Iteration acceptance delta passed: native completed only the reference-verified
 function-`0x06` shape and advanced from sequence `0x17` without completing the
@@ -236,8 +246,8 @@ The follow-up evidence delta also passed: a changed response sequence alone was
 classified as the same request, preventing a duplicate SIF implementation.
 The current code acceptance delta passed: `SifRpcTransport` distinguishes the
 captured CALL descriptor from the generated receiver's direct-ingress envelope,
-and the known startup chain still reaches only the evidence-gated
-sequence-`0x19` request.
+completes only the captured zero-output service shape, and the known startup
+chain still reaches only the evidence-gated sequence-`0x19` request.
 
 ### Known temporary debt
 
@@ -247,10 +257,11 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. Descriptor construction now has a tested SIF transport boundary,
   but packet discovery must move to the SIF transfer boundary.
-- The declarative SIF compatibility table contains only nine verified service
+- The declarative SIF compatibility table contains only ten verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
-  service `0x80000595` function `0x0e` result `2`, and service `0x80000003`
+  service `0x80000595` function `0x0e` result `2` and function `0x01`
+  (zero-output 24-byte request), and service `0x80000003`
   functions `0x01` (`0x1999 -> 0x53300`) and `0x02` (`0x53300 -> 0`), and
   service `0x80000006` function `0xff` result `0x30343532` and function `0x06`
   (`0x53300 -> {0x19, 0}`). The request-sensitive calls require the captured
