@@ -163,6 +163,31 @@ M2 — First authentic native frame.
   word changed `0→2`, client sequence `0x0a→0x0b`, and the response ring
   emitted `0x80000008`. Native run `native-20260805-150454` completed that
   call, then deferred only service `0x80000593`, function `0x04`.
+- The latest fresh-PCSX2 helper attempt is recorded by
+  `build/reference-captures/service-80000003-function-01-1751d-armed.json`:
+  both planned breakpoints armed, but neither hit during the subsequent
+  120-second capture window; PCSX2 and the PINE title session remained alive.
+- Fresh helper transcript
+  `build/reference-captures/sif-completion-poll-12de80-capture.json` captured
+  the paused reference at `0x12de80`: `FUN_0012de70` was polling the control
+  block at `0x15ebc0`; its active packet snapshot included a `0x80000008`
+  response and `0x8000000a` call marker. The helper removed its breakpoint
+  and PINE remained connected.
+- Focused Ghidra decompilation proves `0x11a948` dispatches received SIF
+  packets and `0x11ade0` handles `0x8000000a` by signaling the client semaphore
+  and clearing the client’s active-packet word. Helper transcripts
+  `sif-rpc-callback-11ade0-capture.json` and
+  `sif-rpc-callback-return-11aa18-capture.json` captured that transition for
+  client `0x15b008`: `0x20155000 -> 0`, with the active packet status `5 -> 4`.
+- A generic `0x11a948 -> 0x11ade0` capture repeated the same reference CALL:
+  client `0x15b008`, command `0x8000000a`, request `0x8000091a`, send
+  `0x60f38`/`0x400`, receive `0x15b080`/`0x400`. The response descriptor at
+  `0x81f30` has a zero word 9 and is consumed through the callback.
+- Native response-descriptor construction now lives in the tested
+  `SifRpcTransport` boundary rather than the `guest_11a948` hook. Release
+  build and `sif_rpc_transport` test passed; native verification
+  `native-20260809-133727` remained alive for 10.18 seconds with 27 SIF
+  completions and deferred only the known `0x1751d` request at sequence `0x19`.
 
 ### Active divergence
 
@@ -170,25 +195,35 @@ The next authentic busy packet is service `0x80000003`, function `0x01`, from
 generated callsite `0x11c914`: remote send `0x4f848`/`0x4`, receive
 `0x158080`/`0x4`, request word `0x1751d`, and sequence `0x19`.
 `FUN_00201520` forwards that payload unchanged through `FUN_0011c8c8`.
-It remains pending. A retry with general MCP breakpoint management armed
-`0x11c914` but PCSX2 crashed while adding `0x11c91c`; Windows Event 1000
-records `pcsx2-qt.exe` heap corruption (`0xc0000374`, `ntdll.dll`) at 19:03.
-`tools\\pcsx2_sif_capture.py` now enforces 100 ms spacing between direct
-DebugServer requests and rejects lower intervals before connecting; its unit
-tests cover the throttle. No fresh reference capture or SIF behavior change was
-made.
+It remains pending. The throttled helper armed the complete `0x11c914` /
+`0x11c91c` pair after verified PINE and DebugServer handshakes, then a fresh
+PCSX2 boot ran for its full 120-second capture window without reaching either
+target; DebugServer remained alive and running at `0x12de80`. The helper-owned
+breakpoints were removed. Generated output and the subsequent capture prove
+`0x12de80` is `FUN_0012de70`, a SIF completion poll over `0x15ebc0`, not the
+function-`0x01` callsite. The response word at offset `0x24` can validly be
+zero: reference dispatch instead invokes `0x11ade0`, which signals the client
+and clears its active packet. Therefore no missing completion-bit producer
+exists, and `0x11c914` remains unproven as a forward-reachable callsite from
+this state. No reference result for request `0x1751d` is available.
 
 ### Next experiment
 
-On a fresh PCSX2 boot, verify healthy PINE and DebugServer handshakes, then use
-only the throttled helper as the DebugServer owner to arm and capture the
-prepared `0x11c914` before/after pair. Abort on any connection failure; do not
-add a SIF table behavior before the response is captured.
+On the current paused reference boot, resume the captured callback and arm
+`0x11a948 -> 0x11ade0` only when packet sequence at `0x20155018` changes from
+`0x3139c5`. Capture that distinct request's send/receive buffers and response;
+do not repeat the known `0x8000091a` response or add a SIF table behavior
+before the new call's request and response are captured.
 
 Iteration acceptance delta passed: native completed only the reference-verified
 function-`0x06` shape and advanced from sequence `0x17` without completing the
 new unsupported function-`0x01` request. M1 remains passed; M2 remains
-unpassed because guest VRAM/frame presentation is still absent.
+unpassed because guest VRAM/frame presentation is still absent. This iteration
+also passed its evidence delta: the reference response dispatcher cleared an
+active client packet only after `0x11ade0` processed its `0x80000008` response.
+The current code acceptance delta passed: native response descriptors use the
+captured CALL layout through `SifRpcTransport` and the known startup chain
+still reaches only the evidence-gated sequence-`0x19` request.
 
 ### Known temporary debt
 
@@ -196,8 +231,8 @@ These bridges enabled investigation but are not the desired full-port
 architecture:
 
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
-  responses. It now uses stateful binding and service payload dispatch, but
-  packet discovery must move to the SIF transfer boundary.
+  responses. Descriptor construction now has a tested SIF transport boundary,
+  but packet discovery must move to the SIF transfer boundary.
 - The declarative SIF compatibility table contains only nine verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,

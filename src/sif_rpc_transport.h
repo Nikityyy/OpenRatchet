@@ -82,4 +82,41 @@ inline bool makeSifRpcCompletionSizeWord(uint32_t payloadSize, uint32_t& word) {
     return true;
 }
 
+// `0x80000008` is the EE-side response descriptor consumed by the original
+// SIF command receiver. PCSX2 captures at `0x11a948 -> 0x11ade0` show CALL
+// descriptors carry a zero word 9; completion is signalled by the callback,
+// which clears the client's active-packet word. Bind descriptors retain their
+// separately observed completion/result fields.
+inline std::array<uint32_t, 17> makeSifRpcResponsePacket(
+    uint32_t payloadSize,
+    uint32_t receiveBuffer,
+    uint32_t packetCommand,
+    uint32_t requestPacket,
+    uint32_t clientAddress,
+    bool bindCompleted,
+    uint32_t bindResult0,
+    uint32_t bindResult1) {
+    uint32_t sizeWord = 0x40u;
+    if (!makeSifRpcCompletionSizeWord(payloadSize, sizeWord)) {
+        sizeWord = 0x40u;
+    }
+
+    const bool isBind = packetCommand == 0x80000009u;
+    return {
+        sizeWord,
+        payloadSize != 0u ? receiveBuffer : 0u,
+        0x80000008u,
+        0u,
+        0u,
+        isBind ? requestPacket : 0u,
+        0u,
+        clientAddress,
+        packetCommand,
+        isBind && bindCompleted ? 1u : 0u,
+        isBind ? bindResult0 : 0u,
+        isBind ? bindResult1 : 0u,
+        0u, 0u, 0u, 0u, 0u,
+    };
+}
+
 }  // namespace ratchet

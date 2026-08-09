@@ -40,6 +40,30 @@ int main() {
     test.expect(!ratchet::makeSifRpcCompletionSizeWord(0x01000000u, completionSizeWord),
                 "payload size that cannot fit the SIF header is rejected");
 
+    const auto callResponsePacket = ratchet::makeSifRpcResponsePacket(
+        0x8u, 0x158200u, 0x8000000au, 0x20155000u, 0x158400u,
+        true, 0xdeadbeefu, 0xcafebabeu);
+    test.expect(callResponsePacket[0] == 0x840u &&
+                    callResponsePacket[1] == 0x158200u &&
+                    callResponsePacket[2] == 0x80000008u &&
+                    callResponsePacket[7] == 0x158400u &&
+                    callResponsePacket[8] == 0x8000000au &&
+                    callResponsePacket[9] == 0u &&
+                    callResponsePacket[10] == 0u && callResponsePacket[11] == 0u,
+                "CALL response uses the captured descriptor layout and callback-owned completion");
+
+    const auto bindResponsePacket = ratchet::makeSifRpcResponsePacket(
+        0u, 0u, 0x80000009u, 0x20155000u, 0x158040u,
+        true, 0x4f848u, 0x4f890u);
+    test.expect(bindResponsePacket[0] == 0x40u &&
+                    bindResponsePacket[5] == 0x20155000u &&
+                    bindResponsePacket[7] == 0x158040u &&
+                    bindResponsePacket[8] == 0x80000009u &&
+                    bindResponsePacket[9] == 1u &&
+                    bindResponsePacket[10] == 0x4f848u &&
+                    bindResponsePacket[11] == 0x4f890u,
+                "BIND response retains its request pointer and observed startup result fields");
+
     ratchet::SifRpcTransport transport;
     auto call = transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u);
     test.expect(!call.completed &&

@@ -707,27 +707,12 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                     WRITE32(receiveBuffer + i * 4u, callResponse.payloadWords[i]);
                 }
             }
-            uint32_t completionSizeWord = 0x40u;
             const uint32_t completionPayloadSize =
                 packetCommand == 0x8000000au ? callResponse.payloadSize : 0u;
-            if (!makeSifRpcCompletionSizeWord(completionPayloadSize, completionSizeWord)) {
-                completionSizeWord = 0x40u;
-            }
-            const uint32_t responseWords[] = {
-                completionSizeWord,
-                completionPayloadSize != 0u ? receiveBuffer : 0u,
-                0x80000008u, 0u,
-                0u,
-                packetCommand == 0x80000009u ? packetAddress : 0u,
-                0u,
-                clientAddress,
-                packetCommand,
-                response.completed ? 1u : 0u,
-                response.result0,
-                response.result1,
-                0u, 0u, 0u, 0u, 0u,
-            };
-            for (uint32_t i = 0; i < sizeof(responseWords) / sizeof(responseWords[0]); ++i) {
+            const auto responseWords = makeSifRpcResponsePacket(
+                completionPayloadSize, receiveBuffer, packetCommand, packetAddress,
+                clientAddress, response.completed, response.result0, response.result1);
+            for (uint32_t i = 0; i < responseWords.size(); ++i) {
                 WRITE32(responseAddress + i * 4u, responseWords[i]);
             }
             std::cerr << "[OpenRatchet:SIF] injected completion for 0x"
