@@ -39,6 +39,8 @@ struct SifRpcCallResponse {
     bool requestPayloadAvailable = false;
     uint32_t requestPayloadSize = 0u;
     std::array<uint32_t, 4> requestPayloadWords{};
+    bool requestPayloadAllZero = false;
+    bool zeroFillPayload = false;
 };
 
 // Tracks the service bound to each EE RPC client and routes calls to a
@@ -49,7 +51,8 @@ public:
     void recordBinding(uint32_t clientAddress, uint32_t serviceId);
     void recordOutboundPayload(uint32_t remoteAddress,
                                uint32_t size,
-                               const std::array<uint32_t, 4>& payloadWords);
+                               const std::array<uint32_t, 4>& payloadWords,
+                               bool payloadAllZero = false);
     SifRpcCallResponse resolveCall(uint32_t clientAddress,
                                   uint32_t function,
                                   uint32_t receiveBuffer,
@@ -68,6 +71,7 @@ private:
         uint32_t remoteAddress = 0u;
         uint32_t size = 0u;
         std::array<uint32_t, 4> payloadWords{};
+        bool allBytesZero = false;
     };
 
     std::array<Binding, 16> bindings_{};

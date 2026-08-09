@@ -261,11 +261,26 @@ int main() {
     call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
                                  0x60f38u, 0x400u);
     test.expect(!call.completed && call.serviceId == 0x80000900u &&
-                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch &&
                     call.requestPayloadAvailable && call.requestPayloadSize == 0x400u &&
                     call.requestPayloadWords[0] == 0x80000963u &&
                     call.requestPayloadWords[3] == 0x99aabbccu,
-                "unsupported service retains captured request evidence");
+                "service version query rejects a captured nonzero request");
+    transport.recordOutboundPayload(0x60f38u, 0x400u, {0u, 0u, 0u, 0u}, true);
+    call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
+                                 0x60f38u, 0x400u);
+    test.expect(call.completed && call.payloadSize == 0x400u &&
+                    call.payloadWords[0] == 0x202u && call.zeroFillPayload &&
+                    call.requestPayloadAvailable && call.requestPayloadAllZero &&
+                    call.disposition == ratchet::SifRpcCallDisposition::Completed,
+                "service 0x80000900 version query matches the full zero request");
+    transport.recordOutboundPayload(0x60f38u, 0x400u, {0u, 0u, 0u, 0u}, false);
+    call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
+                                 0x60f38u, 0x400u);
+    test.expect(!call.completed && call.requestPayloadAvailable &&
+                    !call.requestPayloadAllZero &&
+                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch,
+                "service version query rejects a request not proven entirely zero");
 
     transport.reset();
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u).completed,

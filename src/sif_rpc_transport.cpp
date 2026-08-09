@@ -12,6 +12,8 @@ struct VerifiedCallBehavior {
     bool requireRequestWords;
     uint32_t requestWord0;
     std::array<uint32_t, 4> payloadWords;
+    bool requireAllZeroRequest = false;
+    bool zeroFillResponse = false;
 };
 
 // Each row is service-level compatibility evidence, not a packet/address
@@ -19,7 +21,7 @@ struct VerifiedCallBehavior {
 // 0x121304; startup service calls at EE 0x1213f8, 0x120be4, and 0x12167c.
 // Native IOP execution should eventually replace this table by supplying the
 // responses.
-constexpr std::array<VerifiedCallBehavior, 9> kVerifiedCallBehaviors{{
+constexpr std::array<VerifiedCallBehavior, 10> kVerifiedCallBehaviors{{
     {0x80000592u, 0x00u, 0x10u, 0u, false, 0u, {1u, 0x21du, 0x21du, 0u}},
     {0x8000059au, 0x00u, 0x04u, 0u, false, 0u, {2u, 0u, 0u, 0u}},
     {0x80000593u, 0x22u, 0x04u, 0u, false, 0u, {1u, 0u, 0u, 0u}},
@@ -39,6 +41,12 @@ constexpr std::array<VerifiedCallBehavior, 9> kVerifiedCallBehaviors{{
     // PCSX2 startup capture at EE 0x11cd2c: a 0x200-byte request transported
     // to the bound remote buffer begins with 0x53300 and returns {0x19, 0}.
     {0x80000006u, 0x06u, 0x08u, 0x200u, true, 0x53300u, {0x19u, 0u, 0u, 0u}},
+    // One reset boot captured the complete version query at EE 0x1244f0:
+    // service 0x80000900 function 0x80000963 sends 0x400 zero bytes and
+    // receives 0x0202 followed by 0x3fc zero bytes. Generated 0x124600 then
+    // requires the packed major version (bits 8..15) to equal 2.
+    {0x80000900u, 0x80000963u, 0x400u, 0x400u, false, 0u,
+     {0x00000202u, 0u, 0u, 0u}, true, true},
 }};
 
 // Generated FUN_0011c8c8 and FUN_0011c938 are the EE wrappers for the
@@ -95,7 +103,8 @@ void SifRpcTransport::recordBinding(uint32_t clientAddress, uint32_t serviceId) 
 void SifRpcTransport::recordOutboundPayload(
     uint32_t remoteAddress,
     uint32_t size,
-    const std::array<uint32_t, 4>& payloadWords) {
+    const std::array<uint32_t, 4>& payloadWords,
+    bool payloadAllZero) {
     if (remoteAddress == 0u || size == 0u) {
         return;
     }
@@ -103,7 +112,7 @@ void SifRpcTransport::recordOutboundPayload(
     OutboundPayload* freePayload = nullptr;
     for (OutboundPayload& payload : outboundPayloads_) {
         if (payload.remoteAddress == remoteAddress) {
-            payload = {remoteAddress, size, payloadWords};
+            payload = {remoteAddress, size, payloadWords, payloadAllZero};
             return;
         }
         if (freePayload == nullptr && payload.remoteAddress == 0u) {
@@ -111,7 +120,7 @@ void SifRpcTransport::recordOutboundPayload(
         }
     }
     if (freePayload != nullptr) {
-        *freePayload = {remoteAddress, size, payloadWords};
+        *freePayload = {remoteAddress, size, payloadWords, payloadAllZero};
     }
 }
 
@@ -148,6 +157,7 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
                 response.requestPayloadAvailable = true;
                 response.requestPayloadSize = payload.size;
                 response.requestPayloadWords = payload.payloadWords;
+                response.requestPayloadAllZero = payload.allBytesZero;
                 break;
             }
         }
@@ -207,6 +217,7 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
             response.completed = true;
             response.payloadSize = behavior.receiveSize;
             response.payloadWords = behavior.payloadWords;
+            response.zeroFillPayload = behavior.zeroFillResponse;
             response.disposition = SifRpcCallDisposition::Completed;
             return response;
         }
@@ -230,10 +241,15 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
             response.disposition = SifRpcCallDisposition::RequestPayloadMismatch;
             continue;
         }
+        if (behavior.requireAllZeroRequest && !outboundPayload->allBytesZero) {
+            response.disposition = SifRpcCallDisposition::RequestPayloadMismatch;
+            continue;
+        }
 
         response.completed = true;
         response.payloadSize = behavior.receiveSize;
         response.payloadWords = behavior.payloadWords;
+        response.zeroFillPayload = behavior.zeroFillResponse;
         response.disposition = SifRpcCallDisposition::Completed;
         return response;
     }

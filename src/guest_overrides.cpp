@@ -39,6 +39,7 @@ uint32_t g_lastSifRpcTraceFunction = 0u;
 SifRpcCallDisposition g_lastSifRpcTraceDisposition =
     SifRpcCallDisposition::UnboundClient;
 bool g_hasSifRpcTrace = false;
+constexpr size_t kGuestMemorySize = 0x02000000u;
 
 const std::vector<uint8_t>& getBootWad() {
     static const std::vector<uint8_t> data = [] {
@@ -522,7 +523,6 @@ void installGuestGraphicsBridge(PS2Runtime& runtime) {
 }
 
 void guest_118b20(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
-    constexpr size_t kGuestMemorySize = 0x02000000u;
     constexpr uint32_t kDescriptorSize = 0x10u;
     constexpr uint32_t kMaximumDescriptors = 32u;
     constexpr uint32_t kCapturedPayloadBytes = 16u;
@@ -548,7 +548,12 @@ void guest_118b20(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                  offset < kCapturedPayloadBytes; offset += sizeof(uint32_t)) {
                 payloadWords[offset / sizeof(uint32_t)] = READ32(source + offset);
             }
-            g_sifRpcTransport.recordOutboundPayload(destination, size, payloadWords);
+            bool payloadAllZero = isRangeWithin(source, size, kGuestMemorySize);
+            for (uint32_t offset = 0u; payloadAllZero && offset < size; ++offset) {
+                payloadAllZero = READ8(source + offset) == 0u;
+            }
+            g_sifRpcTransport.recordOutboundPayload(
+                destination, size, payloadWords, payloadAllZero);
         }
     }
 
@@ -660,6 +665,8 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                           << " requestPayloadAvailable="
                           << (callResponse.requestPayloadAvailable ? 1u : 0u)
                           << " requestPayloadSize=0x" << callResponse.requestPayloadSize
+                          << " requestPayloadAllZero="
+                          << (callResponse.requestPayloadAllZero ? 1u : 0u)
                           << " requestWords=0x" << callResponse.requestPayloadWords[0]
                           << ",0x" << callResponse.requestPayloadWords[1]
                           << ",0x" << callResponse.requestPayloadWords[2]
@@ -703,7 +710,14 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 }
             }
             if (callResponse.completed) {
-                for (uint32_t i = 0u; i < callResponse.payloadWords.size(); ++i) {
+                if (callResponse.zeroFillPayload &&
+                    isRangeWithin(receiveBuffer, callResponse.payloadSize, kGuestMemorySize)) {
+                    std::memset(rdram + receiveBuffer, 0, callResponse.payloadSize);
+                }
+                const uint32_t payloadWordCount = std::min<uint32_t>(
+                    static_cast<uint32_t>(callResponse.payloadWords.size()),
+                    callResponse.payloadSize / sizeof(uint32_t));
+                for (uint32_t i = 0u; i < payloadWordCount; ++i) {
                     WRITE32(receiveBuffer + i * 4u, callResponse.payloadWords[i]);
                 }
             }

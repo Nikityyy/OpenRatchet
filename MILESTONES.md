@@ -211,45 +211,37 @@ M2 — First authentic native frame.
   client active word. No fifth distinct SIF pair appeared in the next 45
   seconds. Native `native-20260809-144721` retained 27 completions, graphics
   activity, tick 120, and the same evidence-gated `0x1751d` wait.
-- The current reference boot did not execute the exact client `0x15b008`,
-  function `0x80000963` condition in 55 seconds; PCSX2 remained healthy and
-  the two temporary receiver/callback breakpoints were cleared.
-- Native verification `native-20260809-152941` proved the stalled call's
-  outbound DMA is retained as a `0x400`-byte request whose captured first four
-  words are zero. The transport now exposes those words for unsupported calls
-  without completing them; 57 prior completions and graphics activity were
-  unchanged.
+- One preserved-breakpoint reference reset hit producer `0x1244f0`, receiver
+  `0x11a948`, callback `0x11ade0`, and return `0x1244f8`. Service `0x80000900`
+  function `0x80000963` sent 0x400 zero bytes and received `{0x0202, 0...}`;
+  its `0x40000` descriptor drove packet status `5 -> 4`, sequence `0x37 -> 0`,
+  and cleared the client active pointer. All four breakpoints were removed.
+- Native `native-20260809-155659` matched the full-zero request, zero-filled
+  the complete response, completed sequence `0x37`, and advanced to `0x38`
+  with 58 completions and unchanged graphics activity.
 
 ### Active divergence
 
-Generated `sub_00201520` proved `0x1751d` is an IOP heap allocation size: it
-calls service `0x80000003` function `1`, DMAs that many bytes to the returned
-address, waits, then calls function `2` to free it. PCSX2 exposed `Heap_lib`,
-and the previously captured `0x1999 -> 0x53300` allocation/free sequence fixes
-the allocator base and lifecycle. Replacing the request-specific rows with a
-one-live-block allocator advanced native from sequence `0x19` to `0x37`.
-
-The new busy packet is client `0x15b008`, bound service `0x80000900`, function
-`0x80000963`: send `0x60f38`/`0x400`, receive `0x15b080`/`0x400`, status `5`,
-sequence `0x37`. Native proves the request size and its first four zero words;
-the remaining request bytes are not yet captured. The current reference state
-did not reach the condition, and no response payload or callback transition
-has been captured, so the call correctly remains pending.
+The new busy packet is the same client/service at function `0x80000904`: send
+`0x60f38`/`0x400`, receive `0x15b080`/`0x400`, status `5`, sequence `0x38`.
+Native captures request words `{0x0202, 0x15b480, 0, 0}` and proves the full
+request is not zero. Generated `sub_001246A8` maps its producer to `0x1246e4`,
+writes the caller argument into request word 1, and consumes response word 0.
+No reference response has been captured, so it remains pending.
 
 ### Next experiment
 
-The current reference state is incompatible with the target. After verifying
-both MCP handshakes, arm the producer callsite plus `0x11a948 -> 0x11ade0` for
-client `0x15b008`, function `0x80000963`, then perform one preserved-breakpoint
-reset. Capture the complete `0x400`-byte request, receive buffer before/after,
-callback descriptor, packet status, and client clear transition in that one
-boot. Do not reuse the known `0x8000091a` response.
+Reuse the reference boot paused at `0x1244f8`; do not reset. Arm producer
+`0x1246e4`, return `0x1246ec`, and `0x11a948 -> 0x11ade0` for client
+`0x15b008`, function `0x80000904`. Capture the complete `0x400` request and
+response, callback descriptor, packet status, sequence, and client clear
+transition. Do not infer this response from the preceding version query.
 
-Iteration acceptance delta passed: `native-20260809-152941` remained alive for
-10.11 seconds, retained 57 SIF completions, and changed the target request from
-unavailable to `requestPayloadAvailable=1`, size `0x400`, words `{0,0,0,0}`.
-M1 remains passed; M2 remains unpassed because guest VRAM is still zero and no
-authentic frame is presented.
+Iteration acceptance delta passed: `native-20260809-155659` remained alive for
+10.13 seconds, increased 57 -> 58 completions, advanced sequence `0x37 -> 0x38`,
+and retained `dma=556`, `gif=513`, `vif=2`. M1 remains passed; M2 remains
+unpassed because `gsw=0`, guest VRAM is zero, and no authentic frame is
+presented.
 
 ### Known temporary debt
 
@@ -259,7 +251,7 @@ architecture:
 - `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
   responses. Descriptor construction now has a tested SIF transport boundary,
   but packet discovery must move to the SIF transfer boundary.
-- The SIF compatibility layer contains only eleven verified service
+- The SIF compatibility layer contains only twelve verified service
   behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
   `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
   service `0x80000595` function `0x0e` result `2` and function `0x01`
@@ -267,7 +259,9 @@ architecture:
   (`0x30`-byte zero request -> `0`), and stateful service `0x80000003`
   allocation/free with one verified live block at `0x53300`, and
   service `0x80000006` function `0xff` result `0x30343532` and function `0x06`
-  (`0x53300 -> {0x19, 0}`). The request-sensitive calls require the captured
+  (`0x53300 -> {0x19, 0}`), and service `0x80000900` version function
+  `0x80000963` (`0x400` zero bytes -> `{0x0202, 0...}`). The request-sensitive
+  calls require the captured
   EE-to-IOP DMA word associated with the packet's remote send buffer.
   Unsupported shapes remain pending; replace the table when native IOP
   execution owns these responses.
@@ -418,6 +412,7 @@ python .\tools\pcsx2_sif_capture.py <manifest.json> --capture-only `
 | 2026-08-09 | Forward SIF characterization | PCSX2 proved service `0x80000400` function `1` returns `0`; native run `144721` passed with 27 completions and still deferred only `0x1751d` | New service delta passed; `0x1751d` response remains unproven; M2 not passed |
 | 2026-08-09 | Stateful IOP heap RPC | Generated alloc/DMA/free flow plus PCSX2 `Heap_lib` evidence replaced fixed request rows; native run `145217` advanced `0x19 -> 0x37` with 57 completions | Allocator delta passed; new `0x80000963` response required; M2 not passed |
 | 2026-08-09 | Unsupported RPC request evidence | Shared routing now retains request metadata before service matching; native run `152941` proved the `0x80000963` request is 0x400 bytes and begins with four zero words | Evidence delta passed; reference response still required; M2 not passed |
+| 2026-08-09 | Service `0x80000900` version RPC | One reset boot proved full-zero `0x80000963 -> 0x0202`; native run `155659` completed it and advanced `0x37 -> 0x38` with 58 completions | Version delta passed; function `0x80000904` is next; M2 not passed |
 
 ## Handoff format
 
