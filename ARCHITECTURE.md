@@ -117,16 +117,35 @@ covering all 249 compressed streams across the extracted 165-file WAD2 corpus.
 
 ## Native R&C1 level boundary
 
-`assets::inspectRac1Level` is the renderer-facing entry point for a validated
+`assets::loadRac1LevelCore` is the renderer-facing entry point for a validated
 R&C1 native level span. It locates the original 0x2434 on-disc level header at
 its preserved absolute header sector inside that span, converts the header's
-absolute sector ranges to offsets in the extracted level file, reads
-the level-data byte-range header, parses the level-core index, and validates the
-embedded compressed core through `assets::decompressWad`. The resulting summary
-exposes the render-relevant tfrag/sky/collision offsets plus moby/tie/shrub and
-texture table counts without involving guest RAM or PS2Runtime.
+absolute sector ranges to offsets in the extracted level file, reads the
+level-data byte-range header, parses the level-core index, and returns the
+natively decompressed core bytes. `assets::inspectRac1Level` remains the
+metadata-only convenience wrapper.
 
-This is deliberately a data-model boundary, not a renderer yet. Phase 6 will
-consume these native level/core structures directly and render the first R&C1
-geometry on the PC GPU. Wrench/noclip are reverse-engineering references only;
-OpenRatchet's parser is an independent implementation of the retail format.
+The LevelCoreHeader table pairs are represented correctly as `{count, offset}`
+on disc and normalized to `{offset, count}` in host types. This matters for the
+renderer: class/texture table offsets were previously being displayed as counts.
+Core offsets such as `tfrags == 0` are valid; R&C1 can place the tfrag block at
+the beginning of the decompressed core.
+
+## First native visual boundary
+
+`assets::decodeRac1Collision` decodes the level collision octree directly from
+the decompressed core into a host triangle list. It expands octant-local packed
+vertices, triangle/quad faces, collision types, and the optional Ratchet-only
+collision groups without touching VIF, VU, GIF, GS or guest memory.
+
+`native_level_viewer` is the first renderer-owned executable. It links directly
+to the already-present native raylib/OpenGL dependency, uploads the decoded R&C1
+geometry as a PC vertex buffer, and displays it with a free camera. This first
+visual milestone intentionally uses collision geometry because it is a direct,
+fully understood geometry structure; tfrags require their own VIF packet decoder
+and texture path. The collision renderer establishes the native GPU ownership
+boundary first, then the same viewer/runtime renderer will gain textured tfrags
+rather than introducing a PS2 graphics emulator.
+
+Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
+independent implementations of the retail structures.

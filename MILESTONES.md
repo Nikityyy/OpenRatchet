@@ -26,35 +26,34 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 M4 — Native Ratchet scene renderer.
 
-### Phase-5 change under verification
+### Phase-6 change under verification
 
-- Preserve the retail TOC tail as 19 raw `SectorRange` entries while retaining
-  compatibility with old extraction metadata. Do not treat the raw second word
-  as a trustworthy host-file size.
-- Add a focused native level extractor that discovers authentic `0x2434` level
-  envelopes from TOC sector references, validates their internal ranges, and
-  computes a separate native extraction span so one real level can be copied
-  directly from the user's ISO.
-- Add `assets::inspectRac1Level`, an independent host parser for the R&C1
-  0x2434 amalgamated level header, level-data ranges, level-core index and
-  embedded compressed core.
-- Expose the renderer-relevant tfrag/sky/collision offsets, class tables and
-  texture-table counts as typed native metadata.
-- Keep this phase non-visual and bounded. It is the final asset-structure gate
-  before Phase 6 creates the first PC-native Ratchet geometry renderer.
+- Correct the LevelCoreHeader array-pair interpretation to the retail
+  `{count, offset}` layout and expose the natively decompressed level core as a
+  renderer-owned host buffer.
+- Add an independent R&C1 collision decoder for the core collision block. It
+  expands the octree, packed vertices, triangles/quads, collision types, and
+  Ratchet-only collision groups directly into native triangle geometry.
+- Add `native_level_viewer`, linked directly to raylib/OpenGL rather than the
+  PS2 graphics path. It uploads that authentic level geometry to a PC GPU
+  vertex buffer and provides a free camera plus solid/wireframe modes.
+- Keep the normal recompiled-game runtime untouched in this phase. The purpose
+  is to prove the native renderer/data boundary visually before the more
+  complicated tfrag VIF/texture decoder is introduced.
 
 ### Acceptance test
 
-A Release build and all seven CTest tests must pass. Then
-`tools/extract-native-levels.ps1` must preserve the 19-entry raw retail tail,
-discover at least one authentic level envelope, and extract the first validated
-native span. `native_level_inspector` must parse that real file with `status=ok`
-and report non-corrupt core/render metadata. Finally, the
-normal runtime diagnostic must remain alive; after the level metadata refresh it
-should report a complete 0x2960 disc TOC and the level catalog.
+A Release build and all eight CTest tests must pass. The updated
+`native_level_inspector` must still report `status=ok` and now show plausible
+class/texture counts with their separate offsets. Then
+`tools/run-native-level-viewer.ps1 -LevelIndex 0` must print
+`[OpenRatchet:viewer] ... status=ok`, open a native PC window, and visibly show
+the level's authentic collision geometry. The normal 20-second runtime
+regression must remain alive with the native WAD path intact.
 
 ### Next phase after acceptance
 
-Phase 6 is visual: consume the native level/core data model, decode the first
-renderable tfrag geometry/textures, and draw it through a PC-native renderer. A
-PS2 GS framebuffer is not part of that path.
+Phase 7 replaces the diagnostic collision-only visual with actual R&C1 tfrag
+terrain: decode the five embedded VIF data groups, reconstruct LOD0 triangle
+strips, decode the level texture tables/GS palette data, and render textured
+terrain through the same native renderer boundary.

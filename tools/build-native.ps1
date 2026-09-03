@@ -2,7 +2,7 @@
 param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
     [string]$Configuration = 'Release',
-    [ValidateSet('ALL_BUILD', 'openratchet', 'native_replacements_tests', 'native_vfs_tests', 'rac1_level_tests', 'native_level_inspector', 'wad_decompressor_tests', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
+    [ValidateSet('ALL_BUILD', 'openratchet', 'native_replacements_tests', 'native_vfs_tests', 'rac1_level_tests', 'rac1_collision_tests', 'native_level_inspector', 'native_level_viewer', 'wad_decompressor_tests', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
     [string]$Target = 'ALL_BUILD',
     # Use only when generated project metadata has changed and MSBuild's
     # incremental tracking has not picked up a newly added source file.

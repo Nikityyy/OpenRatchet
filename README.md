@@ -72,7 +72,24 @@ Use `-Level N` for a particular TOC level or `-All` when the complete native
 level corpus is needed. Extracted files live under `build/extracted/levels/`.
 `native_level_inspector` parses the original on-disc level envelope, level-data
 header and level-core index and validates its compressed core with the native
-WAD decoder. This is the data source for the Phase-6 native renderer.
+WAD decoder. The parser now also preserves the decompressed core as a native
+host buffer for renderer-owned asset decoders.
+
+### First native visual
+
+Phase 6 adds a PC-native level viewer using the authentic R&C1 collision mesh.
+After extracting level 0 and building Release, run:
+
+```powershell
+.\tools\run-native-level-viewer.ps1 -LevelIndex 0
+```
+
+This path is intentionally independent of PS2 GS/VU rendering: the R&C1
+collision octree is decoded into host triangles, uploaded to a native GPU vertex
+buffer through raylib/OpenGL, and displayed with a free camera. Use `TAB` to
+toggle wireframe. Textured tfrag terrain is the next renderer phase; collision
+geometry is the smallest reliable proof that OpenRatchet now owns a real native
+visual path.
 
 ## Current prerequisites
 

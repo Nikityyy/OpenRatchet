@@ -7,6 +7,7 @@
 #include <fstream>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace ratchet::assets {
@@ -40,8 +41,10 @@ Rac1ByteRange readByteRange(std::span<const std::uint8_t> bytes,
 
 Rac1ArrayRange readArrayRange(std::span<const std::uint8_t> bytes,
                               std::size_t offset) noexcept {
-    return {readLe32(bytes.data() + offset),
-            readLe32(bytes.data() + offset + 4u)};
+    // Retail LevelCoreHeader stores every table pair as {count, offset}.
+    // OpenRatchet exposes {offset, count} to make range checks less error-prone.
+    return {readLe32(bytes.data() + offset + 4u),
+            readLe32(bytes.data() + offset)};
 }
 
 bool checkedMul(std::uint64_t lhs,
@@ -70,6 +73,18 @@ bool byteRangeFits(std::uint32_t offset,
     return static_cast<std::uint64_t>(offset) <= capacity &&
            static_cast<std::uint64_t>(size) <=
                capacity - static_cast<std::uint64_t>(offset);
+}
+
+bool arrayRangeFits(const Rac1ArrayRange& range,
+                    std::uint32_t elementSize,
+                    std::uint64_t capacity) noexcept {
+    if (range.count == 0u) {
+        return true;
+    }
+    std::uint64_t bytes = 0u;
+    return checkedMul(range.count, elementSize, bytes) &&
+           static_cast<std::uint64_t>(range.offset) <= capacity &&
+           bytes <= capacity - static_cast<std::uint64_t>(range.offset);
 }
 
 bool readExact(std::ifstream& input,
@@ -110,15 +125,14 @@ bool sectorRangeToFileRange(const Rac1SectorRange& range,
 }
 
 bool renderOffsetFits(std::uint32_t offset, std::size_t coreBytes) noexcept {
-    // Zero is a valid "not present" value for optional blocks. Tfrags are
-    // expected to be non-zero on renderable retail levels but are not treated
-    // as mandatory here so non-gameplay/special levels remain inspectable.
-    return offset == 0u || offset < coreBytes;
+    // Zero is a valid address in the decompressed level core. R&C1 commonly
+    // places the TfragBlockHeader at core offset zero.
+    return static_cast<std::size_t>(offset) < coreBytes;
 }
 
-Rac1LevelInspectResult fail(Rac1LevelInspectStatus status,
-                            Rac1LevelSummary summary) noexcept {
-    return {status, summary};
+Rac1LevelCoreLoadResult fail(Rac1LevelInspectStatus status,
+                             Rac1LevelSummary summary) noexcept {
+    return {status, summary, {}};
 }
 
 } // namespace
@@ -151,15 +165,17 @@ const char* rac1LevelInspectStatusName(Rac1LevelInspectStatus status) noexcept {
         return "core-decompression-failed";
     case Rac1LevelInspectStatus::InvalidRenderOffsets:
         return "invalid-render-offsets";
+    case Rac1LevelInspectStatus::InvalidIndexArrays:
+        return "invalid-index-arrays";
     }
     return "unknown";
 }
 
-Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,
-                                        std::uint32_t tocIndex,
-                                        std::uint32_t discStartSector,
-                                        std::uint32_t discSectorCount,
-                                        std::uint32_t discHeaderSector) {
+Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
+                                          std::uint32_t tocIndex,
+                                          std::uint32_t discStartSector,
+                                          std::uint32_t discSectorCount,
+                                          std::uint32_t discHeaderSector) {
     Rac1LevelSummary summary{};
     summary.tocIndex = tocIndex;
     summary.discStartSector = discStartSector;
@@ -256,6 +272,7 @@ Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,
         return fail(Rac1LevelInspectStatus::InvalidCoreHeader, summary);
     }
 
+    summary.gsRamTable = readArrayRange(coreHeader, 0x00u);
     summary.tfragsOffset = readLe32(coreHeader.data() + 0x08u);
     summary.occlusionOffset = readLe32(coreHeader.data() + 0x0cu);
     summary.skyOffset = readLe32(coreHeader.data() + 0x10u);
@@ -269,8 +286,39 @@ Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,
     summary.shrubTextures = readArrayRange(coreHeader, 0x48u);
     summary.particleTextures = readArrayRange(coreHeader, 0x50u);
     summary.effectTextures = readArrayRange(coreHeader, 0x58u);
+    summary.texturesBaseOffset = readLe32(coreHeader.data() + 0x60u);
+    summary.particleBankOffset = readLe32(coreHeader.data() + 0x64u);
+    summary.effectBankOffset = readLe32(coreHeader.data() + 0x68u);
+    summary.particleDefsOffset = readLe32(coreHeader.data() + 0x6cu);
+    summary.soundRemapOffset = readLe32(coreHeader.data() + 0x70u);
+    summary.ratchetSequencesOffset = readLe32(coreHeader.data() + 0x74u);
+    summary.sceneViewSize = readLe32(coreHeader.data() + 0x7cu);
+    summary.gadgetCount = readLe32(coreHeader.data() + 0x80u);
+    summary.gadgetOffset = readLe32(coreHeader.data() + 0x84u);
     summary.assetsCompressedSize = readLe32(coreHeader.data() + 0x88u);
     summary.assetsDecompressedSize = readLe32(coreHeader.data() + 0x8cu);
+    summary.heightmapOffset = readLe32(coreHeader.data() + 0xa4u);
+    summary.occlusionOctOffset = readLe32(coreHeader.data() + 0xa8u);
+    summary.mobyGsStashListOffset = readLe32(coreHeader.data() + 0xacu);
+    summary.occlusionRadOffset = readLe32(coreHeader.data() + 0xb0u);
+    summary.mobySoundRemapOffset = readLe32(coreHeader.data() + 0xb4u);
+    summary.occlusionRad2Offset = readLe32(coreHeader.data() + 0xb8u);
+
+    // These tables live in the separate core-index blob, not the decompressed
+    // core-data WAD. Validate the sizes now so later renderer stages can trust
+    // the typed metadata.
+    if (!arrayRangeFits(summary.gsRamTable, 0x10u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.mobyClasses, 0x20u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.tieClasses, 0x20u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.shrubClasses, 0x30u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.tfragTextures, 0x10u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.mobyTextures, 0x10u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.tieTextures, 0x10u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.shrubTextures, 0x10u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.particleTextures, 0x10u, summary.coreIndex.size) ||
+        !arrayRangeFits(summary.effectTextures, 0x10u, summary.coreIndex.size)) {
+        return fail(Rac1LevelInspectStatus::InvalidIndexArrays, summary);
+    }
 
     std::uint64_t coreDataFileOffset = 0u;
     if (!checkedAdd(dataFileOffset, summary.coreData.offset, coreDataFileOffset)) {
@@ -293,25 +341,36 @@ Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,
         return fail(Rac1LevelInspectStatus::InvalidCoreWad, summary);
     }
 
-    // The retail game only has 32 MiB of EE RAM. A 64 MiB host scratch output
-    // is deliberately generous while still bounding malformed input. Once the
-    // renderer owns these assets this vector will become the native level-core
-    // storage rather than a diagnostic scratch buffer.
     std::vector<std::uint8_t> core(kMaxCoreOutputBytes, 0u);
     const WadDecompressResult decompressed = decompressWad(encoded, core);
     if (!decompressed.ok()) {
         return fail(Rac1LevelInspectStatus::CoreDecompressionFailed, summary);
     }
     summary.coreDecompressedBytes = decompressed.bytesWritten;
+    core.resize(summary.coreDecompressedBytes);
 
     if (!renderOffsetFits(summary.tfragsOffset, summary.coreDecompressedBytes) ||
         !renderOffsetFits(summary.occlusionOffset, summary.coreDecompressedBytes) ||
         !renderOffsetFits(summary.skyOffset, summary.coreDecompressedBytes) ||
-        !renderOffsetFits(summary.collisionOffset, summary.coreDecompressedBytes)) {
+        !renderOffsetFits(summary.collisionOffset, summary.coreDecompressedBytes) ||
+        summary.texturesBaseOffset >= summary.coreDecompressedBytes) {
         return fail(Rac1LevelInspectStatus::InvalidRenderOffsets, summary);
     }
 
-    return {Rac1LevelInspectStatus::Ok, summary};
+    return {Rac1LevelInspectStatus::Ok, summary, std::move(core)};
+}
+
+Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,
+                                        std::uint32_t tocIndex,
+                                        std::uint32_t discStartSector,
+                                        std::uint32_t discSectorCount,
+                                        std::uint32_t discHeaderSector) {
+    Rac1LevelCoreLoadResult loaded = loadRac1LevelCore(path,
+                                                       tocIndex,
+                                                       discStartSector,
+                                                       discSectorCount,
+                                                       discHeaderSector);
+    return {loaded.status, loaded.summary};
 }
 
 } // namespace ratchet::assets

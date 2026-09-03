@@ -56,6 +56,7 @@ add_executable(openratchet
     src/runtime/native_replacements.cpp
     src/assets/wad_decompressor.cpp
     src/assets/rac1_level.cpp
+    src/assets/rac1_collision.cpp
     src/platform/native_vfs.cpp
     src/game/native_services.cpp
     src/game/native_io.cpp
@@ -81,6 +82,16 @@ target_link_libraries(openratchet PRIVATE ps2_runtime)
 target_compile_definitions(openratchet PRIVATE
     RATCHET_BOOT_ELF="${RATCHET_BOOT_ELF}")
 
+
+add_executable(native_level_viewer
+    tools/native_level_viewer.cpp
+    src/assets/rac1_level.cpp
+    src/assets/rac1_collision.cpp
+    src/assets/wad_decompressor.cpp
+    src/platform/native_vfs.cpp)
+target_include_directories(native_level_viewer PRIVATE src)
+target_link_libraries(native_level_viewer PRIVATE raylib)
+
 if(BUILD_TESTING)
     add_executable(native_replacements_tests
         tests/native_replacements_tests.cpp)
@@ -99,6 +110,12 @@ if(BUILD_TESTING)
         src/assets/wad_decompressor.cpp)
     target_include_directories(rac1_level_tests PRIVATE src)
     add_test(NAME rac1_level COMMAND rac1_level_tests)
+
+    add_executable(rac1_collision_tests
+        tests/rac1_collision_tests.cpp
+        src/assets/rac1_collision.cpp)
+    target_include_directories(rac1_collision_tests PRIVATE src)
+    add_test(NAME rac1_collision COMMAND rac1_collision_tests)
 
     add_executable(native_level_inspector
         tools/native_level_inspector.cpp

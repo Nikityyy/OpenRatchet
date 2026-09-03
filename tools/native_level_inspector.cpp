@@ -97,12 +97,18 @@ int main(int argc, char** argv) {
     std::cout << "[OpenRatchet:level] render tfrags=0x" << std::hex << s.tfragsOffset
               << " sky=0x" << s.skyOffset
               << " collision=0x" << s.collisionOffset
-              << " occlusion=0x" << s.occlusionOffset << std::dec
-              << " classes(moby/tie/shrub)=" << s.mobyClasses.count << '/'
-              << s.tieClasses.count << '/' << s.shrubClasses.count
-              << " textures(tfrag/moby/tie/shrub)=" << s.tfragTextures.count << '/'
-              << s.mobyTextures.count << '/' << s.tieTextures.count << '/'
-              << s.shrubTextures.count << '\n';
+              << " occlusion=0x" << s.occlusionOffset
+              << " texturesBase=0x" << s.texturesBaseOffset << std::dec << '\n';
+    std::cout << "[OpenRatchet:level] index-tables"
+              << " gs=" << s.gsRamTable.count << "@0x" << std::hex << s.gsRamTable.offset
+              << " moby=" << std::dec << s.mobyClasses.count << "@0x" << std::hex << s.mobyClasses.offset
+              << " tie=" << std::dec << s.tieClasses.count << "@0x" << std::hex << s.tieClasses.offset
+              << " shrub=" << std::dec << s.shrubClasses.count << "@0x" << std::hex << s.shrubClasses.offset
+              << " tfragTex=" << std::dec << s.tfragTextures.count << "@0x" << std::hex << s.tfragTextures.offset
+              << " mobyTex=" << std::dec << s.mobyTextures.count << "@0x" << std::hex << s.mobyTextures.offset
+              << " tieTex=" << std::dec << s.tieTextures.count << "@0x" << std::hex << s.tieTextures.offset
+              << " shrubTex=" << std::dec << s.shrubTextures.count << "@0x" << std::hex << s.shrubTextures.offset
+              << std::dec << '\n';
 
     return result.ok() ? 0 : 1;
 }

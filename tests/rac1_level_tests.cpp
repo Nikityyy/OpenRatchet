@@ -43,28 +43,31 @@ std::vector<std::uint8_t> makeFixture() {
     writeRange(bytes, kHeaderOffset + 0x020u, 0u, 0u);
 
     // Level-data header: core index at +0x100, compressed core at +0x200.
-    writeRange(bytes, kDataOffset + 0x10u, 0x100u, 0xbcu);
-    writeRange(bytes, kDataOffset + 0x50u, 0x200u, 0x100u);
+    writeRange(bytes, kDataOffset + 0x10u, 0x100u, 0x1000u);
+    writeRange(bytes, kDataOffset + 0x50u, 0x1400u, 0x100u);
 
     const std::size_t core = kDataOffset + 0x100u;
     writeLe32(bytes, core + 0x08u, 4u);   // tfrags
     writeLe32(bytes, core + 0x0cu, 0u);   // optional occlusion
     writeLe32(bytes, core + 0x10u, 8u);   // sky
     writeLe32(bytes, core + 0x14u, 12u);  // collision
-    writeRange(bytes, core + 0x18u, 0x100u, 3u);
-    writeRange(bytes, core + 0x20u, 0x200u, 4u);
-    writeRange(bytes, core + 0x28u, 0x300u, 5u);
-    writeRange(bytes, core + 0x30u, 0x400u, 6u);
-    writeRange(bytes, core + 0x38u, 0x500u, 7u);
-    writeRange(bytes, core + 0x40u, 0x600u, 8u);
-    writeRange(bytes, core + 0x48u, 0x700u, 9u);
-    writeRange(bytes, core + 0x50u, 0x800u, 10u);
-    writeRange(bytes, core + 0x58u, 0x900u, 11u);
+    // LevelCoreHeader array pairs are {count, offset}.
+    writeRange(bytes, core + 0x00u, 2u, 0x0c0u);
+    writeRange(bytes, core + 0x18u, 3u, 0x100u);
+    writeRange(bytes, core + 0x20u, 4u, 0x200u);
+    writeRange(bytes, core + 0x28u, 5u, 0x300u);
+    writeRange(bytes, core + 0x30u, 6u, 0x400u);
+    writeRange(bytes, core + 0x38u, 7u, 0x500u);
+    writeRange(bytes, core + 0x40u, 8u, 0x600u);
+    writeRange(bytes, core + 0x48u, 9u, 0x700u);
+    writeRange(bytes, core + 0x50u, 10u, 0x800u);
+    writeRange(bytes, core + 0x58u, 11u, 0x900u);
+    writeLe32(bytes, core + 0x60u, 16u);
     writeLe32(bytes, core + 0x88u, 0x31u);
     writeLe32(bytes, core + 0x8cu, 32u);
 
     // A tiny valid WAD whose initial-literal packet expands to 32 bytes.
-    const std::size_t wad = kDataOffset + 0x200u;
+    const std::size_t wad = kDataOffset + 0x1400u;
     bytes[wad + 0u] = 'W';
     bytes[wad + 1u] = 'A';
     bytes[wad + 2u] = 'D';
@@ -104,12 +107,15 @@ int main() {
     if (s.levelId != 7u || s.headerSize != 0x2434u ||
         s.discHeaderSector != 102u ||
         s.data.startSector != 110u || s.data.sectorCount != 5u ||
-        s.coreIndex.offset != 0x100u || s.coreIndex.size != 0xbcu ||
-        s.coreData.offset != 0x200u || s.coreEncodedSize != 0x31u ||
+        s.coreIndex.offset != 0x100u || s.coreIndex.size != 0x1000u ||
+        s.coreData.offset != 0x1400u || s.coreEncodedSize != 0x31u ||
         s.coreDecompressedBytes != 32u ||
         s.tfragsOffset != 4u || s.skyOffset != 8u || s.collisionOffset != 12u ||
-        s.mobyClasses.count != 3u || s.tieClasses.count != 4u ||
-        s.shrubClasses.count != 5u || s.tfragTextures.count != 6u) {
+        s.gsRamTable.offset != 0x0c0u || s.gsRamTable.count != 2u ||
+        s.mobyClasses.offset != 0x100u || s.mobyClasses.count != 3u ||
+        s.tieClasses.offset != 0x200u || s.tieClasses.count != 4u ||
+        s.shrubClasses.offset != 0x300u || s.shrubClasses.count != 5u ||
+        s.tfragTextures.offset != 0x400u || s.tfragTextures.count != 6u) {
         std::cerr << "rac1_level_tests: parsed metadata mismatch\n";
         return 1;
     }
