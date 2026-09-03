@@ -40,7 +40,8 @@ game-facing sector reader serves indexed resources directly from host files and
 falls back to the generated EE/CDVD implementation only for raw ranges that have
 not yet been migrated. `build/toc.json` is therefore a required native runtime
 artifact alongside `build/extracted/PS2_MAIN.ELF`. New extractions preserve the
-retail TOC's final 38 level-directory entries as well.
+retail TOC's final 19 raw per-level `SectorRange` pairs exactly and store
+separately validated host extraction spans under `native_levels`.
 
 `src/assets/wad_decompressor.*` is the first native compressed-asset primitive,
 and `src/game/native_assets.*` now owns game function `0x20b618`. Compressed
@@ -54,6 +55,24 @@ aggregate reference manifest.
 
 PS2Runtime remains an EE/game-logic fallback and temporary compatibility backend,
 not the target platform architecture.
+
+
+### Native level extraction / inspection
+
+Phase 5 adds a focused path for renderer assets. The extractor preserves the
+raw retail level-table bytes but discovers actual level file spans from validated
+`0x2434` amalgamated headers rather than trusting the raw TOC length field. To
+refresh the metadata and extract only the first validated R&C1 level, run:
+
+```powershell
+.\tools\extract-native-levels.ps1
+```
+
+Use `-Level N` for a particular TOC level or `-All` when the complete native
+level corpus is needed. Extracted files live under `build/extracted/levels/`.
+`native_level_inspector` parses the original on-disc level envelope, level-data
+header and level-core index and validates its compressed core with the native
+WAD decoder. This is the data source for the Phase-6 native renderer.
 
 ## Current prerequisites
 

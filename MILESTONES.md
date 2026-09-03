@@ -13,8 +13,8 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 | M0 — Reproducible recompilation baseline | `DONE` | User-owned game extraction, Ghidra export, PS2Recomp generation, native build and repeatable launch exist. |
 | M1 — Legacy boot characterization | `DONE` | Recompiled game reaches deep startup/SIF/DMA/graphics-related execution and provides a usable reference baseline. |
 | M2 — Native ownership boundary | `DONE` | OpenRatchet owns the application lifecycle and all game-function replacement registration; PS2Runtime is hidden as an EE fallback with unchanged verified boot behavior. |
-| M3 — Native VFS / asset access | `IN PROGRESS` | Known file/WAD/resource loads use a native indexed filesystem instead of sector-specific CDVD/SIF startup injection. |
-| M4 — Native Ratchet scene renderer | `TODO` | Authentic R&C1 level assets render through a PC-native Ratchet renderer without requiring a PS2 GS framebuffer. |
+| M3 — Native VFS / asset access | `DONE` | Known file/WAD/resource loads use a native indexed filesystem instead of sector-specific CDVD/SIF startup injection. |
+| M4 — Native Ratchet scene renderer | `IN PROGRESS` | Authentic R&C1 level assets render through a PC-native Ratchet renderer without requiring a PS2 GS framebuffer. |
 | M5 — First authentic game-driven native frame | `TODO` | Running recompiled game logic supplies camera/object/scene state to the native renderer continuously. |
 | M6 — Native input and playable area | `TODO` | PC controller/keyboard input drives original game simulation in a controllable area. |
 | M7 — Gameplay/platform completion | `TODO` | Rendering coverage, audio, saves, streaming, UI, cutscenes, transitions and gameplay systems support a complete playthrough. |
@@ -24,56 +24,37 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 ### Current milestone
 
-M3 — Native VFS / asset access.
+M4 — Native Ratchet scene renderer.
 
-### Phase-4 change under verification
+### Phase-5 change under verification
 
-- Game function `0x20b618` is now a real native replacement registered through
-  `game::declareNativeAssetReplacements`; it no longer calls the generated EE
-  decompressor.
-- The replacement reads the complete WAD stream from guest RAM, snapshots the
-  encoded bytes into host memory, decodes with `assets::decompressWad`, writes
-  the authentic output directly to the caller's guest-RAM destination, returns
-  the decompressed byte count in `v0`, and returns to `$ra`.
-- The decompressor-specific compatibility code has been deleted from
-  `guest_overrides.cpp`: no 0x2000 scratchpad preload, no synthetic SPR_FROM
-  transfer, no CHCR completion clear, no generated wait-PC loop, and no
-  `g_guest20b618Original` fallback remain.
-- Correctness remains anchored to the independently established retail boot-WAD
-  fingerprint (`0x50e0f` encoded bytes -> `0xa346c` output bytes, output FNV32
-  `0xd3cb9822`) and the 249-stream WAD2 corpus regression manifest.
-- Native storage remains unchanged: the disc TOC and WAD2/0 sector payload are
-  supplied through `NativeVfs`; raw unmigrated disc ranges still retain their
-  bounded generated fallback.
+- Preserve the retail TOC tail as 19 raw `SectorRange` entries while retaining
+  compatibility with old extraction metadata. Do not treat the raw second word
+  as a trustworthy host-file size.
+- Add a focused native level extractor that discovers authentic `0x2434` level
+  envelopes from TOC sector references, validates their internal ranges, and
+  computes a separate native extraction span so one real level can be copied
+  directly from the user's ISO.
+- Add `assets::inspectRac1Level`, an independent host parser for the R&C1
+  0x2434 amalgamated level header, level-data ranges, level-core index and
+  embedded compressed core.
+- Expose the renderer-relevant tfrag/sky/collision offsets, class tables and
+  texture-table counts as typed native metadata.
+- Keep this phase non-visual and bounded. It is the final asset-structure gate
+  before Phase 6 creates the first PC-native Ratchet geometry renderer.
 
 ### Acceptance test
 
-A Release build and all six CTest tests must pass. A 20-second native diagnostic
-must remain alive and preserve graphics activity. The native storage path must
-still show the disc TOC and full WAD2/0 read:
-
-```text
-[OpenRatchet:VFS] native disc TOC ... destination=0x137b80 bytes=0x2960 ...
-[OpenRatchet:VFS] native sector read ... source=0x3809 sectors=0xa2 destination=0x1fa7000 ... asset=wads2/0
-```
-
-The authoritative decompressor must now report directly:
-
-```text
-[OpenRatchet:WAD] native ... encodedSize=0x50e0f ... bytes=0xa346c ... outputHash=0xd3cb9822 status=ok oracle=match
-```
-
-There must be no decompressor-specific legacy diagnostics such as
-`[OpenRatchet:DMAC] SPR_FROM`, `[OpenRatchet:DMAC] SPR completion`, or
-`[OpenRatchet:WAD] shadow`. Replacement registration should remain
-`bootstrap=2`, `runtime=10`, with zero installation errors: one legacy runtime
-replacement disappeared and one native asset replacement took ownership of the
-same address.
+A Release build and all seven CTest tests must pass. Then
+`tools/extract-native-levels.ps1` must preserve the 19-entry raw retail tail,
+discover at least one authentic level envelope, and extract the first validated
+native span. `native_level_inspector` must parse that real file with `status=ok`
+and report non-corrupt core/render metadata. Finally, the
+normal runtime diagnostic must remain alive; after the level metadata refresh it
+should report a complete 0x2960 disc TOC and the level catalog.
 
 ### Next phase after acceptance
 
-Treat the now-authentic decompressed boot archive as a native asset source:
-identify its archive entries and the first scene/render resources, add bounded
-native parsers with fixtures, and establish the first renderer-facing asset
-model. The next graphics work should consume Ratchet semantics/data structures,
-not revive GS/SPR hardware emulation.
+Phase 6 is visual: consume the native level/core data model, decode the first
+renderable tfrag geometry/textures, and draw it through a PC-native renderer. A
+PS2 GS framebuffer is not part of that path.

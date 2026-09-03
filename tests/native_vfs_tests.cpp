@@ -49,7 +49,7 @@ int main() {
         std::ofstream output(toc);
         output << R"({
   "version": 1,
-  "toc_size": 44,
+  "toc_size": 48,
   "wads": [
     { "num": 0, "start": 50, "length": 1 },
     { "num": 1, "start": 0, "length": 0 }
@@ -59,7 +59,10 @@ int main() {
     { "num": 1, "start": 102, "length": 1 }
   ],
   "video": [], "vags": [], "vags2": [],
-  "leveldirs": [ { "num": 0, "start": 777 } ]
+  "levels": [ { "num": 0, "start": 200, "length": 1 } ],
+  "native_levels": [
+    { "num": 0, "id": 7, "header": 202, "start": 200, "length": 4 }
+  ]
 })";
     }
 
@@ -79,6 +82,9 @@ int main() {
     writeBytes(root / "extracted" / "wads2" / "wad2_1.wad",
                0x33u,
                NativeVfs::kSectorBytes);
+    writeBytes(root / "extracted" / "levels" / "level_00.wad",
+               0x44u,
+               NativeVfs::kSectorBytes * 4u);
 
     NativeVfs vfs;
     test.expect(vfs.initialize(root / "extracted", toc),
@@ -88,6 +94,15 @@ int main() {
                     vfs.summary().presentAssets == 3u &&
                     vfs.summary().missingAssets == 0u,
                 "VFS reports indexed/present asset counts");
+    test.expect(vfs.summary().indexedLevels == 1u &&
+                    vfs.summary().presentLevels == 1u &&
+                    vfs.summary().missingLevels == 0u,
+                "VFS reports the separate native level catalog");
+    const auto* level = vfs.findLevel(0u);
+    test.expect(level != nullptr && level->startSector == 200u &&
+                    level->sectorCount == 4u && level->headerSector == 202u &&
+                    level->kind == NativeAssetKind::Level,
+                "native level lookup uses validated extraction-span metadata");
 
     const auto* boot = vfs.findAsset(NativeAssetKind::Wad2, 0u);
     test.expect(boot != nullptr && boot->startSector == 100u && boot->sectorCount == 2u,
@@ -97,11 +112,11 @@ int main() {
     test.expect(vfs.findAssetContainingSector(99u) == nullptr,
                 "unindexed disc gaps remain unresolved");
 
-    std::array<std::uint8_t, 44> tocImage{};
+    std::array<std::uint8_t, 48> tocImage{};
     std::size_t tocBytes = 0u;
     test.expect(vfs.copyDiscToc(tocImage.data(), tocImage.size(), tocBytes),
                 "native VFS reconstructs the game-visible disc TOC");
-    test.expect(tocBytes == 44u && vfs.discTocKnownBytes() == 44u &&
+    test.expect(tocBytes == 48u && vfs.discTocKnownBytes() == 48u &&
                     vfs.discTocComplete(),
                 "complete TOC metadata reports the exact declared size");
     const auto readLe32 = [&tocImage](std::size_t offset) {
@@ -110,21 +125,21 @@ int main() {
                (static_cast<std::uint32_t>(tocImage[offset + 2u]) << 16u) |
                (static_cast<std::uint32_t>(tocImage[offset + 3u]) << 24u);
     };
-    test.expect(readLe32(0u) == 1u && readLe32(4u) == 44u,
+    test.expect(readLe32(0u) == 1u && readLe32(4u) == 48u,
                 "TOC image preserves version and declared size");
     test.expect(readLe32(24u) == 100u && readLe32(28u) == 2u,
                 "TOC image preserves WAD2/0 start and sector count");
-    test.expect(readLe32(40u) == 777u,
-                "TOC image preserves trailing level-directory locations");
+    test.expect(readLe32(40u) == 200u && readLe32(44u) == 1u,
+                "TOC image preserves trailing semantic level SectorRange");
 
-    // Old OpenRatchet extraction artifacts omitted the 38 level-directory
+    // Old OpenRatchet extraction artifacts omitted the 19 level SectorRange
     // entries from JSON even though toc_size included them. They must stay
     // usable during migration, with an exact prefix and deterministic zero tail.
     const fs::path legacyToc = root / "toc-legacy.json";
     {
         std::ofstream output(legacyToc);
         output << R"({
-  "version": 1, "toc_size": 44,
+  "version": 1, "toc_size": 48,
   "wads": [
     { "num": 0, "start": 50, "length": 1 },
     { "num": 1, "start": 0, "length": 0 }
@@ -140,13 +155,13 @@ int main() {
     NativeVfs legacyVfs;
     test.expect(legacyVfs.initialize(root / "extracted", legacyToc),
                 "legacy TOC JSON without leveldirs remains supported");
-    std::array<std::uint8_t, 44> legacyImage{};
+    std::array<std::uint8_t, 48> legacyImage{};
     std::size_t legacyBytes = 0u;
     test.expect(legacyVfs.copyDiscToc(legacyImage.data(), legacyImage.size(), legacyBytes) &&
-                    legacyBytes == 44u && legacyVfs.discTocKnownBytes() == 40u &&
+                    legacyBytes == 48u && legacyVfs.discTocKnownBytes() == 40u &&
                     !legacyVfs.discTocComplete(),
                 "legacy TOC reports exact known prefix and incomplete tail");
-    test.expect(legacyImage[40] == 0u && legacyImage[43] == 0u,
+    test.expect(legacyImage[40] == 0u && legacyImage[47] == 0u,
                 "legacy-missing TOC tail is deterministically zero-filled");
 
     std::array<std::uint8_t, NativeVfs::kSectorBytes> oneSector{};

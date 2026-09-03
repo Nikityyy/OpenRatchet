@@ -69,10 +69,16 @@ table directly to the game's fixed TOC region instead of asking the IOP for the
 0x2960-byte blob. Unknown/raw disc ranges still fall back to the generated
 EE/CDVD path until their semantics are migrated.
 
-The extraction wrapper now preserves the trailing 38 level-directory locations
-that the upstream JSON dumper historically omitted. Existing `toc.json` files
-remain usable: their 0x28c8-byte known prefix is reconstructed exactly and the
-legacy-missing 0x98-byte tail is zero-filled until extraction is rerun.
+The retail TOC's final 0x98 bytes are preserved exactly as 19 raw level
+`SectorRange` entries for the game-visible TOC. Those raw pairs are **not** used
+as host-file extents. Native level extraction independently scans TOC sector
+references for an authentic `0x2434` amalgamated level header, validates its
+level-data/gameplay/occlusion ranges, and records the resulting contiguous span
+under `native_levels`. `tools/extract-native-levels.ps1` can therefore extract a
+selected level directly from the user's ISO without trusting malformed or
+non-file-size values in the retail tail. Older `toc.json` files remain usable:
+their 0x28c8-byte known prefix is reconstructed exactly, and the earlier
+temporary `leveldirs` representation is accepted during migration.
 
 This boundary is intentionally above CDVD/SIF hardware. New known resources
 should be added to the VFS/resource layer rather than implemented as synthetic
@@ -108,3 +114,19 @@ completion, polled generated wait PCs up to 200,000 times, and produced a known
 incorrect boot-WAD result. It is no longer reachable or registered. Correctness
 is instead anchored to an independent boot-WAD oracle and a regression manifest
 covering all 249 compressed streams across the extracted 165-file WAD2 corpus.
+
+## Native R&C1 level boundary
+
+`assets::inspectRac1Level` is the renderer-facing entry point for a validated
+R&C1 native level span. It locates the original 0x2434 on-disc level header at
+its preserved absolute header sector inside that span, converts the header's
+absolute sector ranges to offsets in the extracted level file, reads
+the level-data byte-range header, parses the level-core index, and validates the
+embedded compressed core through `assets::decompressWad`. The resulting summary
+exposes the render-relevant tfrag/sky/collision offsets plus moby/tie/shrub and
+texture table counts without involving guest RAM or PS2Runtime.
+
+This is deliberately a data-model boundary, not a renderer yet. Phase 6 will
+consume these native level/core structures directly and render the first R&C1
+geometry on the PC GPU. Wrench/noclip are reverse-engineering references only;
+OpenRatchet's parser is an independent implementation of the retail format.

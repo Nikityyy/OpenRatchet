@@ -20,6 +20,13 @@ struct TocSectlen {
     std::uint32_t length = 0u;
 };
 
+struct TocNativeLevel {
+    std::uint32_t num = 0u;
+    std::uint32_t header = 0u;
+    std::uint32_t start = 0u;
+    std::uint32_t length = 0u;
+};
+
 struct TocLocation {
     std::uint32_t num = 0u;
     std::uint32_t start = 0u;
@@ -66,10 +73,15 @@ std::optional<std::uint32_t> parseUnsignedField(std::string_view object,
 bool parseSectlenArray(const std::string& json,
                        std::string_view arrayName,
                        std::vector<TocSectlen>& output,
-                       std::string& error) {
+                       std::string& error,
+                       bool required = true) {
     const std::string key = "\"" + std::string(arrayName) + "\"";
     const std::size_t keyPosition = json.find(key);
     if (keyPosition == std::string::npos) {
+        if (!required) {
+            output.clear();
+            return true;
+        }
         error = "missing array '" + std::string(arrayName) + "'";
         return false;
     }
@@ -117,6 +129,74 @@ bool parseSectlenArray(const std::string& json,
         }
 
         output.push_back({*num, *start, *length});
+        cursor = objectEnd + 1u;
+    }
+
+    error = "unterminated array '" + std::string(arrayName) + "'";
+    return false;
+}
+
+bool parseNativeLevelArray(const std::string& json,
+                           std::string_view arrayName,
+                           std::vector<TocNativeLevel>& output,
+                           std::string& error,
+                           bool required = true) {
+    const std::string key = "\"" + std::string(arrayName) + "\"";
+    const std::size_t keyPosition = json.find(key);
+    if (keyPosition == std::string::npos) {
+        if (!required) {
+            output.clear();
+            return true;
+        }
+        error = "missing array '" + std::string(arrayName) + "'";
+        return false;
+    }
+
+    const std::size_t arrayBegin = json.find('[', keyPosition + key.size());
+    if (arrayBegin == std::string::npos) {
+        error = "missing '[' for array '" + std::string(arrayName) + "'";
+        return false;
+    }
+
+    std::size_t cursor = arrayBegin + 1u;
+    while (cursor < json.size()) {
+        while (cursor < json.size() &&
+               (json[cursor] == ' ' || json[cursor] == '\t' ||
+                json[cursor] == '\r' || json[cursor] == '\n' ||
+                json[cursor] == ',')) {
+            ++cursor;
+        }
+
+        if (cursor >= json.size()) {
+            break;
+        }
+        if (json[cursor] == ']') {
+            return true;
+        }
+        if (json[cursor] != '{') {
+            error = "unexpected token while parsing array '" +
+                    std::string(arrayName) + "'";
+            return false;
+        }
+
+        const std::size_t objectEnd = json.find('}', cursor + 1u);
+        if (objectEnd == std::string::npos) {
+            error = "unterminated object in array '" + std::string(arrayName) + "'";
+            return false;
+        }
+
+        const std::string_view object(json.data() + cursor, objectEnd - cursor + 1u);
+        const auto num = parseUnsignedField(object, "num");
+        const auto header = parseUnsignedField(object, "header");
+        const auto start = parseUnsignedField(object, "start");
+        const auto length = parseUnsignedField(object, "length");
+        if (!num || !header || !start || !length) {
+            error = "invalid native level object in array '" +
+                    std::string(arrayName) + "'";
+            return false;
+        }
+
+        output.push_back({*num, *header, *start, *length});
         cursor = objectEnd + 1u;
     }
 
@@ -204,6 +284,9 @@ std::filesystem::path assetPath(const std::filesystem::path& root,
         return root / "wads" / ("wad_" + std::to_string(index) + ".wad");
     case NativeAssetKind::Wad2:
         return root / "wads2" / ("wad2_" + std::to_string(index) + ".wad");
+    case NativeAssetKind::Level:
+        return root / "levels" / (std::string("level_") +
+               (index < 10u ? "0" : "") + std::to_string(index) + ".wad");
     }
     return {};
 }
@@ -245,6 +328,8 @@ const char* nativeAssetKindName(NativeAssetKind kind) noexcept {
         return "wads";
     case NativeAssetKind::Wad2:
         return "wads2";
+    case NativeAssetKind::Level:
+        return "levels";
     }
     return "unknown";
 }
@@ -260,6 +345,7 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
     extractedRoot_ = extractedRoot;
     tocPath_ = tocPath;
     assets_.clear();
+    levelAssets_.clear();
     tocImage_.clear();
     tocKnownBytes_ = 0u;
     tocComplete_ = false;
@@ -286,6 +372,8 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
     std::vector<TocSectlen> wads2;
     std::vector<TocSectlen> video;
     std::vector<TocLocation> vags2;
+    std::vector<TocSectlen> levels;
+    std::vector<TocNativeLevel> nativeLevels;
     std::vector<TocLocation> leveldirs;
     std::string parseError;
     if (!version || !tocSize || *tocSize < 8u ||
@@ -294,6 +382,8 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
         !parseSectlenArray(json, "wads2", wads2, parseError) ||
         !parseSectlenArray(json, "video", video, parseError) ||
         !parseLocationArray(json, "vags2", vags2, parseError) ||
+        !parseSectlenArray(json, "levels", levels, parseError, false) ||
+        !parseNativeLevelArray(json, "native_levels", nativeLevels, parseError, false) ||
         !parseLocationArray(json, "leveldirs", leveldirs, parseError, false)) {
         if (parseError.empty()) {
             parseError = "missing/invalid TOC header";
@@ -304,11 +394,9 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
     }
 
     // Reconstruct the exact in-memory table consumed by the game. The retail
-    // layout is version/size, WAD sectlen entries, VAG locations, WAD2
-    // sectlen entries, video sectlen entries, VAG2 locations, then 38 level
-    // directory locations. Older toc.json files omitted that final array; in
-    // that case the known prefix remains exact and the unavailable tail is
-    // zero-filled until extraction is rerun with the updated parser wrapper.
+    // tail is 19 SectorRange entries (start,length), not 38 independent level
+    // directory locations. Phase-3-era JSON that exposed those raw 38 words as
+    // `leveldirs` remains accepted so existing extractions are not invalidated.
     appendU32(tocImage_, *version);
     appendU32(tocImage_, *tocSize);
     for (const TocSectlen& entry : wads) {
@@ -329,8 +417,23 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
     for (const TocLocation& entry : vags2) {
         appendU32(tocImage_, entry.start);
     }
-    for (const TocLocation& entry : leveldirs) {
-        appendU32(tocImage_, entry.start);
+    if (!levels.empty()) {
+        for (const TocSectlen& entry : levels) {
+            appendU32(tocImage_, entry.start);
+            appendU32(tocImage_, entry.length);
+        }
+    } else {
+        for (const TocLocation& entry : leveldirs) {
+            appendU32(tocImage_, entry.start);
+        }
+        if (!leveldirs.empty() && leveldirs.size() % 2u == 0u) {
+            levels.reserve(leveldirs.size() / 2u);
+            for (std::size_t i = 0u; i < leveldirs.size(); i += 2u) {
+                levels.push_back({static_cast<std::uint32_t>(i / 2u),
+                                  leveldirs[i].start,
+                                  leveldirs[i + 1u].start});
+            }
+        }
     }
 
     tocKnownBytes_ = tocImage_.size();
@@ -355,11 +458,38 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
                                entry.num,
                                entry.start,
                                entry.length,
+                               0u,
                                assetPath(extractedRoot_, kind, entry.num)});
         }
     };
     append(NativeAssetKind::Wad, wads);
     append(NativeAssetKind::Wad2, wads2);
+
+    // Raw `levels` entries above are serialized back into the guest-visible TOC.
+    // Do not treat those bytes as host-file extents. Native extraction spans are
+    // discovered independently from validated 0x2434 amalgamated headers.
+    for (const TocNativeLevel& entry : nativeLevels) {
+        if (entry.header == 0u || entry.start == 0u || entry.length == 0u) {
+            continue;
+        }
+        const std::uint64_t end =
+            static_cast<std::uint64_t>(entry.start) + entry.length;
+        if (entry.header < entry.start || entry.header >= end) {
+            std::cerr << "[OpenRatchet:VFS] invalid native level span index="
+                      << entry.num << " header=0x" << std::hex << entry.header
+                      << " span=0x" << entry.start << "+0x" << entry.length
+                      << std::dec << '\n';
+            continue;
+        }
+        levelAssets_.push_back({NativeAssetKind::Level,
+                                entry.num,
+                                entry.start,
+                                entry.length,
+                                entry.header,
+                                assetPath(extractedRoot_,
+                                          NativeAssetKind::Level,
+                                          entry.num)});
+    }
 
     std::sort(assets_.begin(), assets_.end(),
               [](const NativeAssetLocation& lhs, const NativeAssetLocation& rhs) {
@@ -396,6 +526,19 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
             ++summary_.presentAssets;
         } else {
             ++summary_.missingAssets;
+        }
+    }
+
+    summary_.indexedLevels = levelAssets_.size();
+    for (const NativeAssetLocation& level : levelAssets_) {
+        std::error_code sizeError;
+        const std::uint64_t fileSize = std::filesystem::file_size(level.path, sizeError);
+        const std::uint64_t expectedSize =
+            static_cast<std::uint64_t>(level.sectorCount) * kSectorBytes;
+        if (!sizeError && fileSize == expectedSize) {
+            ++summary_.presentLevels;
+        } else {
+            ++summary_.missingLevels;
         }
     }
 
@@ -440,17 +583,35 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
     std::cerr << "[OpenRatchet:VFS] disc TOC bytes=0x" << std::hex
               << tocImage_.size() << " known=0x" << tocKnownBytes_
               << " complete=" << (tocComplete_ ? 1 : 0) << std::dec << '\n';
+    if (summary_.indexedLevels != 0u) {
+        std::cerr << "[OpenRatchet:VFS] levels indexed=" << summary_.indexedLevels
+                  << " present=" << summary_.presentLevels
+                  << " missing=" << summary_.missingLevels << '\n';
+    }
     return true;
 }
 
 const NativeAssetLocation* NativeVfs::findAsset(NativeAssetKind kind,
                                                  std::uint32_t index) const noexcept {
+    if (kind == NativeAssetKind::Level) {
+        return findLevel(index);
+    }
     const auto it = std::find_if(
         assets_.begin(), assets_.end(),
         [kind, index](const NativeAssetLocation& asset) {
             return asset.kind == kind && asset.index == index;
         });
     return it == assets_.end() ? nullptr : &*it;
+}
+
+const NativeAssetLocation* NativeVfs::findLevel(
+    std::uint32_t index) const noexcept {
+    const auto it = std::find_if(
+        levelAssets_.begin(), levelAssets_.end(),
+        [index](const NativeAssetLocation& level) {
+            return level.index == index;
+        });
+    return it == levelAssets_.end() ? nullptr : &*it;
 }
 
 const NativeAssetLocation* NativeVfs::findAssetContainingSector(

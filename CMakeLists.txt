@@ -55,6 +55,7 @@ add_executable(openratchet
     src/runtime/openratchet_runtime.cpp
     src/runtime/native_replacements.cpp
     src/assets/wad_decompressor.cpp
+    src/assets/rac1_level.cpp
     src/platform/native_vfs.cpp
     src/game/native_services.cpp
     src/game/native_io.cpp
@@ -91,6 +92,20 @@ if(BUILD_TESTING)
         src/platform/native_vfs.cpp)
     target_include_directories(native_vfs_tests PRIVATE src)
     add_test(NAME native_vfs COMMAND native_vfs_tests)
+
+    add_executable(rac1_level_tests
+        tests/rac1_level_tests.cpp
+        src/assets/rac1_level.cpp
+        src/assets/wad_decompressor.cpp)
+    target_include_directories(rac1_level_tests PRIVATE src)
+    add_test(NAME rac1_level COMMAND rac1_level_tests)
+
+    add_executable(native_level_inspector
+        tools/native_level_inspector.cpp
+        src/assets/rac1_level.cpp
+        src/assets/wad_decompressor.cpp
+        src/platform/native_vfs.cpp)
+    target_include_directories(native_level_inspector PRIVATE src)
 
     add_executable(wad_decompressor_tests
         tests/wad_decompressor_tests.cpp
