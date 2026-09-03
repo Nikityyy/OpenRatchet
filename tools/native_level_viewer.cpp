@@ -384,6 +384,14 @@ int main(int argc, char** argv) {
                                        sky.mesh.triangleCount;
     bool wireframe = false;
     while (!WindowShouldClose()) {
+        // Match normal PC first-person/third-person camera behavior: once the
+        // user clicks inside the native viewer, capture and hide the cursor so
+        // mouse-look cannot escape onto another monitor/window. CloseWindow()
+        // restores the cursor automatically when the viewer exits.
+        if (IsWindowFocused() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            DisableCursor();
+        }
+
         UpdateCamera(&camera, CAMERA_FREE);
         if (IsKeyPressed(KEY_TAB)) wireframe = !wireframe;
 
@@ -432,7 +440,7 @@ int main(int argc, char** argv) {
                             static_cast<unsigned long long>(shrubTextures.textures.size()),
                             static_cast<unsigned long long>(sky.mesh.textures.size())),
                  24, 74, 16, GRAY);
-        DrawText("Free camera: WASD/mouse/wheel | TAB: wireframe | ESC: close",
+        DrawText("Click: lock mouse | WASD/mouse/wheel | TAB: wireframe | ESC: close",
                  24, 96, 16, GRAY);
         DrawFPS(GetScreenWidth() - 90, 16);
         EndDrawing();
