@@ -20,6 +20,8 @@ ps2_log.txt
 *.dmp
 *.dump
 /build/reference-captures/
+/make_openratchet_audit_zip.py
+/OpenRatchet_Audit.zip
 
 # Game Dumps & ROMs
 *.iso

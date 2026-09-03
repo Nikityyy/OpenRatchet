@@ -1,24 +1,52 @@
 # OpenRatchet
 
-This repository contains the bootstrap pipeline for a native Ratchet & Clank 1 PC port. It does not contain copyrighted game code or generated recompilation output. The supplied ISO must be user-owned.
+OpenRatchet is a native Ratchet & Clank 1 PC-port project. The repository does
+not ship copyrighted game data; a user-owned PS2 copy is required.
 
-## Pipeline
+The long-term architecture is documented in `ARCHITECTURE.md`. OpenRatchet owns
+the PC application and progressively replaces PS2 platform services with native
+systems. PS2Recomp remains a fallback executor for original EE game logic that
+has not yet received a native implementation.
 
-1. `tools/bootstrap.ps1 -Stage Extract` mounts the ISO to copy its EE executable, then runs the upstream `rac-dvd-toc-parser` against hidden sectors and writes `build/extracted` plus `build/toc.json`.
+## Bootstrap pipeline
 
-The extraction wrapper sanitizes original developer paths embedded in VAG headers (for example `Z:\I5\sound\spee`) so they cannot escape the selected output directory on Windows.
-2. Import the extracted `PS2_MAIN.ELF` into a compatible Ghidra installation with `ghidra-emotionengine-reloaded`, then run `PS2Recomp/ps2xRecomp/tools/ghidra/ExportPS2Functions.java`. Save the generated `build/game.toml`.
-3. Run `tools/bootstrap.ps1 -Stage Recompile`. It builds upstream `ps2_recomp` and processes `build/game.toml`. Set the TOML `general.output` field to this repository's `generated/` directory.
-4. Configure and build this host with `tools/bootstrap.ps1 -Stage Build`.
+1. `tools/bootstrap.ps1 -Stage Extract` mounts the ISO to copy its EE executable,
+   then runs `rac-dvd-toc-parser` against hidden sectors and writes
+   `build/extracted` plus `build/toc.json`.
+2. Import `build/extracted/PS2_MAIN.ELF` into Ghidra with
+   `ghidra-emotionengine-reloaded`, run
+   `PS2Recomp/ps2xRecomp/tools/ghidra/ExportPS2Functions.java`, and save the
+   generated config as `build/game.toml`.
+3. Run `tools/bootstrap.ps1 -Stage Recompile`. The generated PS2Recomp C++ goes
+   into `generated/` and is treated as read-only fallback game logic.
+4. Configure/build the native host with `tools/bootstrap.ps1 -Stage Build` or
+   use the verified incremental helper `tools/build-native.cmd`.
 
-Use `-FetchTools` to clone the three supported repositories into `third_party/`. Ghidra is intentionally not downloaded: the extension must match the installed Ghidra release and the export is an interactive project operation.
+Use `-FetchTools` to clone supported external repositories into `third_party/`.
+Ghidra is intentionally not downloaded automatically because the extension must
+match the installed Ghidra version.
+
+## Current native boundary
+
+`src/runtime/openratchet_runtime.*` is the top-level host owner. Address-based game
+replacements are declared through `src/runtime/native_replacements.*`; current
+legacy boot wrappers are routed through that same boundary until their PS2
+subsystems are replaced natively.
+
+The existing PS2Runtime-backed boot behavior is intentionally preserved during
+this first architecture phase. It is a fallback implementation, not the target
+platform architecture.
 
 ## Current prerequisites
 
-Required: Python 3, CMake 3.21+, a C++20 compiler, Java/Ghidra, and a PS2Recomp checkout. The bootstrap defaults to `C:\ghidra_12.1.2_PUBLIC_20260605\ghidra_12.1.2_PUBLIC`; use `-GhidraDir` if it moves. Ghidra's GUI launcher is in its root directory, while `analyzeHeadless.bat` is under `support`. `SDL2` and `Vulkan` are not required by the current PS2Recomp runtime; it uses raylib as its host backend. The `GuestMemory` class is only the project-owned boundary for future MMIO/device work; PS2Runtime remains the source of truth for guest execution.
+Required: Python 3, CMake 3.21+, a C++20 compiler, Java/Ghidra, and a PS2Recomp
+checkout. The bootstrap defaults to
+`C:\ghidra_12.1.2_PUBLIC_20260605\ghidra_12.1.2_PUBLIC`; use `-GhidraDir` if it
+moves.
 
-The matching `ghidra-emotionengine-reloaded` extension is detected from Ghidra's per-user extension directory under `%APPDATA%\ghidra\<version>\Extensions`.
+The matching `ghidra-emotionengine-reloaded` extension is detected from
+Ghidra's per-user extension directory under
+`%APPDATA%\ghidra\<version>\Extensions`.
 
-The build enables MSVC `/MP` and uses all detected processor cores by default. Override this with `-Jobs N`, for example `-Jobs 12`, if memory pressure becomes a problem.
-
-The ISO currently present is approximately 3.9 GiB. Extraction can take several minutes and requires enough free disk space for duplicated assets.
+The build enables MSVC `/MP` and uses all detected processor cores by default.
+Override with `-Jobs N` if memory pressure becomes a problem.

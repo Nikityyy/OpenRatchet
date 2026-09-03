@@ -1,428 +1,60 @@
 # OpenRatchet milestones
 
-This file is the concise source of truth for project status and the next
-experiment. Historical states are available in Git; do not append an
-investigation diary here.
+This file is the concise source of truth for current development. Historical
+PS2Runtime/GS-first investigations remain in Git history; the project has now
+pivoted to a native-port architecture.
 
-Status values: `DONE`, `IN PROGRESS`, `BLOCKED`, `TODO`.
+Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 ## Milestone status
 
 | Milestone | Status | Acceptance summary |
 |---|---|---|
-| M0 — Reproducible native baseline | `DONE` | Verified build, launch, logs, reference tools, and repeatable startup evidence. |
-| M1 — Native boot passes initial synchronization | `DONE` | Guest leaves the former `0x11ac78` wait and remains alive without a new fatal stub. |
-| M2 — First authentic native frame | `IN PROGRESS` | Guest-produced VRAM and a continuously presented non-fallback frame. |
-| M3 — Title/menu and input | `TODO` | Stable title/menu rendering and repeatable keyboard/controller navigation. |
-| M4 — First playable area | `TODO` | Load and enter the first controllable area with authentic assets. |
-| M5 — Playable core loop | `TODO` | Movement, camera, collision, combat, enemies, and scene transitions. |
-| M6 — Required game systems and content | `TODO` | Audio, streaming, saves, cutscenes, UI, levels, and progression systems. |
-| M7 — Complete-game progression | `TODO` | A start-to-credits playthrough with required content and no blocking defects. |
-| M8 — Release hardening | `TODO` | Reproducible builds, performance, stability, compatibility, and documented limitations. |
+| M0 — Reproducible recompilation baseline | `DONE` | User-owned game extraction, Ghidra export, PS2Recomp generation, native build and repeatable launch exist. |
+| M1 — Legacy boot characterization | `DONE` | Recompiled game reaches deep startup/SIF/DMA/graphics-related execution and provides a usable reference baseline. |
+| M2 — Native ownership boundary | `IN PROGRESS` | OpenRatchet owns the application lifecycle and all game-function replacement registration; PS2Runtime is hidden as an EE fallback with unchanged verified boot behavior. |
+| M3 — Native VFS / asset access | `TODO` | Known file/WAD/resource loads use a native indexed filesystem instead of sector-specific CDVD/SIF startup injection. |
+| M4 — Native Ratchet scene renderer | `TODO` | Authentic R&C1 level assets render through a PC-native Ratchet renderer without requiring a PS2 GS framebuffer. |
+| M5 — First authentic game-driven native frame | `TODO` | Running recompiled game logic supplies camera/object/scene state to the native renderer continuously. |
+| M6 — Native input and playable area | `TODO` | PC controller/keyboard input drives original game simulation in a controllable area. |
+| M7 — Gameplay/platform completion | `TODO` | Rendering coverage, audio, saves, streaming, UI, cutscenes, transitions and gameplay systems support a complete playthrough. |
+| M8 — Release hardening | `TODO` | Reproducible release builds, performance, compatibility, configuration and documented limitations. |
 
 ## Active work
 
 ### Current milestone
 
-M2 — First authentic native frame.
+M2 — Native ownership boundary.
 
-### Latest verified native state
+### Phase-1 change under verification
 
-- Release build succeeds through `tools\build-native.cmd`.
-- M1 remains passed: native execution no longer stalls at `0x11ac78`.
-- Startup SIF work is active and the guest submits real DMA/GIF traffic.
-- The extracted boot WAD reaches the native guest decompressor through a
-  temporary root-owned bridge.
-- Two authentic WAD-backed SPR windows were observed, decompression returned to
-  `0x2017ec`, output at `0x500000` became nonzero, and later SIF descriptors
-  contained nonzero payloads.
-- SIF transport now records successful client-to-service bindings and routes
-  data-bearing calls only to a service provider with a real payload.
-- PCSX2 IOP handler `0x3b094` proved CDVD init service `0x80000592`, function
-  `0`, returns `{1, 0x21d, 0x21d, 0}`; generated `FUN_00120eb0` proved Ratchet
-  consumes the two module-version fields and requires major version 2 or newer.
-- Verification run `native-20260805-141747` copied that 16-byte payload to the
-  guest receive buffer, emitted the size-derived `0x1040` response descriptor,
-  completed the previously deferred packet, and advanced to the next RPC bind
-  and call while remaining alive for 10.18 seconds.
-- Prior stable graphics baseline remains 56 SIF completions, `dma=556`,
-  `gif=513`, `gsw=0`, `vif=2`; the bounded run reached the next startup RPC
-  before graphics and therefore did not re-observe those counters.
-- Presentation still fails: the raw runtime tick contains
-  `dispfb1=0x1400` and `display1=0x1bf27f00000000`, but the host presentation
-  selection still reports `displayFbp=0` and `sourceFbp=0`; VRAM has no
-  nonzero bytes, the copied frame has no non-black pixels, and no authentic
-  primitive draw event was observed.
-- The single characterization boot reached the reference game's asset/graphics
-  initialization (`FUN_001e9658` -> `FUN_001eb798`) after startup SIF; the
-  armed function-`0x16` and function-`0x01` callsites did not occur on that
-  path. All temporary breakpoints were cleared.
-- Verification run `native-20260805-155924` completed 22 SIF packets,
-  including service `0x80000593`, function `0x04`, with a four-byte zero
-  payload. It advanced past that former wait into an uncaptured data-bearing
-  call: client `0x158040`, function `0x01`, receive `0x158080`, size `4`,
-  `status=5`, sequence `0x14`; it remained alive for 10.14 seconds.
-- Generated/Ghidra mapping proved client `0x158040` binds to service
-  `0x80000003`; PCSX2 function `0x01` consumed request word `0x1999` and
-  returned `0x53300`, while function `0x02` consumed `0x53300` and returned
-  `0`. Both emitted four-byte `0x80000008` responses.
-- Verification run `native-20260805-162020` completed 24 SIF packets. The
-  transport retained outbound DMA payloads by remote buffer and completed the
-  request-sensitive function-`0x01` shape before advancing to an uncaptured
-  call: client `0x158400`, function `0xff`, receive `0x158200`, size `4`,
-  `status=5`, sequence `0x16`; it remained alive for 10.17 seconds.
-- Tooling verification run `native-20260805-165344` remained alive for 10.20
-  seconds with 24 SIF completions and emitted one structured record for the
-  active divergence: service `0x80000006`, function `0xff`, no send buffer or
-  payload, receive `0x158200`, size `4`, `status=5`, sequence `0x16`, reason
-  `unsupported-shape`. The compact diagnostic parses this record directly.
-- Native run `native-20260805-170627` confirmed the deferred
-  `0x80000006`/`0xff` shape after the real `0x80000003` function-1 transfer;
-  no unsupported call was synthetically completed.
-- `pcsx2-reset` MCP v0.1.5 completed both a no-breakpoint reset and a
-  preserved-permanent-breakpoint reset without crashing PCSX2. Its conservative
-  result intentionally does not claim reset completion proof.
-- One fresh PCSX2 characterization boot captured client `0x158400`, bound
-  service `0x80000006`, function `0xff`, receive `0x158200`, and size `4` at
-  `0x11b1c8`. The matching `0x80000008` response had SIF header `0x440` and
-  receive word `0x30343532`; three additional service-private words were
-  present beyond the declared four-byte transfer. Generated `0x11ca74` proves
-  its immediate caller consumes only that first word.
-- Verification run `native-20260805-175758` built and remained alive for
-  10.22 seconds; focused transport tests passed. It logged 21 SIF completions
-  and reached the existing unrecompiled `0x3fcb320` loop before replaying the
-  newly supported `0x80000006`/`0xff` shape, so native completion remains
-  unverified.
-- Follow-up `native-20260805-180745` again remained alive for 10.15 seconds,
-  completed 21 SIF operations, and reached the same target. Its temporary
-  response-handler probe showed entries at `0x11a948` with `ra=0` and
-  `sp=0x1fffff0`, including the invocation immediately before that target;
-  the bad continuation is therefore after callback return, not the new table
-  behavior itself. PCSX2 instead invoked callback targets `0x11ade0` and
-  `0x123d10` and had a saved outer return at live RAM `0x81fec`.
-- A fresh reset v0.1.5 boot reached the conditioned `sceSifSetDma` syscall at
-  `0x118b20`: `a0=0x1fff990`, `a1=2`, `ra=0x11a8a4`. Its descriptors were
-  `{0x15b080 -> 0x60f38, 0x400, 0}` and
-  `{0x20155000 -> 0x1dee0, 0x40, 0x44}`; SIF handler state contained the
-  response-ring pointers. This differs from the native failing submission
-  (`a0=0x1fff500`), so the two cannot yet be treated as equivalent. The same
-  bounded helper run did not reach its `0x11a948` callback condition in 120
-  seconds; temporary breakpoints were removed.
-- Native verification `native-20260805-182335` proved the same packet chain
-  reaches `guest_118b20` repeatedly and returns from the original syscall to
-  `0x11a8a4` (no `0x3fcb320` dispatch). It completed the verified
-  `0x80000006`/`0xff` response at sequence `0x16`, then advanced to the next
-  real pending call: function `0x06`, send `0x220d0`/`0x200`, receive
-  `0x158200`/`0x8`, sequence `0x17`.
-- Fresh PCSX2 capture at generated `0x11cd2c` proved client `0x158400`, bound
-  service `0x80000006`, function `0x06`: the 0x200-byte EE-to-IOP transfer to
-  remote `0x220d0` begins `{0x53300, 0, 0x8001f150, 0x10}` and returns eight
-  bytes `{0x19, 0}`. At `0x11cd34`, the receive word changed
-  `0x53300 -> 0x19`, the client sequence advanced, and the response ring
-  emitted an eight-byte `0x80000008` descriptor to `0x158200`.
-- Verification run `native-20260805-184849` completed that exact function-6
-  shape at sequence `0x17`, then completed chained service `0x80000003`
-  function `0x02` at sequence `0x18`, and remained alive for 10.11 seconds.
-  It now defers the next real request-sensitive call: service `0x80000003`,
-  function `0x01`, remote send `0x4f848`/`0x4`, receive `0x158080`/`0x4`,
-  request word `0x1751d`, sequence `0x19`.
-- `tools\pcsx2_sif_capture.py` is live-verified against DebugServer: it armed a
-  conditional breakpoint, blocked to the hit, captured registers, an evaluated
-  address and a contiguous memory window in one JSON transcript, then removed
-  its breakpoint while preserving unrelated state. Capture transcripts under
-  `build\reference-captures` are ignored by Git.
-- The `pcsx2-reset` MCP performed a real reset to `0xbfc00000` and its blocking
-  continue stopped at the expected conditional EE breakpoint `0x118cb0`.
-  After the EE/IOP deduplication fix, `preserve_breakpoints=true` rearmed that
-  single breakpoint exactly once with its condition and description intact.
-- Latest verified logs:
-  `build/native/test-logs/native-20260805-182335.stdout.log` and
-  `build/native/test-logs/native-20260805-182335.stderr.log`.
-- The compact diagnostic now recognizes the direct SIF records: the latest run
-  reported 25 completions and the exact next pending call instead of zero.
-- The upgraded GhidraMCP handshake is verified through its stdio bridge and
-  plugin at `127.0.0.1:8089`: project `OpenRatchetTest` exposes
-  `/PS2_MAIN.ELF`; metadata resolves to this repository's extracted ELF as
-  little-endian `MIPS-R5900`; and focused decompilation at `0x121630` succeeds.
-- Fresh PCSX2 PINE/DebugServer capture at generated `0x121304` proved the
-  CDVD DiskReady call: service `0x8000059a`, function `0`, client `0x159990`,
-  receive `0x1324c0`, size `4`. Stepping over it changed receive word
-  `1→2`, emitted the `0x80000008` response at `0x20154d80`, and changed the
-  request packet from bind `0x80000009` to call `0x8000000a`.
-- Verification run `native-20260805-144242` wrote the matching four-byte
-  DiskReady completion, advanced through the next bind (`0x80000593`), and
-  deferred only its subsequent unsupported call. The compact parser reported
-  zero SIF completions despite these direct runtime log records.
-- Fresh PCSX2 capture at generated `0x1213f8` proved service `0x80000593`,
-  function `0x22`, client `0x132d08`, receive `0x1324c0`, size `4`: receive
-  word changed `2→1`, client sequence `8→9`, and the response ring emitted
-  `0x80000008`. Native run `native-20260805-145512` completed that call and
-  advanced to the next bound service while remaining alive for 10.18 seconds.
-- Fresh PCSX2 capture at generated `0x120be4` proved service `0x80000595`,
-  function `0x0e`, client `0x132490`, receive `0x131340`, size `4`: receive
-  word changed `0→2`, client sequence `0x0a→0x0b`, and the response ring
-  emitted `0x80000008`. Native run `native-20260805-150454` completed that
-  call, then deferred only service `0x80000593`, function `0x04`.
-- The latest fresh-PCSX2 helper attempt is recorded by
-  `build/reference-captures/service-80000003-function-01-1751d-armed.json`:
-  both planned breakpoints armed, but neither hit during the subsequent
-  120-second capture window; PCSX2 and the PINE title session remained alive.
-- Fresh helper transcript
-  `build/reference-captures/sif-completion-poll-12de80-capture.json` captured
-  the paused reference at `0x12de80`: `FUN_0012de70` was polling the control
-  block at `0x15ebc0`; its active packet snapshot included a `0x80000008`
-  response and `0x8000000a` call marker. The helper removed its breakpoint
-  and PINE remained connected.
-- Focused Ghidra decompilation proves `0x11a948` dispatches received SIF
-  packets and `0x11ade0` handles `0x8000000a` by signaling the client semaphore
-  and clearing the client’s active-packet word. Helper transcripts
-  `sif-rpc-callback-11ade0-capture.json` and
-  `sif-rpc-callback-return-11aa18-capture.json` captured that transition for
-  client `0x15b008`: `0x20155000 -> 0`, with the active packet status `5 -> 4`.
-- A generic `0x11a948 -> 0x11ade0` capture repeated the same reference CALL:
-  client `0x15b008`, command `0x8000000a`, request `0x8000091a`, send
-  `0x60f38`/`0x400`, receive `0x15b080`/`0x400`. The response descriptor at
-  `0x81f30` has a zero word 9 and is consumed through the callback.
-- The sequence-gated capture
-  `sif-next-distinct-response-capture.json` observed `0x3139c5 -> 0x3139c8`,
-  but the same client, request, send/receive buffers, and response descriptor.
-  It classifies that transition as an IOP-loop repeat, not a new SIF behavior.
-- A bounded MCP-only capture then reached the already mapped client `0x132490`,
-  service `0x80000595`, function `0x0e`: receive `0x131340`/`0x4` became `2`;
-  both the response ring and callback argument carried `0x400`, not `0x440`.
-  That is a post-DMA callback descriptor. Generated `0x11a948` instead needs
-  a `0x40` direct-ingress envelope to copy its 64-byte command.
-- `SifRpcTransport` now tests those distinct descriptor and ingress layouts;
-  native verification `native-20260809-142345` remained alive for 10.12
-  seconds with 27 SIF completions, graphics activity, and only the known
-  `0x1751d` request pending at sequence `0x19`.
-- Bounded MCP-only capture proved another `0x80000595` call: client `0x132490`,
-  function `0x01`, send `0x41bd0`/`0x18`, zero receive. Its 24-byte reference
-  request was zeroed, its callback descriptor had zero payload, and the
-  callback cleared `0x20155000 -> 0` for that client. Native owns different
-  request words for the same service/function/length, so only that no-output
-  shape is completed; other zero-receive calls now remain pending.
-- Native verification `native-20260809-143510` remained alive for 10.11
-  seconds with 27 SIF completions, graphics activity, tick 120, and only
-  `0x1751d` pending at sequence `0x19`.
-- The same reference boot next proved service `0x80000400`, function `0x01`,
-  client `0x159a00`: a zeroed `0x30`-byte request at `0x5ad00` returned `0`
-  to `0x15afc0`/`0x4`, emitted a `0x400` callback descriptor, and cleared the
-  client active word. No fifth distinct SIF pair appeared in the next 45
-  seconds. Native `native-20260809-144721` retained 27 completions, graphics
-  activity, tick 120, and the same evidence-gated `0x1751d` wait.
-- One preserved-breakpoint reference reset hit producer `0x1244f0`, receiver
-  `0x11a948`, callback `0x11ade0`, and return `0x1244f8`. Service `0x80000900`
-  function `0x80000963` sent 0x400 zero bytes and received `{0x0202, 0...}`;
-  its `0x40000` descriptor drove packet status `5 -> 4`, sequence `0x37 -> 0`,
-  and cleared the client active pointer. All four breakpoints were removed.
-- Native `native-20260809-155659` matched the full-zero request, zero-filled
-  the complete response, completed sequence `0x37`, and advanced to `0x38`
-  with 58 completions and unchanged graphics activity.
+- `OpenRatchetRuntime` becomes the root application owner.
+- PS2Recomp/`PS2Runtime` is hidden behind that host as the temporary EE fallback.
+- A project-owned `NativeReplacementRegistry` becomes the single address-based
+  replacement boundary.
+- Existing legacy bootstrap/runtime wrappers are declared through the registry;
+  their behavior and installation order are intentionally unchanged.
+- Existing non-function graphics compatibility hooks remain explicit legacy
+  device bridges until the renderer phase replaces them.
+- Generated output and `third_party` remain read-only.
 
-### Active divergence
+### Acceptance test
 
-The new busy packet is the same client/service at function `0x80000904`: send
-`0x60f38`/`0x400`, receive `0x15b080`/`0x400`, status `5`, sequence `0x38`.
-Native captures request words `{0x0202, 0x15b480, 0, 0}` and proves the full
-request is not zero. Generated `sub_001246A8` maps its producer to `0x1246e4`,
-writes the caller argument into request word 1, and consumes response word 0.
-No reference response has been captured, so it remains pending.
+A Release build and all CTest tests must pass. A 10-second native diagnostic must
+remain alive and show the same boot/SIF/runtime progression as the pre-phase
+baseline, plus these new ownership diagnostics:
 
-### Next experiment
-
-Reuse the reference boot paused at `0x1244f8`; do not reset. Arm producer
-`0x1246e4`, return `0x1246ec`, and `0x11a948 -> 0x11ade0` for client
-`0x15b008`, function `0x80000904`. Capture the complete `0x400` request and
-response, callback descriptor, packet status, sequence, and client clear
-transition. Do not infer this response from the preceding version query.
-
-Iteration acceptance delta passed: `native-20260809-155659` remained alive for
-10.13 seconds, increased 57 -> 58 completions, advanced sequence `0x37 -> 0x38`,
-and retained `dma=556`, `gif=513`, `vif=2`. M1 remains passed; M2 remains
-unpassed because `gsw=0`, guest VRAM is zero, and no authentic frame is
-presented.
-
-### Known temporary debt
-
-These bridges enabled investigation but are not the desired full-port
-architecture:
-
-- `guest_11a948` still scans fixed SIF pools and supplies startup compatibility
-  responses. Descriptor construction now has a tested SIF transport boundary,
-  but packet discovery must move to the SIF transfer boundary.
-- The SIF compatibility layer contains only twelve verified service
-  behaviors: CDVD init versions `0x21d/0x21d`, DiskReady function `0` result
-  `2`, service `0x80000593` functions `0x22` result `1` and `0x04` result `0`,
-  service `0x80000595` function `0x0e` result `2` and function `0x01`
-  (zero-output 24-byte request), service `0x80000400` function `0x01`
-  (`0x30`-byte zero request -> `0`), and stateful service `0x80000003`
-  allocation/free with one verified live block at `0x53300`, and
-  service `0x80000006` function `0xff` result `0x30343532` and function `0x06`
-  (`0x53300 -> {0x19, 0}`), and service `0x80000900` version function
-  `0x80000963` (`0x400` zero bytes -> `{0x0202, 0...}`). The request-sensitive
-  calls require the captured
-  EE-to-IOP DMA word associated with the packet's remote send buffer.
-  Unsupported shapes remain pending; replace the table when native IOP
-  execution owns these responses.
-- `guest_12f208` loads a named boot WAD from the configured extracted-media
-  directory and recognizes startup-specific sector/argument patterns. Replace
-  with general CDVD sector/file I/O.
-- `guest_20b618` supplies SPR windows and repeatedly resumes a generated
-  decompressor around known wait PCs. Replace with generic SPR/DMAC transfer and
-  completion semantics.
-- `guest_1f97e8` repairs one generated-call destination. Determine and fix the
-  underlying dispatch/recompilation/ABI cause.
-- The root GIF image-payload adapter prepends an IMAGE tag for separated raw DMA
-  payloads. Retain only if a focused test proves this is the correct stable
-  public-runtime boundary.
-- Interior callback overrides such as VBlank must remain exact translations of
-  verified ELF semantics and receive regression coverage.
-
-Do not extend a temporary bridge with another magic case unless the active
-experiment proves the value is invariant and no correct reusable layer is
-available yet.
-
-## Milestone acceptance criteria
-
-### M0 — Reproducible native baseline
-
-- Build inputs, ELF, generated output, runtime checkout, commands, and logs are
-  known and reproducible.
-- Native and PCSX2 reference states can be inspected with verified tools.
-
-### M1 — Native boot passes initial synchronization
-
-- The producer of the original startup wait is understood.
-- Native leaves `0x11ac78` without bypassing its polling loop.
-- Guest execution remains alive and measurable for at least five seconds.
-- No new fatal unimplemented syscall/stub is introduced.
-
-### M2 — First authentic native frame
-
-All criteria must pass in one reproducible run:
-
-- Guest execution reaches authentic rendering setup.
-- Real guest DMA/GIF/GS work reaches the graphics runtime.
-- GS privileged display state and framebuffer addresses are nonzero and match
-  the equivalent PCSX2 state.
-- Guest-produced VRAM contains nonzero frame data.
-- The host displays that framebuffer, not the magenta fallback, a hard-coded
-  image, host-injected pixels, or another synthetic substitute.
-- Frames continue updating for at least five seconds.
-- The native process remains stable and the M1 path does not regress.
-
-### M3 — Title/menu and input
-
-- Title/menu rendering is stable for multiple frames.
-- Keyboard and controller input reach the guest.
-- At least one menu transition is repeatable.
-- VSync and input polling do not deadlock or starve guest execution.
-
-### M4 — First playable area
-
-- Required assets load through general CDVD/SIF/streaming behavior.
-- Textures, geometry, UI, and level data are authentic.
-- The player enters the first controllable area.
-
-### M5 — Playable core loop
-
-- Movement, camera, collision, attacks, enemies, pickups, and scene transitions
-  work.
-- A representative gameplay session runs for at least 10 minutes without a
-  hang, crash, runaway CPU use, or persistent rendering corruption.
-
-### M6 — Required game systems and content
-
-- Audio, music, streaming, cutscenes, loading screens, saving/loading, UI, and
-  controller mappings work.
-- Level-specific behavior is generalized into subsystem support rather than a
-  growing table of per-level bypasses.
-
-### M7 — Complete-game progression
-
-- A new game can progress through every required planet/level and reach the
-  ending/credits.
-- Required weapons, gadgets, vendors, missions, bosses, cinematics, deaths,
-  checkpoints, and saves function without blocking defects.
-- Repeated transitions and long sessions do not corrupt guest or host state.
-
-### M8 — Release hardening
-
-- Clean setup/build/run procedures are documented and reproducible.
-- Automated smoke and subsystem regression tests cover the supported path.
-- Performance and frame pacing are acceptable on the supported PC target.
-- Known limitations are explicit and are not confused with passed behavior.
-
-## Verified commands
-
-Build only after source changes or when the executable is stale:
-
-```powershell
-.\tools\build-native.cmd -Configuration Release
+```text
+[OpenRatchet:native] replacements stage=bootstrap declared=2 ... install_errors=0
+[OpenRatchet:native] replacements stage=runtime declared=9 ... install_errors=0
+[OpenRatchet:native] host owns application runtime; PS2Recomp retained as EE fallback backend
 ```
 
-Run the compact native diagnostic when the active experiment requires runtime
-evidence:
+No visual or guest-behavior improvement is expected in M2; this phase exists to
+make later native subsystem replacement safe and bounded.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File .\tools\diagnose-native.ps1 -DurationSeconds 10
-```
+### Next phase after acceptance
 
-Underlying harness:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File .\tools\run-native-test.ps1 -DurationSeconds 10
-```
-
-Validate and run a prepared multi-breakpoint SIF capture manifest:
-
-```powershell
-python .\tools\pcsx2_sif_capture.py <manifest.json> --validate-only
-python .\tools\pcsx2_sif_capture.py <manifest.json> --arm-only
-# Call pcsx2_system_reset(preserve_breakpoints=true), then:
-python .\tools\pcsx2_sif_capture.py <manifest.json> --capture-only `
-    --output .\build\reference-captures\capture.json
-```
-
-## Latest evidence
-
-| Date | Iteration | Result | Acceptance |
-|---|---|---|---|
-| 2026-08-04 | M1 startup synchronization | Left `0x11ac78`; process stable; SIF/DMA progressed | M1 passed |
-| 2026-08-04 | Initial M2 graphics bridge | `dma=514`, `gif=513`; separated IMAGE payloads reached GS adapter | M2 not passed: zero framebuffer/VRAM |
-| 2026-08-05 | SIF layout and startup mappings | 56 completions; request storm removed; PC advanced | M2 not passed: payload/frame still zero |
-| 2026-08-05 | VBlank interior callback | Missing-handler diagnostics removed | M2 not passed |
-| 2026-08-05 | `0x80000006` result pointer | Corrected reference-backed result pointer to `0x220d0` | M2 not passed |
-| 2026-08-05 | Boot WAD and SPR streaming | Authentic WAD data decompressed; `dma=556`; stalled at `0x1198b0` | Current state; M2 not passed |
-| 2026-08-05 | SIF data-bearing completion deferral | 10.14s alive; startup bind completed; earlier CALL packet remained `status=0x5`, `busy=1`; target PC/graphics not captured | Evidence handoff; M2 not passed |
-| 2026-08-05 | PCSX2 SIF response-ring capture | `0x11a948` consumed a `0x40`-byte `0x80000008` response; packet status `0x5→0x4`, sequence `0x117ddd→0`, client word cleared | Evidence handoff; M2 not passed |
-| 2026-08-05 | Stateful CDVD init RPC payload | IOP handler proved `{1,0x21d,0x21d,0}`; unit tests passed; native copied 16 bytes, emitted `0x1040`, and advanced to DiskReady | Init delta passed; M2 not passed |
-| 2026-08-05 | DiskReady reference recapture | PINE/DebugServer handshake passed; post-boot IOP breakpoint `0x3f648` did not hit and `0x41378` was zero | Evidence handoff; exact payload still required |
-| 2026-08-05 | Stateful CDVD DiskReady RPC payload | PCSX2 at `0x121304` proved function `0` writes `{2}` to `0x1324c0`; native completed the call and reached bound service `0x80000593` | DiskReady delta passed; M2 not passed |
-| 2026-08-05 | Stateful service `0x80000593` RPC payload | PCSX2 at `0x1213f8` proved function `0x22` writes `{1}` to `0x1324c0`; native completed it and reached bound service `0x80000595` | Delta passed; M2 not passed |
-| 2026-08-05 | Stateful service `0x80000595` RPC payload | PCSX2 at `0x120be4` proved function `0x0e` writes `{2}` to `0x131340`; native completed it and reached service `0x80000593`, function `0x04` | Delta passed; M2 not passed |
-| 2026-08-05 | Batched SIF/PINE workflow | Four verified responses consolidated into a declarative table; diagnostics reported 15 completions and exact deferred function `0x04`; focused tests and 10s run passed | Workflow delta passed; M2 not passed |
-| 2026-08-05 | GhidraMCP fork migration | Stdio bridge connected to `OpenRatchetTest`; metadata verified the extracted R5900 ELF and focused decompilation at `0x121630` | Static-reference tooling verified; M2 unchanged |
-| 2026-08-05 | Startup SIF characterization and function `0x04` | One PINE/DebugServer boot proved service `0x80000593`, function `0x04` writes `{0}` to `0x1324c0`; native completed it, reached 22 completions, and deferred the new client `0x158040` shape | Iteration delta passed; M2 not passed |
-| 2026-08-05 | Request-sensitive SIF service `0x80000003` | PCSX2 proved `0x1999 -> 0x53300` for function `1` and `0x53300 -> 0` for function `2`; native matched the DMA-captured request and advanced to client `0x158400` function `0xff` | Iteration delta passed; M2 not passed |
-| 2026-08-05 | Batched capture and structured RPC diagnostics | Live DebugServer smoke produced and cleaned an ordered JSON capture; native run `165344` exposed service `0x80000006` and the complete deferred request in one record; build and 3 tests passed | Tooling delta passed; M2 unchanged |
-| 2026-08-09 | Forward SIF characterization | PCSX2 proved service `0x80000400` function `1` returns `0`; native run `144721` passed with 27 completions and still deferred only `0x1751d` | New service delta passed; `0x1751d` response remains unproven; M2 not passed |
-| 2026-08-09 | Stateful IOP heap RPC | Generated alloc/DMA/free flow plus PCSX2 `Heap_lib` evidence replaced fixed request rows; native run `145217` advanced `0x19 -> 0x37` with 57 completions | Allocator delta passed; new `0x80000963` response required; M2 not passed |
-| 2026-08-09 | Unsupported RPC request evidence | Shared routing now retains request metadata before service matching; native run `152941` proved the `0x80000963` request is 0x400 bytes and begins with four zero words | Evidence delta passed; reference response still required; M2 not passed |
-| 2026-08-09 | Service `0x80000900` version RPC | One reset boot proved full-zero `0x80000963 -> 0x0202`; native run `155659` completed it and advanced `0x37 -> 0x38` with 58 completions | Version delta passed; function `0x80000904` is next; M2 not passed |
-
-## Handoff format
-
-Every completed iteration should leave exactly one current handoff in `Active
-work` and report:
-
-- proven root cause or disproved hypothesis;
-- files changed;
-- exact build/test commands and logs;
-- before/after state and acceptance result;
-- regressions and remaining temporary debt;
-- one next experiment;
-- one suggested commit message, or no-commit recommendation.
+M3 begins by introducing a native VFS/index over the already extracted game
+content and moving the boot-WAD/file-access path out of `guest_overrides.cpp`
+without changing game logic.

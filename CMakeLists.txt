@@ -52,6 +52,9 @@ endif()
 
 add_executable(openratchet
     src/main.cpp
+    src/runtime/openratchet_runtime.cpp
+    src/runtime/native_replacements.cpp
+    src/game/native_replacements.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
     src/sif_startup_responses.cpp
@@ -73,6 +76,11 @@ target_compile_definitions(openratchet PRIVATE
     RATCHET_BOOT_ELF="${RATCHET_BOOT_ELF}")
 
 if(BUILD_TESTING)
+    add_executable(native_replacements_tests
+        tests/native_replacements_tests.cpp)
+    target_include_directories(native_replacements_tests PRIVATE src)
+    add_test(NAME native_replacements COMMAND native_replacements_tests)
+
     add_executable(sif_startup_responses_tests
         tests/sif_startup_responses_tests.cpp
         src/sif_startup_responses.cpp)

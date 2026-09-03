@@ -3,6 +3,7 @@
 #include "guest_range.h"
 #include "sif_rpc_transport.h"
 #include "sif_startup_responses.h"
+#include "runtime/native_replacements.h"
 
 #include <algorithm>
 #include <array>
@@ -746,27 +747,46 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
 }
 }
 
-void registerGuestBootstrapOverrides(PS2Runtime& runtime) {
-    runtime.registerFunction(0x11a428u, guest_11a428);
-    runtime.registerFunction(0x11a448u, guest_11a448);
+void declareLegacyGuestCompatibilityReplacements(
+    runtime::NativeReplacementRegistry& registry) {
+    using runtime::NativeReplacementStage;
+
+    // These two addresses are interior startup PCs installed before the ELF
+    // function table is available. They remain legacy compatibility bridges.
+    registry.add(0x11a428u, "legacy.sif.bootstrap.11a428",
+                 NativeReplacementStage::Bootstrap, guest_11a428);
+    registry.add(0x11a448u, "legacy.sif.bootstrap.11a448",
+                 NativeReplacementStage::Bootstrap, guest_11a448);
+
+    // Runtime wrappers preserve their original generated fallback explicitly.
+    // The registry captures the fallback before installing each wrapper.
+    registry.add(0x118b20u, "legacy.sif.set-dma",
+                 NativeReplacementStage::Runtime, guest_118b20,
+                 &g_guest118b20Original);
+    registry.add(0x11a948u, "legacy.sif.response-dispatch",
+                 NativeReplacementStage::Runtime, guest_11a948,
+                 &g_guest11a948Original);
+    registry.add(0x12f208u, "legacy.cdvd.read",
+                 NativeReplacementStage::Runtime, guest_12f208,
+                 &g_guest12f208Original);
+    registry.add(0x11cf10u, "legacy.callback.vblank",
+                 NativeReplacementStage::Runtime, guest_11cf10);
+    registry.add(0x12f1c8u, "legacy.cdvd.read-interior",
+                 NativeReplacementStage::Runtime, guest_12f1c8);
+    registry.add(0x120788u, "legacy.sif.call-target-repair",
+                 NativeReplacementStage::Runtime, guest_120788);
+    registry.add(0x121e40u, "legacy.graphics.image-diagnostics",
+                 NativeReplacementStage::Runtime, guest_121e40,
+                 &g_guest121e40Original);
+    registry.add(0x1f97e8u, "legacy.graphics.init-diagnostics",
+                 NativeReplacementStage::Runtime, guest_1f97e8,
+                 &g_guest1f97e8Original);
+    registry.add(0x20b618u, "legacy.dmac.decompressor-bridge",
+                 NativeReplacementStage::Runtime, guest_20b618,
+                 &g_guest20b618Original);
 }
 
-void registerGuestRuntimeOverrides(PS2Runtime& runtime) {
-    g_guest118b20Original = runtime.lookupFunction(0x118b20u);
-    g_guest11a948Original = runtime.lookupFunction(0x11a948u);
-    g_guest12f208Original = runtime.lookupFunction(0x12f208u);
-    g_guest121e40Original = runtime.lookupFunction(0x121e40u);
-    g_guest1f97e8Original = runtime.lookupFunction(0x1f97e8u);
-    g_guest20b618Original = runtime.lookupFunction(0x20b618u);
-    runtime.registerFunction(0x118b20u, guest_118b20);
-    runtime.registerFunction(0x11a948u, guest_11a948);
-    runtime.registerFunction(0x12f208u, guest_12f208);
-    runtime.registerFunction(0x11cf10u, guest_11cf10);
-    runtime.registerFunction(0x12f1c8u, guest_12f1c8);
-    runtime.registerFunction(0x120788u, guest_120788);
-    runtime.registerFunction(0x121e40u, guest_121e40);
-    runtime.registerFunction(0x1f97e8u, guest_1f97e8);
-    runtime.registerFunction(0x20b618u, guest_20b618);
-    installGuestGraphicsBridge(runtime);
+void installLegacyGuestDeviceBridges(PS2Runtime& fallbackRuntime) {
+    installGuestGraphicsBridge(fallbackRuntime);
 }
 }
