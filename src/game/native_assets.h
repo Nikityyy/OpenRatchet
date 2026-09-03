@@ -1,17 +1,14 @@
 #pragma once
 
-#include <cstdint>
+namespace ratchet::runtime {
+class NativeReplacementRegistry;
+}
 
 namespace ratchet::game {
 
-// Phase-3 migration gate. The native decoder executes against the authentic
-// guest input after the legacy decompressor returns, but it does not mutate
-// guest state. Correctness is anchored to an independently established boot-WAD
-// oracle; the legacy SPR/DMAC bridge is retained only as a diagnostic comparison
-// because it is known to overrun the authentic decompressed result.
-void validateNativeWadDecompressorShadow(std::uint8_t* rdram,
-                                         std::uint32_t inputAddress,
-                                         std::uint32_t outputAddress,
-                                         std::uint32_t legacyBytes);
+// Native game-semantic asset operations. The R&C1 WAD decompressor at 0x20b618
+// is owned here and executes directly over guest RAM through the host decoder;
+// it no longer performs or emulates SPR DMA/scratchpad transfers.
+void declareNativeAssetReplacements(runtime::NativeReplacementRegistry& registry);
 
 } // namespace ratchet::game

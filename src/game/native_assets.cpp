@@ -2,26 +2,29 @@
 
 #include "assets/wad_decompressor.h"
 #include "guest_range.h"
+#include "runtime/native_replacements.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <vector>
+
+#include "ps2_runtime.h"
+#include "ps2_runtime_macros.h"
 
 namespace ratchet::game {
 namespace {
 
 constexpr std::uint32_t kGuestRamBytes = 0x02000000u;
 constexpr std::uint32_t kPhysicalAddressMask = 0x1fffffffu;
-constexpr std::size_t kMaxShadowOutputBytes = 0x01000000u;
+constexpr std::size_t kWadHeaderBytes = 0x10u;
 
-// Independent Phase-3 oracle for the target retail R&C1 boot WAD (WAD2/0).
-// These values were established from the extracted retail asset and an
-// independently implemented Ratchet WAD reference decoder, not from the legacy
-// SPR/DMAC bridge.  The legacy bridge is known to overrun the authentic result
-// and is therefore diagnostic-only during this gate.
+// Independent oracle for the target retail R&C1 boot WAD (WAD2/0). These
+// values come from the extracted asset and an independent Ratchet WAD decoder,
+// not from the removed SPR/DMAC compatibility bridge.
 constexpr std::uint32_t kBootEncodedSize = 0x00050e0fu;
 constexpr std::uint32_t kBootEncodedHash = 0xb90bb3e3u;
 constexpr std::size_t kBootOutputBytes = 0x000a346cu;
@@ -33,6 +36,13 @@ bool resolveGuestRamAddress(std::uint32_t address,
     return physical < kGuestRamBytes;
 }
 
+std::uint32_t readLe32(const std::uint8_t* bytes) noexcept {
+    return static_cast<std::uint32_t>(bytes[0]) |
+           (static_cast<std::uint32_t>(bytes[1]) << 8u) |
+           (static_cast<std::uint32_t>(bytes[2]) << 16u) |
+           (static_cast<std::uint32_t>(bytes[3]) << 24u);
+}
+
 std::uint32_t fnv1a32(std::span<const std::uint8_t> bytes) noexcept {
     std::uint32_t hash = 2166136261u;
     for (const std::uint8_t byte : bytes) {
@@ -42,105 +52,119 @@ std::uint32_t fnv1a32(std::span<const std::uint8_t> bytes) noexcept {
     return hash;
 }
 
-const char* oracleName(bool known, bool match) noexcept {
-    if (!known) {
-        return "unknown";
+void returnToGuestCaller(R5900Context* ctx, std::uint32_t result) noexcept {
+    SET_GPR_U32(ctx, 2, result);
+    ctx->pc = GPR_U32(ctx, 31);
+}
+
+void failNativeWad(R5900Context* ctx,
+                   std::uint32_t inputAddress,
+                   std::uint32_t outputAddress,
+                   const char* reason) {
+    static std::uint32_t failureCount = 0u;
+    ++failureCount;
+    std::cerr << "[OpenRatchet:WAD] native failure count=" << failureCount
+              << " input=0x" << std::hex << inputAddress
+              << " output=0x" << outputAddress << std::dec
+              << " reason=" << reason << '\n';
+    returnToGuestCaller(ctx, 0u);
+}
+
+void nativeDecompressWad(std::uint8_t* rdram,
+                         R5900Context* ctx,
+                         PS2Runtime* runtime) {
+    (void)runtime;
+
+    static std::uint32_t invocationCount = 0u;
+    ++invocationCount;
+
+    const std::uint32_t inputAddress = GPR_U32(ctx, 4);
+    const std::uint32_t outputAddress = GPR_U32(ctx, 5);
+
+    std::uint32_t inputPhysical = 0u;
+    std::uint32_t outputPhysical = 0u;
+    if (!resolveGuestRamAddress(inputAddress, inputPhysical) ||
+        !isRangeWithin(inputPhysical, kWadHeaderBytes, kGuestRamBytes)) {
+        failNativeWad(ctx, inputAddress, outputAddress, "input-range");
+        return;
     }
-    return match ? "match" : "mismatch";
+    if (!resolveGuestRamAddress(outputAddress, outputPhysical)) {
+        failNativeWad(ctx, inputAddress, outputAddress, "output-range");
+        return;
+    }
+
+    if (rdram[inputPhysical + 0u] != 'W' ||
+        rdram[inputPhysical + 1u] != 'A' ||
+        rdram[inputPhysical + 2u] != 'D') {
+        failNativeWad(ctx, inputAddress, outputAddress, "invalid-magic");
+        return;
+    }
+
+    // The stream size is stored as an unaligned LE32 at +3. Copy the complete
+    // encoded stream to host memory before decoding so the native replacement
+    // remains correct even if a caller ever supplies overlapping input/output
+    // guest ranges. The old SPR implementation implicitly had the same
+    // decoupling by staging source blocks through scratchpad.
+    const std::uint32_t encodedSize = readLe32(rdram + inputPhysical + 3u);
+    if (encodedSize < kWadHeaderBytes ||
+        !isRangeWithin(inputPhysical, encodedSize, kGuestRamBytes)) {
+        failNativeWad(ctx, inputAddress, outputAddress, "encoded-range");
+        return;
+    }
+
+    std::vector<std::uint8_t> encoded(encodedSize);
+    std::copy_n(rdram + inputPhysical, encodedSize, encoded.data());
+
+    std::span<std::uint8_t> output(
+        rdram + outputPhysical,
+        static_cast<std::size_t>(kGuestRamBytes - outputPhysical));
+    const assets::WadDecompressResult result = assets::decompressWad(encoded, output);
+    if (!result.ok() || result.bytesWritten > std::numeric_limits<std::uint32_t>::max()) {
+        failNativeWad(ctx,
+                      inputAddress,
+                      outputAddress,
+                      assets::wadDecompressStatusName(result.status));
+        return;
+    }
+
+    const std::uint32_t encodedHash = fnv1a32(encoded);
+    const std::uint32_t outputHash = fnv1a32(
+        std::span<const std::uint8_t>(rdram + outputPhysical, result.bytesWritten));
+    const bool bootOracleKnown =
+        encodedSize == kBootEncodedSize && encodedHash == kBootEncodedHash;
+    const bool bootOracleMatch =
+        bootOracleKnown && result.bytesWritten == kBootOutputBytes &&
+        outputHash == kBootOutputHash;
+
+    if (invocationCount <= 12u) {
+        std::cerr << "[OpenRatchet:WAD] native count=" << invocationCount
+                  << " input=0x" << std::hex << inputAddress
+                  << " output=0x" << outputAddress
+                  << " encodedSize=0x" << encodedSize
+                  << " encodedHash=0x" << encodedHash
+                  << " bytes=0x" << result.bytesWritten
+                  << " bytesRead=0x" << result.bytesRead
+                  << " outputHash=0x" << outputHash << std::dec
+                  << " status=" << assets::wadDecompressStatusName(result.status)
+                  << " oracle="
+                  << (bootOracleKnown ? (bootOracleMatch ? "match" : "mismatch")
+                                      : "unknown")
+                  << '\n';
+    }
+
+    // FUN_0020b618 returns the number of decompressed bytes in v0. No PS2 DMAC,
+    // scratchpad state, or polling side effect is part of the game-visible
+    // semantic contract now that OpenRatchet owns this function.
+    returnToGuestCaller(ctx, static_cast<std::uint32_t>(result.bytesWritten));
 }
 
 } // namespace
 
-void validateNativeWadDecompressorShadow(std::uint8_t* rdram,
-                                         std::uint32_t inputAddress,
-                                         std::uint32_t outputAddress,
-                                         std::uint32_t legacyBytes) {
-    static std::uint32_t comparisonCount = 0u;
-    static std::uint32_t skippedCount = 0u;
-
-    std::uint32_t inputPhysical = 0u;
-    std::uint32_t outputPhysical = 0u;
-    const bool inputInRam = resolveGuestRamAddress(inputAddress, inputPhysical);
-    const bool legacyOutputInRam =
-        resolveGuestRamAddress(outputAddress, outputPhysical) &&
-        legacyBytes <= kMaxShadowOutputBytes &&
-        isRangeWithin(outputPhysical, legacyBytes, kGuestRamBytes);
-
-    if (!inputInRam) {
-        ++skippedCount;
-        if (skippedCount <= 4u) {
-            std::cerr << "[OpenRatchet:WAD] shadow skipped=" << skippedCount
-                      << " reason=input-range"
-                      << " input=0x" << std::hex << inputAddress
-                      << " output=0x" << outputAddress
-                      << " legacyBytes=0x" << legacyBytes << std::dec << '\n';
-        }
-        return;
-    }
-    if (comparisonCount >= 8u) {
-        return;
-    }
-    ++comparisonCount;
-
-    const std::span<const std::uint8_t> encoded(
-        rdram + inputPhysical,
-        static_cast<std::size_t>(kGuestRamBytes - inputPhysical));
-    std::vector<std::uint8_t> nativeOutput(kMaxShadowOutputBytes, 0u);
-    const assets::WadDecompressResult result =
-        assets::decompressWad(encoded, nativeOutput);
-
-    const std::size_t encodedHashBytes =
-        result.encodedSize <= encoded.size() ? result.encodedSize : 0u;
-    const std::uint32_t encodedHash =
-        encodedHashBytes != 0u
-            ? fnv1a32(encoded.first(encodedHashBytes))
-            : 0u;
-    const std::uint32_t nativeHash =
-        result.bytesWritten <= nativeOutput.size()
-            ? fnv1a32(std::span<const std::uint8_t>(nativeOutput.data(),
-                                                    result.bytesWritten))
-            : 0u;
-
-    const bool oracleKnown =
-        result.encodedSize == kBootEncodedSize && encodedHash == kBootEncodedHash;
-    const bool oracleMatch = oracleKnown && result.ok() &&
-                             result.bytesWritten == kBootOutputBytes &&
-                             nativeHash == kBootOutputHash;
-
-    bool legacyMatch = false;
-    std::size_t firstDifferenceOffset = 0u;
-    std::uint32_t legacyHash = 0u;
-    if (legacyOutputInRam && result.bytesWritten <= nativeOutput.size()) {
-        const std::span<const std::uint8_t> legacyOutput(
-            rdram + outputPhysical,
-            static_cast<std::size_t>(legacyBytes));
-        legacyHash = fnv1a32(legacyOutput);
-        const std::size_t comparableBytes =
-            std::min<std::size_t>(legacyBytes, result.bytesWritten);
-        const auto firstDifference = std::mismatch(
-            nativeOutput.begin(), nativeOutput.begin() + comparableBytes,
-            legacyOutput.begin());
-        firstDifferenceOffset =
-            static_cast<std::size_t>(firstDifference.first - nativeOutput.begin());
-        legacyMatch = result.ok() && result.bytesWritten == legacyBytes &&
-                      firstDifferenceOffset == comparableBytes;
-    }
-
-    std::cerr << "[OpenRatchet:WAD] shadow count=" << comparisonCount
-              << " input=0x" << std::hex << inputAddress
-              << " output=0x" << outputAddress
-              << " encodedSize=0x" << result.encodedSize
-              << " encodedHash=0x" << encodedHash
-              << " legacyBytes=0x" << legacyBytes
-              << " nativeBytes=0x" << result.bytesWritten
-              << " bytesRead=0x" << result.bytesRead
-              << " firstDiff=0x" << firstDifferenceOffset
-              << " legacyHash=0x" << legacyHash
-              << " nativeHash=0x" << nativeHash
-              << std::dec
-              << " status=" << assets::wadDecompressStatusName(result.status)
-              << " oracle=" << oracleName(oracleKnown, oracleMatch)
-              << " legacyMatch=" << (legacyMatch ? 1 : 0) << '\n';
+void declareNativeAssetReplacements(runtime::NativeReplacementRegistry& registry) {
+    registry.add(0x20b618u,
+                 "native.assets.decompress-wad",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeDecompressWad);
 }
 
 } // namespace ratchet::game

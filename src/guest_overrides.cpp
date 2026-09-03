@@ -1,7 +1,6 @@
 #include "guest_overrides.h"
 
 #include "guest_range.h"
-#include "game/native_assets.h"
 #include "sif_rpc_transport.h"
 #include "sif_startup_responses.h"
 #include "runtime/native_replacements.h"
@@ -22,7 +21,6 @@ PS2Runtime::RecompiledFunction g_guest11a948Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest118b20Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest121e40Original = nullptr;
 PS2Runtime::RecompiledFunction g_guest1f97e8Original = nullptr;
-PS2Runtime::RecompiledFunction g_guest20b618Original = nullptr;
 bool g_sifInitResponseInjected = false;
 bool g_sifCommandBridgeActive = false;
 SifStartupResponseResolver g_sifStartupResponseResolver;
@@ -39,132 +37,6 @@ SifRpcCallDisposition g_lastSifRpcTraceDisposition =
     SifRpcCallDisposition::UnboundClient;
 bool g_hasSifRpcTrace = false;
 constexpr size_t kGuestMemorySize = 0x02000000u;
-
-void copyGuestDecompressorInputToScratchpad(PS2Runtime& runtime, uint32_t inputAddress) {
-    constexpr uint32_t kScratchpadAddress = 0x70000000u;
-    constexpr uint32_t kTransferBytes = 0x200u * 16u;
-    const uint32_t sourceAddress = inputAddress + 0x10u;
-    for (uint32_t offset = 0u; offset < kTransferBytes; offset += 16u) {
-        runtime.memory().write128(
-            kScratchpadAddress + offset,
-            runtime.memory().read128(sourceAddress + offset));
-    }
-
-    static uint32_t diagnosticsCount = 0u;
-    if (diagnosticsCount < 4u) {
-        ++diagnosticsCount;
-        uint32_t nonZeroBytes = 0u;
-        for (uint32_t offset = 0u; offset < kTransferBytes; ++offset) {
-            nonZeroBytes += runtime.memory().read8(kScratchpadAddress + offset) != 0u ? 1u : 0u;
-        }
-        std::cerr << "[OpenRatchet:DMAC] SPR_FROM source=0x"
-                  << std::hex << sourceAddress
-                  << " destination=0x" << kScratchpadAddress
-                  << " bytes=0x" << kTransferBytes
-                  << " nonZeroBytes=" << std::dec << nonZeroBytes << std::endl;
-    }
-}
-
-void completeGuestSprTransfer(PS2Runtime& runtime, uint32_t inputAddress) {
-    constexpr uint32_t kSprChannelBase = 0x1000d400u;
-    constexpr uint32_t kScratchpadSize = 0x4000u;
-    const uint32_t chcr = runtime.memory().readIORegister(kSprChannelBase);
-    const uint32_t madr = runtime.memory().readIORegister(kSprChannelBase + 0x10u);
-    const uint32_t qwc = runtime.memory().readIORegister(kSprChannelBase + 0x20u);
-    const uint32_t sprAddress = runtime.memory().readIORegister(kSprChannelBase + 0x80u);
-    const uint32_t sourceBase = inputAddress + 0x10u;
-    const uint32_t sourceOffset = madr - sourceBase;
-    const bool hasValidTransferSize = qwc <= UINT32_MAX / 16u;
-    const uint32_t byteCount = hasValidTransferSize ? qwc * 16u : 0u;
-    const uint32_t physicalMadr = madr & PS2_RAM_MASK;
-    const bool isGuestInputRange =
-        madr >= sourceBase && hasValidTransferSize &&
-        isRangeWithin(physicalMadr, byteCount, PS2_RAM_SIZE);
-
-    if ((chcr & 0x100u) != 0u && isGuestInputRange && byteCount != 0u) {
-        uint8_t* scratchpad = runtime.memory().getScratchpad();
-        const uint32_t scratchOffset = sprAddress & (kScratchpadSize - 1u);
-        for (uint32_t offset = 0u; offset < byteCount; offset += 16u) {
-            const __m128i quadword = runtime.memory().read128(madr + offset);
-            alignas(16) uint8_t bytes[16];
-            std::memcpy(bytes, &quadword, sizeof(bytes));
-            for (uint32_t i = 0u; i < 16u; ++i) {
-                scratchpad[(scratchOffset + offset + i) & (kScratchpadSize - 1u)] = bytes[i];
-            }
-        }
-    }
-
-    static uint32_t diagnosticsCount = 0u;
-    if (diagnosticsCount < 8u) {
-        ++diagnosticsCount;
-        std::cerr << "[OpenRatchet:DMAC] SPR completion madr=0x"
-                  << std::hex << madr
-                  << " spr=0x" << sprAddress
-                  << " qwc=0x" << qwc
-                  << " sourceOffset=0x" << sourceOffset
-                  << " copied=" << std::dec
-                  << static_cast<uint32_t>(isGuestInputRange ? 1u : 0u)
-                  << std::endl;
-    }
-    // This bridge retains the observed whole-register clear for now. Replacing
-    // it with a bit-level completion update requires a DMAC reference capture.
-    runtime.memory().writeIORegister(kSprChannelBase, 0u);
-}
-
-void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
-    static uint32_t count = 0u;
-    ++count;
-    const __m128i savedReturnAddress = GPR_VEC(ctx, 31);
-    const uint32_t inputAddress = GPR_U32(ctx, 4);
-    const uint32_t outputAddress = GPR_U32(ctx, 5);
-    if (count <= 4u) {
-        std::cerr << "[OpenRatchet:guest] 20b618 enter count=" << count
-                  << " a0=0x" << std::hex << GPR_U32(ctx, 4)
-                  << " a1=0x" << GPR_U32(ctx, 5)
-                  << " ra=0x" << GPR_U32(ctx, 31)
-                  << " pc=0x" << ctx->pc << std::dec << std::endl;
-    }
-    copyGuestDecompressorInputToScratchpad(*runtime, inputAddress);
-    if (g_guest20b618Original != nullptr) {
-        for (uint32_t resumeCount = 0u; resumeCount < 200000u; ++resumeCount) {
-            g_guest20b618Original(rdram, ctx, runtime);
-            const uint32_t waitPc = ctx->pc;
-            if (waitPc == 0x20b660u || waitPc == 0x20b670u || waitPc == 0x20b908u) {
-                // The guest has submitted an SPR transfer and is polling
-                // its CHCR start bit. The root-owned SPR copy above
-                // completed the transfer; clear the emulated completion bit
-                // before resuming the generated wait loop.
-                completeGuestSprTransfer(*runtime, inputAddress);
-            }
-            if (waitPc < 0x20b660u || waitPc > 0x20b8e0u) {
-                break;
-            }
-        }
-    } else {
-        ctx->pc = GPR_U32(ctx, 31);
-    }
-    const uint32_t savedReturnPc = _mm_extract_epi32(savedReturnAddress, 0);
-    if (ctx->pc == 0u && savedReturnPc != 0u) {
-        ctx->pc = savedReturnPc;
-        SET_GPR_VEC(ctx, 31, savedReturnAddress);
-        std::cerr << "[OpenRatchet:guest] 20b618 repaired return pc=0x"
-                  << std::hex << savedReturnPc << std::dec << std::endl;
-    }
-    game::validateNativeWadDecompressorShadow(
-        rdram, inputAddress, outputAddress, GPR_U32(ctx, 2));
-
-    if (count <= 4u) {
-        uint32_t nonZeroOutput = 0u;
-        for (uint32_t i = 0u; i < 0x100u; ++i) {
-            nonZeroOutput += READ8(ADD32(GPR_U32(ctx, 5), i)) != 0u ? 1u : 0u;
-        }
-        std::cerr << "[OpenRatchet:guest] 20b618 exit count=" << count
-                  << " pc=0x" << std::hex << ctx->pc
-                  << " v0=0x" << GPR_U32(ctx, 2)
-                  << " output=0x" << GPR_U32(ctx, 5)
-                  << " outputNonZero=" << std::dec << nonZeroOutput << std::endl;
-    }
-}
 
 void guest_1f97e8(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const uint32_t originalDestination = GPR_U32(ctx, 4);
@@ -675,9 +547,6 @@ void declareLegacyGuestCompatibilityReplacements(
     registry.add(0x1f97e8u, "legacy.graphics.init-diagnostics",
                  NativeReplacementStage::Runtime, guest_1f97e8,
                  &g_guest1f97e8Original);
-    registry.add(0x20b618u, "legacy.dmac.decompressor-bridge",
-                 NativeReplacementStage::Runtime, guest_20b618,
-                 &g_guest20b618Original);
 }
 
 void installLegacyGuestDeviceBridges(PS2Runtime& fallbackRuntime) {

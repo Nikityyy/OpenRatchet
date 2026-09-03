@@ -1,5 +1,6 @@
 #include "game/native_replacements.h"
 
+#include "game/native_assets.h"
 #include "game/native_io.h"
 #include "guest_overrides.h"
 
@@ -10,6 +11,7 @@ void declareNativeReplacements(runtime::NativeReplacementRegistry& registry) {
     // shrinking legacy compatibility layer. Each address may have only one
     // owner per stage, so migration mistakes fail at declaration time.
     declareNativeIoReplacements(registry);
+    declareNativeAssetReplacements(registry);
     declareLegacyGuestCompatibilityReplacements(registry);
 }
 

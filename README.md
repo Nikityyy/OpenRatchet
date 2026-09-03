@@ -42,14 +42,15 @@ not yet been migrated. `build/toc.json` is therefore a required native runtime
 artifact alongside `build/extracted/PS2_MAIN.ELF`. New extractions preserve the
 retail TOC's final 38 level-directory entries as well.
 
-`src/assets/wad_decompressor.*` is the first native compressed-asset primitive.
-For the current migration gate it shadows `0x20b618` without changing guest
-state. Correctness is no longer inferred from the temporary SPR/DMAC bridge:
-the target boot WAD is pinned to an independently established native output
-fingerprint, and the test suite can validate all 249 compressed streams in the
-165-file extracted WAD2 corpus against an aggregate reference manifest. The
-following phase can therefore make the native decoder authoritative and remove
-the decompressor's SPR/DMAC compatibility bridge.
+`src/assets/wad_decompressor.*` is the first native compressed-asset primitive,
+and `src/game/native_assets.*` now owns game function `0x20b618`. Compressed
+WAD streams are decoded directly in the host and written to guest RAM; the old
+scratchpad/SPR-DMAC copy-and-poll bridge has been removed completely. The game
+still receives the original function contract: `v0` is the decompressed byte
+count and control returns directly to the caller. The target boot WAD is pinned
+to an independently established output fingerprint, and the test suite validates
+all 249 compressed streams in the 165-file extracted WAD2 corpus against a fixed
+aggregate reference manifest.
 
 PS2Runtime remains an EE/game-logic fallback and temporary compatibility backend,
 not the target platform architecture.
