@@ -132,7 +132,7 @@ bool renderOffsetFits(std::uint32_t offset, std::size_t coreBytes) noexcept {
 
 Rac1LevelCoreLoadResult fail(Rac1LevelInspectStatus status,
                              Rac1LevelSummary summary) noexcept {
-    return {status, summary, {}};
+    return {status, summary, {}, {}, {}};
 }
 
 } // namespace
@@ -155,6 +155,8 @@ const char* rac1LevelInspectStatusName(Rac1LevelInspectStatus status) noexcept {
         return "invalid-level-data-header";
     case Rac1LevelInspectStatus::InvalidCoreIndexRange:
         return "invalid-core-index-range";
+    case Rac1LevelInspectStatus::InvalidGsRamRange:
+        return "invalid-gs-ram-range";
     case Rac1LevelInspectStatus::InvalidCoreDataRange:
         return "invalid-core-data-range";
     case Rac1LevelInspectStatus::InvalidCoreHeader:
@@ -258,6 +260,10 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
         !byteRangeFits(summary.coreIndex.offset, summary.coreIndex.size, dataBytes)) {
         return fail(Rac1LevelInspectStatus::InvalidCoreIndexRange, summary);
     }
+    if (summary.gsRam.size != 0u &&
+        !byteRangeFits(summary.gsRam.offset, summary.gsRam.size, dataBytes)) {
+        return fail(Rac1LevelInspectStatus::InvalidGsRamRange, summary);
+    }
     if (summary.coreData.size < kWadHeaderBytes ||
         !byteRangeFits(summary.coreData.offset, summary.coreData.size, dataBytes)) {
         return fail(Rac1LevelInspectStatus::InvalidCoreDataRange, summary);
@@ -267,9 +273,22 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
     if (!checkedAdd(dataFileOffset, summary.coreIndex.offset, coreIndexFileOffset)) {
         return fail(Rac1LevelInspectStatus::InvalidCoreIndexRange, summary);
     }
-    std::array<std::uint8_t, kLevelCoreHeaderBytes> coreHeader{};
-    if (!readExact(input, coreIndexFileOffset, coreHeader)) {
+    std::vector<std::uint8_t> coreIndex(summary.coreIndex.size, 0u);
+    if (!readExact(input, coreIndexFileOffset, coreIndex)) {
         return fail(Rac1LevelInspectStatus::InvalidCoreHeader, summary);
+    }
+    const std::span<const std::uint8_t> coreHeader(coreIndex.data(), kLevelCoreHeaderBytes);
+
+    std::vector<std::uint8_t> gsRam;
+    if (summary.gsRam.size != 0u) {
+        std::uint64_t gsRamFileOffset = 0u;
+        if (!checkedAdd(dataFileOffset, summary.gsRam.offset, gsRamFileOffset)) {
+            return fail(Rac1LevelInspectStatus::InvalidGsRamRange, summary);
+        }
+        gsRam.resize(summary.gsRam.size);
+        if (!readExact(input, gsRamFileOffset, gsRam)) {
+            return fail(Rac1LevelInspectStatus::InvalidGsRamRange, summary);
+        }
     }
 
     summary.gsRamTable = readArrayRange(coreHeader, 0x00u);
@@ -357,7 +376,8 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
         return fail(Rac1LevelInspectStatus::InvalidRenderOffsets, summary);
     }
 
-    return {Rac1LevelInspectStatus::Ok, summary, std::move(core)};
+    return {Rac1LevelInspectStatus::Ok, summary, std::move(core),
+            std::move(coreIndex), std::move(gsRam)};
 }
 
 Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,

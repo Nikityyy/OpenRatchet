@@ -131,21 +131,31 @@ renderer: class/texture table offsets were previously being displayed as counts.
 Core offsets such as `tfrags == 0` are valid; R&C1 can place the tfrag block at
 the beginning of the decompressed core.
 
-## First native visual boundary
+## Native visual boundary
 
-`assets::decodeRac1Collision` decodes the level collision octree directly from
-the decompressed core into a host triangle list. It expands octant-local packed
-vertices, triangle/quad faces, collision types, and the optional Ratchet-only
-collision groups without touching VIF, VU, GIF, GS or guest memory.
+`assets::decodeRac1Collision` remains an independent decoder for the level
+collision octree and provides a useful geometry oracle without touching VIF,
+VU, GIF, GS or guest memory.
 
-`native_level_viewer` is the first renderer-owned executable. It links directly
-to the already-present native raylib/OpenGL dependency, uploads the decoded R&C1
-geometry as a PC vertex buffer, and displays it with a free camera. This first
-visual milestone intentionally uses collision geometry because it is a direct,
-fully understood geometry structure; tfrags require their own VIF packet decoder
-and texture path. The collision renderer establishes the native GPU ownership
-boundary first, then the same viewer/runtime renderer will gain textured tfrags
-rather than introducing a PS2 graphics emulator.
+The visual terrain path is now separate and renderer-owned.
+`assets::decodeRac1TfragTerrain` parses the retail tfrag block, walks its five
+embedded VIF command buffers as serialized asset packets, reconstructs the LOD0
+vertex-info/position/strip streams, and emits ordinary host triangles grouped by
+texture material. It does not execute VU microcode or emulate VIF state beyond
+the packet layout required to read the stored data.
+
+`assets::decodeRac1TfragTextures` reads the level-core texture entries, indexed
+pixel data and raw GS-RAM CLUT data into ordinary RGBA8 host images.
+`loadRac1LevelCore` therefore returns the complete core-index and GS-RAM blobs
+in addition to the decompressed core. The PC renderer consumes those host assets
+directly.
+
+`native_level_viewer` links to raylib/OpenGL, uploads the reconstructed tfrag
+triangles and decoded textures to native GPU resources, and displays them with a
+free camera. The PS2 GS framebuffer, VU execution and GIF stream are not part of
+this path. Exact GS material-state refinements such as per-strip CLAMP and
+transparency ordering can be layered onto the native renderer without changing
+asset ownership.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

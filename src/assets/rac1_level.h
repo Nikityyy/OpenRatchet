@@ -32,6 +32,7 @@ enum class Rac1LevelInspectStatus : std::uint8_t {
     InvalidDataRange,
     InvalidLevelDataHeader,
     InvalidCoreIndexRange,
+    InvalidGsRamRange,
     InvalidCoreDataRange,
     InvalidCoreHeader,
     InvalidCoreWad,
@@ -115,6 +116,8 @@ struct Rac1LevelCoreLoadResult {
     Rac1LevelInspectStatus status = Rac1LevelInspectStatus::FileOpenFailed;
     Rac1LevelSummary summary{};
     std::vector<std::uint8_t> core;
+    std::vector<std::uint8_t> coreIndex;
+    std::vector<std::uint8_t> gsRam;
 
     [[nodiscard]] bool ok() const noexcept {
         return status == Rac1LevelInspectStatus::Ok;

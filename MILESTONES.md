@@ -26,34 +26,32 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 M4 — Native Ratchet scene renderer.
 
-### Phase-6 change under verification
+### Phase-7 change under verification
 
-- Correct the LevelCoreHeader array-pair interpretation to the retail
-  `{count, offset}` layout and expose the natively decompressed level core as a
-  renderer-owned host buffer.
-- Add an independent R&C1 collision decoder for the core collision block. It
-  expands the octree, packed vertices, triangles/quads, collision types, and
-  Ratchet-only collision groups directly into native triangle geometry.
-- Add `native_level_viewer`, linked directly to raylib/OpenGL rather than the
-  PS2 graphics path. It uploads that authentic level geometry to a PC GPU
-  vertex buffer and provides a free camera plus solid/wireframe modes.
-- Keep the normal recompiled-game runtime untouched in this phase. The purpose
-  is to prove the native renderer/data boundary visually before the more
-  complicated tfrag VIF/texture decoder is introduced.
+- Extend the native level-core load result with the complete core-index and
+  GS-RAM blobs required by renderer-owned texture decoding.
+- Add an independent R&C1 8-bit paletted texture decoder, including the PS2
+  CLUT index permutation and alpha expansion.
+- Add a native R&C1 tfrag decoder for the five embedded VIF storage buffers. It
+  reconstructs common/LOD01/LOD0 vertex streams, LOD0 strips, material changes,
+  UVs and vertex colors directly into host triangles without a VIF/VU emulator.
+- Move `native_level_viewer` from collision-debug geometry to actual textured
+  tfrag terrain rendered through raylib/OpenGL.
+- Keep the normal recompiled-game runtime untouched; this phase proves the
+  visual terrain asset/renderer path before game-state integration.
 
 ### Acceptance test
 
-A Release build and all eight CTest tests must pass. The updated
-`native_level_inspector` must still report `status=ok` and now show plausible
-class/texture counts with their separate offsets. Then
-`tools/run-native-level-viewer.ps1 -LevelIndex 0` must print
-`[OpenRatchet:viewer] ... status=ok`, open a native PC window, and visibly show
-the level's authentic collision geometry. The normal 20-second runtime
-regression must remain alive with the native WAD path intact.
+A Release build and all ten CTest tests must pass, including the new synthetic
+`tfrag` and texture format tests. `native_level_inspector` must remain
+`status=ok`. `tools/run-native-level-viewer.ps1 -LevelIndex 0` must print a
+`[OpenRatchet:tfrag] ... status=ok` line with nonzero tfrag/strip/triangle/batch
+counts and open a coherent textured rendering of the authentic level. The
+normal 20-second runtime regression must remain alive with the native WAD path
+intact.
 
 ### Next phase after acceptance
 
-Phase 7 replaces the diagnostic collision-only visual with actual R&C1 tfrag
-terrain: decode the five embedded VIF data groups, reconstruct LOD0 triangle
-strips, decode the level texture tables/GS palette data, and render textured
-terrain through the same native renderer boundary.
+Phase 8 expands native scene coverage beyond terrain: sky plus static visual
+objects (ties/shrubs) and their texture/material paths, while keeping the
+renderer independent of the PS2 GS/VU pipeline.

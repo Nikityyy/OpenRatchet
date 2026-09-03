@@ -57,6 +57,8 @@ add_executable(openratchet
     src/assets/wad_decompressor.cpp
     src/assets/rac1_level.cpp
     src/assets/rac1_collision.cpp
+    src/assets/rac1_texture.cpp
+    src/assets/rac1_tfrag.cpp
     src/platform/native_vfs.cpp
     src/game/native_services.cpp
     src/game/native_io.cpp
@@ -87,6 +89,8 @@ add_executable(native_level_viewer
     tools/native_level_viewer.cpp
     src/assets/rac1_level.cpp
     src/assets/rac1_collision.cpp
+    src/assets/rac1_texture.cpp
+    src/assets/rac1_tfrag.cpp
     src/assets/wad_decompressor.cpp
     src/platform/native_vfs.cpp)
 target_include_directories(native_level_viewer PRIVATE src)
@@ -116,6 +120,18 @@ if(BUILD_TESTING)
         src/assets/rac1_collision.cpp)
     target_include_directories(rac1_collision_tests PRIVATE src)
     add_test(NAME rac1_collision COMMAND rac1_collision_tests)
+
+    add_executable(rac1_texture_tests
+        tests/rac1_texture_tests.cpp
+        src/assets/rac1_texture.cpp)
+    target_include_directories(rac1_texture_tests PRIVATE src)
+    add_test(NAME rac1_texture COMMAND rac1_texture_tests)
+
+    add_executable(rac1_tfrag_tests
+        tests/rac1_tfrag_tests.cpp
+        src/assets/rac1_tfrag.cpp)
+    target_include_directories(rac1_tfrag_tests PRIVATE src)
+    add_test(NAME rac1_tfrag COMMAND rac1_tfrag_tests)
 
     add_executable(native_level_inspector
         tools/native_level_inspector.cpp

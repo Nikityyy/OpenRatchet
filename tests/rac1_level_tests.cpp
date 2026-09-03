@@ -42,9 +42,11 @@ std::vector<std::uint8_t> makeFixture() {
     writeRange(bytes, kHeaderOffset + 0x018u, 0u, 0u);
     writeRange(bytes, kHeaderOffset + 0x020u, 0u, 0u);
 
-    // Level-data header: core index at +0x100, compressed core at +0x200.
+    // Level-data header: core index, raw GS RAM, then compressed core.
     writeRange(bytes, kDataOffset + 0x10u, 0x100u, 0x1000u);
+    writeRange(bytes, kDataOffset + 0x18u, 0x1100u, 0x200u);
     writeRange(bytes, kDataOffset + 0x50u, 0x1400u, 0x100u);
+    bytes[kDataOffset + 0x1100u] = 0xa5u;
 
     const std::size_t core = kDataOffset + 0x100u;
     writeLe32(bytes, core + 0x08u, 4u);   // tfrags
@@ -94,6 +96,18 @@ int main() {
         std::ofstream output(level, std::ios::binary);
         output.write(reinterpret_cast<const char*>(fixture.data()),
                      static_cast<std::streamsize>(fixture.size()));
+    }
+
+    const auto loaded = ratchet::assets::loadRac1LevelCore(level, 0u, 100u, 20u, 102u);
+    if (!loaded.ok()) {
+        std::cerr << "rac1_level_tests: load failed status="
+                  << ratchet::assets::rac1LevelInspectStatusName(loaded.status) << '\n';
+        return 1;
+    }
+    if (loaded.coreIndex.size() != 0x1000u || loaded.gsRam.size() != 0x200u ||
+        loaded.gsRam.front() != 0xa5u || loaded.core.size() != 32u) {
+        std::cerr << "rac1_level_tests: renderer-owned core/index/GS blobs mismatch\n";
+        return 1;
     }
 
     const auto result = ratchet::assets::inspectRac1Level(level, 0u, 100u, 20u, 102u);
