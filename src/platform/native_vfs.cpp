@@ -1,0 +1,447 @@
+#include "platform/native_vfs.h"
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <optional>
+#include <sstream>
+#include <string_view>
+
+namespace ratchet::platform {
+namespace {
+
+struct TocSectlen {
+    std::uint32_t num = 0u;
+    std::uint32_t start = 0u;
+    std::uint32_t length = 0u;
+};
+
+std::optional<std::uint32_t> parseUnsignedField(std::string_view object,
+                                                std::string_view field) {
+    const std::string key = "\"" + std::string(field) + "\"";
+    const std::size_t keyPosition = object.find(key);
+    if (keyPosition == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t colon = object.find(':', keyPosition + key.size());
+    if (colon == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t begin = colon + 1u;
+    while (begin < object.size() &&
+           (object[begin] == ' ' || object[begin] == '\t' ||
+            object[begin] == '\r' || object[begin] == '\n')) {
+        ++begin;
+    }
+
+    std::size_t end = begin;
+    while (end < object.size() && object[end] >= '0' && object[end] <= '9') {
+        ++end;
+    }
+    if (end == begin) {
+        return std::nullopt;
+    }
+
+    std::uint32_t value = 0u;
+    const char* first = object.data() + begin;
+    const char* last = object.data() + end;
+    const auto result = std::from_chars(first, last, value);
+    if (result.ec != std::errc{} || result.ptr != last) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+bool parseSectlenArray(const std::string& json,
+                       std::string_view arrayName,
+                       std::vector<TocSectlen>& output,
+                       std::string& error) {
+    const std::string key = "\"" + std::string(arrayName) + "\"";
+    const std::size_t keyPosition = json.find(key);
+    if (keyPosition == std::string::npos) {
+        error = "missing array '" + std::string(arrayName) + "'";
+        return false;
+    }
+
+    const std::size_t arrayBegin = json.find('[', keyPosition + key.size());
+    if (arrayBegin == std::string::npos) {
+        error = "missing '[' for array '" + std::string(arrayName) + "'";
+        return false;
+    }
+
+    std::size_t cursor = arrayBegin + 1u;
+    while (cursor < json.size()) {
+        while (cursor < json.size() &&
+               (json[cursor] == ' ' || json[cursor] == '\t' ||
+                json[cursor] == '\r' || json[cursor] == '\n' ||
+                json[cursor] == ',')) {
+            ++cursor;
+        }
+
+        if (cursor >= json.size()) {
+            break;
+        }
+        if (json[cursor] == ']') {
+            return true;
+        }
+        if (json[cursor] != '{') {
+            error = "unexpected token while parsing array '" +
+                    std::string(arrayName) + "'";
+            return false;
+        }
+
+        const std::size_t objectEnd = json.find('}', cursor + 1u);
+        if (objectEnd == std::string::npos) {
+            error = "unterminated object in array '" + std::string(arrayName) + "'";
+            return false;
+        }
+
+        const std::string_view object(json.data() + cursor, objectEnd - cursor + 1u);
+        const auto num = parseUnsignedField(object, "num");
+        const auto start = parseUnsignedField(object, "start");
+        const auto length = parseUnsignedField(object, "length");
+        if (!num || !start || !length) {
+            error = "invalid sectlen object in array '" + std::string(arrayName) + "'";
+            return false;
+        }
+
+        output.push_back({*num, *start, *length});
+        cursor = objectEnd + 1u;
+    }
+
+    error = "unterminated array '" + std::string(arrayName) + "'";
+    return false;
+}
+
+std::filesystem::path assetPath(const std::filesystem::path& root,
+                                NativeAssetKind kind,
+                                std::uint32_t index) {
+    switch (kind) {
+    case NativeAssetKind::Wad:
+        return root / "wads" / ("wad_" + std::to_string(index) + ".wad");
+    case NativeAssetKind::Wad2:
+        return root / "wads2" / ("wad2_" + std::to_string(index) + ".wad");
+    }
+    return {};
+}
+
+bool readFileRange(const NativeAssetLocation& asset,
+                   std::uint64_t byteOffset,
+                   std::uint8_t* destination,
+                   std::size_t byteCount) {
+    if (destination == nullptr || byteCount == 0u) {
+        return false;
+    }
+
+    std::error_code sizeError;
+    const std::uint64_t fileSize = std::filesystem::file_size(asset.path, sizeError);
+    if (sizeError || byteOffset > fileSize || byteCount > fileSize - byteOffset) {
+        return false;
+    }
+
+    std::ifstream input(asset.path, std::ios::binary);
+    if (!input) {
+        return false;
+    }
+
+    input.seekg(static_cast<std::streamoff>(byteOffset), std::ios::beg);
+    if (!input) {
+        return false;
+    }
+
+    input.read(reinterpret_cast<char*>(destination),
+               static_cast<std::streamsize>(byteCount));
+    return input.good() || input.gcount() == static_cast<std::streamsize>(byteCount);
+}
+
+} // namespace
+
+const char* nativeAssetKindName(NativeAssetKind kind) noexcept {
+    switch (kind) {
+    case NativeAssetKind::Wad:
+        return "wads";
+    case NativeAssetKind::Wad2:
+        return "wads2";
+    }
+    return "unknown";
+}
+
+std::string nativeAssetName(const NativeAssetLocation& asset) {
+    return std::string(nativeAssetKindName(asset.kind)) + "/" +
+           std::to_string(asset.index);
+}
+
+bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
+                           const std::filesystem::path& tocPath) {
+    ready_ = false;
+    extractedRoot_ = extractedRoot;
+    tocPath_ = tocPath;
+    assets_.clear();
+    summary_ = {};
+
+    std::ifstream input(tocPath_, std::ios::binary);
+    if (!input) {
+        std::cerr << "[OpenRatchet:VFS] missing TOC: " << tocPath_.string() << '\n';
+        return false;
+    }
+
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    const std::string json = buffer.str();
+    if (json.empty()) {
+        std::cerr << "[OpenRatchet:VFS] empty TOC: " << tocPath_.string() << '\n';
+        return false;
+    }
+
+    std::vector<TocSectlen> wads;
+    std::vector<TocSectlen> wads2;
+    std::string parseError;
+    if (!parseSectlenArray(json, "wads", wads, parseError) ||
+        !parseSectlenArray(json, "wads2", wads2, parseError)) {
+        std::cerr << "[OpenRatchet:VFS] TOC parse failed: " << parseError
+                  << " path=" << tocPath_.string() << '\n';
+        return false;
+    }
+
+    const auto append = [this](NativeAssetKind kind,
+                               const std::vector<TocSectlen>& entries) {
+        for (const TocSectlen& entry : entries) {
+            if (entry.start == 0u || entry.length == 0u) {
+                continue;
+            }
+            assets_.push_back({kind,
+                               entry.num,
+                               entry.start,
+                               entry.length,
+                               assetPath(extractedRoot_, kind, entry.num)});
+        }
+    };
+    append(NativeAssetKind::Wad, wads);
+    append(NativeAssetKind::Wad2, wads2);
+
+    std::sort(assets_.begin(), assets_.end(),
+              [](const NativeAssetLocation& lhs, const NativeAssetLocation& rhs) {
+                  if (lhs.startSector != rhs.startSector) {
+                      return lhs.startSector < rhs.startSector;
+                  }
+                  if (lhs.kind != rhs.kind) {
+                      return static_cast<unsigned>(lhs.kind) < static_cast<unsigned>(rhs.kind);
+                  }
+                  return lhs.index < rhs.index;
+              });
+
+    for (std::size_t i = 1u; i < assets_.size(); ++i) {
+        const NativeAssetLocation& previous = assets_[i - 1u];
+        const NativeAssetLocation& current = assets_[i];
+        const std::uint64_t previousEnd =
+            static_cast<std::uint64_t>(previous.startSector) + previous.sectorCount;
+        if (current.startSector < previousEnd) {
+            std::cerr << "[OpenRatchet:VFS] overlapping TOC assets: "
+                      << nativeAssetName(previous) << " and " << nativeAssetName(current)
+                      << '\n';
+            assets_.clear();
+            return false;
+        }
+    }
+
+    summary_.indexedAssets = assets_.size();
+    for (const NativeAssetLocation& asset : assets_) {
+        std::error_code sizeError;
+        const std::uint64_t fileSize = std::filesystem::file_size(asset.path, sizeError);
+        const std::uint64_t expectedSize =
+            static_cast<std::uint64_t>(asset.sectorCount) * kSectorBytes;
+        if (!sizeError && fileSize == expectedSize) {
+            ++summary_.presentAssets;
+        } else {
+            ++summary_.missingAssets;
+        }
+    }
+
+    const NativeAssetLocation* boot = findAsset(NativeAssetKind::Wad2, 0u);
+    if (boot == nullptr || !std::filesystem::is_regular_file(boot->path)) {
+        std::cerr << "[OpenRatchet:VFS] missing required boot asset wads2/0 under "
+                  << extractedRoot_.string() << '\n';
+        assets_.clear();
+        summary_ = {};
+        return false;
+    }
+
+    std::error_code bootSizeError;
+    const std::uint64_t bootSize = std::filesystem::file_size(boot->path, bootSizeError);
+    const std::uint64_t expectedBootSize =
+        static_cast<std::uint64_t>(boot->sectorCount) * kSectorBytes;
+    std::array<std::uint8_t, 4> bootMagic{};
+    std::ifstream bootInput(boot->path, std::ios::binary);
+    const bool bootHeaderRead =
+        bootInput && static_cast<bool>(bootInput.read(
+                         reinterpret_cast<char*>(bootMagic.data()),
+                         static_cast<std::streamsize>(bootMagic.size())));
+    if (bootSizeError || bootSize != expectedBootSize || !bootHeaderRead ||
+        bootMagic != std::array<std::uint8_t, 4>{0x57u, 0x41u, 0x44u, 0x0fu}) {
+        std::cerr << "[OpenRatchet:VFS] invalid required boot asset wads2/0 path="
+                  << boot->path.string() << " expectedBytes=0x" << std::hex
+                  << expectedBootSize << " actualBytes=0x" << bootSize << std::dec << '\n';
+        assets_.clear();
+        summary_ = {};
+        return false;
+    }
+
+    ready_ = true;
+    std::cerr << "[OpenRatchet:VFS] indexed=" << summary_.indexedAssets
+              << " present=" << summary_.presentAssets
+              << " missing=" << summary_.missingAssets
+              << " toc=" << tocPath_.string() << '\n';
+    std::cerr << "[OpenRatchet:VFS] boot asset=" << nativeAssetName(*boot)
+              << " sector=0x" << std::hex << boot->startSector
+              << " sectors=0x" << boot->sectorCount << std::dec
+              << " path=" << boot->path.string() << '\n';
+    return true;
+}
+
+const NativeAssetLocation* NativeVfs::findAsset(NativeAssetKind kind,
+                                                 std::uint32_t index) const noexcept {
+    const auto it = std::find_if(
+        assets_.begin(), assets_.end(),
+        [kind, index](const NativeAssetLocation& asset) {
+            return asset.kind == kind && asset.index == index;
+        });
+    return it == assets_.end() ? nullptr : &*it;
+}
+
+const NativeAssetLocation* NativeVfs::findAssetContainingSector(
+    std::uint32_t sector) const noexcept {
+    if (assets_.empty()) {
+        return nullptr;
+    }
+
+    const auto it = std::upper_bound(
+        assets_.begin(), assets_.end(), sector,
+        [](std::uint32_t value, const NativeAssetLocation& asset) {
+            return value < asset.startSector;
+        });
+    if (it == assets_.begin()) {
+        return nullptr;
+    }
+
+    const NativeAssetLocation& candidate = *std::prev(it);
+    const std::uint64_t end =
+        static_cast<std::uint64_t>(candidate.startSector) + candidate.sectorCount;
+    return sector < end ? &candidate : nullptr;
+}
+
+bool NativeVfs::readSectors(std::uint32_t startSector,
+                            std::uint32_t sectorCount,
+                            std::uint8_t* destination,
+                            std::size_t destinationCapacity,
+                            std::string* sourceDescription) const {
+    if (!ready_ || destination == nullptr || sectorCount == 0u) {
+        return false;
+    }
+
+    const std::uint64_t totalBytes64 =
+        static_cast<std::uint64_t>(sectorCount) * kSectorBytes;
+    if (totalBytes64 > destinationCapacity ||
+        totalBytes64 > std::numeric_limits<std::size_t>::max()) {
+        return false;
+    }
+
+    struct Segment {
+        const NativeAssetLocation* asset = nullptr;
+        std::uint32_t sectorOffset = 0u;
+        std::uint32_t sectorCount = 0u;
+    };
+    std::vector<Segment> segments;
+
+    std::uint64_t currentSector = startSector;
+    std::uint64_t remaining = sectorCount;
+    while (remaining != 0u) {
+        if (currentSector > std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+
+        const NativeAssetLocation* asset =
+            findAssetContainingSector(static_cast<std::uint32_t>(currentSector));
+        if (asset == nullptr) {
+            return false;
+        }
+
+        const std::uint64_t assetEnd =
+            static_cast<std::uint64_t>(asset->startSector) + asset->sectorCount;
+        const std::uint64_t available = assetEnd - currentSector;
+        const std::uint64_t take = std::min(remaining, available);
+        segments.push_back({asset,
+                            static_cast<std::uint32_t>(currentSector - asset->startSector),
+                            static_cast<std::uint32_t>(take)});
+        currentSector += take;
+        remaining -= take;
+    }
+
+    // Resolve and read the complete range into staging memory first. The guest
+    // destination is changed atomically only after every host-file segment has
+    // succeeded, so a missing/corrupt file cannot leave a half-loaded resource.
+    std::vector<std::uint8_t> staging(static_cast<std::size_t>(totalBytes64));
+    std::size_t destinationOffset = 0u;
+    for (const Segment& segment : segments) {
+        const std::uint64_t byteOffset =
+            static_cast<std::uint64_t>(segment.sectorOffset) * kSectorBytes;
+        const std::size_t byteCount =
+            static_cast<std::size_t>(segment.sectorCount) * kSectorBytes;
+        if (!readFileRange(*segment.asset,
+                           byteOffset,
+                           staging.data() + destinationOffset,
+                           byteCount)) {
+            return false;
+        }
+        destinationOffset += byteCount;
+    }
+    std::memcpy(destination, staging.data(), staging.size());
+
+    if (sourceDescription != nullptr) {
+        if (segments.size() == 1u) {
+            *sourceDescription = nativeAssetName(*segments.front().asset);
+        } else {
+            *sourceDescription = nativeAssetName(*segments.front().asset) + ".." +
+                                 nativeAssetName(*segments.back().asset);
+        }
+    }
+    return true;
+}
+
+bool NativeVfs::readAssetPrefix(NativeAssetKind kind,
+                                std::uint32_t index,
+                                std::uint8_t* destination,
+                                std::size_t destinationCapacity,
+                                std::size_t& bytesRead) const {
+    bytesRead = 0u;
+    if (!ready_ || destination == nullptr || destinationCapacity == 0u) {
+        return false;
+    }
+
+    const NativeAssetLocation* asset = findAsset(kind, index);
+    if (asset == nullptr) {
+        return false;
+    }
+
+    std::error_code sizeError;
+    const std::uint64_t fileSize = std::filesystem::file_size(asset->path, sizeError);
+    if (sizeError || fileSize == 0u) {
+        return false;
+    }
+
+    const std::size_t wanted = static_cast<std::size_t>(
+        std::min<std::uint64_t>(fileSize, destinationCapacity));
+    if (!readFileRange(*asset, 0u, destination, wanted)) {
+        return false;
+    }
+
+    bytesRead = wanted;
+    return true;
+}
+
+} // namespace ratchet::platform

@@ -17,6 +17,7 @@ Set-Location -LiteralPath $repoRoot
 $requiredPaths = @(
     'build\native\Release\openratchet.exe',
     'build\extracted\PS2_MAIN.ELF',
+    'build\toc.json',
     'generated',
     'third_party\PS2Recomp',
     'tools\run-native-test.ps1'
@@ -119,6 +120,7 @@ Write-RecentMatches 'Recent GS/GIF packets and registers' $stdoutLines '\[gs:(gi
 Write-RecentMatches 'Recent frame uploads' $stdoutLines '\[frame:upload\]' $TailLines
 Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLines
 Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF(?::RPC)?\].*(injected completion|deferred data-bearing CALL|disposition=)' $TailLines
+Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
 Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines
 
 Write-Output ''

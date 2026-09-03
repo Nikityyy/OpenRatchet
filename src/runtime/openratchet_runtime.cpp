@@ -1,7 +1,9 @@
 #include "runtime/openratchet_runtime.h"
 
 #include "game/native_replacements.h"
+#include "game/native_services.h"
 #include "guest_overrides.h"
+#include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
 
 #include <filesystem>
@@ -49,6 +51,7 @@ void installStage(PS2Runtime& fallback,
 } // namespace
 
 struct OpenRatchetRuntime::Impl {
+    platform::NativeVfs vfs;
     PS2Runtime eeFallback;
     runtime::NativeReplacementRegistry replacements;
     bool initialized = false;
@@ -57,7 +60,9 @@ struct OpenRatchetRuntime::Impl {
 OpenRatchetRuntime::OpenRatchetRuntime()
     : impl_(std::make_unique<Impl>()) {}
 
-OpenRatchetRuntime::~OpenRatchetRuntime() = default;
+OpenRatchetRuntime::~OpenRatchetRuntime() {
+    game::unbindNativeGameServices();
+}
 
 bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
     configureHostFloatingPoint();
@@ -67,6 +72,14 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
                   << "Run tools/bootstrap.ps1 -Stage Extract first.\n";
         return false;
     }
+
+    const std::filesystem::path extractedRoot = elf.parent_path();
+    const std::filesystem::path tocPath = extractedRoot.parent_path() / "toc.json";
+    if (!impl_->vfs.initialize(extractedRoot, tocPath)) {
+        std::cerr << "[OpenRatchet:native] native VFS initialization failed\n";
+        return false;
+    }
+    game::bindNativeGameServices({&impl_->vfs});
 
     game::declareNativeReplacements(impl_->replacements);
 

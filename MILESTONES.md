@@ -12,8 +12,8 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 |---|---|---|
 | M0 — Reproducible recompilation baseline | `DONE` | User-owned game extraction, Ghidra export, PS2Recomp generation, native build and repeatable launch exist. |
 | M1 — Legacy boot characterization | `DONE` | Recompiled game reaches deep startup/SIF/DMA/graphics-related execution and provides a usable reference baseline. |
-| M2 — Native ownership boundary | `IN PROGRESS` | OpenRatchet owns the application lifecycle and all game-function replacement registration; PS2Runtime is hidden as an EE fallback with unchanged verified boot behavior. |
-| M3 — Native VFS / asset access | `TODO` | Known file/WAD/resource loads use a native indexed filesystem instead of sector-specific CDVD/SIF startup injection. |
+| M2 — Native ownership boundary | `DONE` | OpenRatchet owns the application lifecycle and all game-function replacement registration; PS2Runtime is hidden as an EE fallback with unchanged verified boot behavior. |
+| M3 — Native VFS / asset access | `IN PROGRESS` | Known file/WAD/resource loads use a native indexed filesystem instead of sector-specific CDVD/SIF startup injection. |
 | M4 — Native Ratchet scene renderer | `TODO` | Authentic R&C1 level assets render through a PC-native Ratchet renderer without requiring a PS2 GS framebuffer. |
 | M5 — First authentic game-driven native frame | `TODO` | Running recompiled game logic supplies camera/object/scene state to the native renderer continuously. |
 | M6 — Native input and playable area | `TODO` | PC controller/keyboard input drives original game simulation in a controllable area. |
@@ -24,37 +24,45 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 ### Current milestone
 
-M2 — Native ownership boundary.
+M3 — Native VFS / asset access.
 
-### Phase-1 change under verification
+### Phase-2 change under verification
 
-- `OpenRatchetRuntime` becomes the root application owner.
-- PS2Recomp/`PS2Runtime` is hidden behind that host as the temporary EE fallback.
-- A project-owned `NativeReplacementRegistry` becomes the single address-based
-  replacement boundary.
-- Existing legacy bootstrap/runtime wrappers are declared through the registry;
-  their behavior and installation order are intentionally unchanged.
-- Existing non-function graphics compatibility hooks remain explicit legacy
-  device bridges until the renderer phase replaces them.
-- Generated output and `third_party` remain read-only.
+- `platform::NativeVfs` indexes the extracted `wads/` and `wads2/` assets from
+  `build/toc.json` and validates the required boot WAD.
+- The game-facing synchronous sector reader at `0x12f208` is now a native
+  OpenRatchet replacement. Indexed WAD/WAD2 ranges are loaded directly from
+  host files into guest RAM without traversing the PS2 CDVD/SIF path.
+- Raw, not-yet-indexed disc ranges still use the generated EE/CDVD function as
+  an explicit fallback. The current sector `0x121` metadata probe is therefore
+  preserved for now.
+- Boot-WAD sector/count metadata is sourced from the parsed TOC rather than
+  hard-coded constants.
+- The decompressor compatibility bridge now consumes the WAD already loaded in
+  guest RAM; `guest_overrides.cpp` no longer opens or owns the host WAD file.
+- A native VFS unit test covers indexing, bounded reads, cross-asset reads,
+  unresolved ranges, and atomic failure behavior.
 
 ### Acceptance test
 
 A Release build and all CTest tests must pass. A 10-second native diagnostic must
-remain alive and show the same boot/SIF/runtime progression as the pre-phase
-baseline, plus these new ownership diagnostics:
+remain alive and reach at least the previous boot/graphics baseline. It should
+also show the storage migration explicitly, including lines equivalent to:
 
 ```text
-[OpenRatchet:native] replacements stage=bootstrap declared=2 ... install_errors=0
-[OpenRatchet:native] replacements stage=runtime declared=9 ... install_errors=0
-[OpenRatchet:native] host owns application runtime; PS2Recomp retained as EE fallback backend
+[OpenRatchet:VFS] indexed=641 present=641 missing=0 ...
+[OpenRatchet:VFS] boot asset=wads2/0 sector=0x3809 sectors=0xa2 ...
+[OpenRatchet:VFS] fallback sector read ... source=0x121 sectors=0x1 ...
+[OpenRatchet:VFS] published boot metadata sector=0x3809 sectors=0xa2
+[OpenRatchet:VFS] native sector read ... source=0x3809 sectors=0xa2 ... asset=wads2/0
 ```
 
-No visual or guest-behavior improvement is expected in M2; this phase exists to
-make later native subsystem replacement safe and bounded.
+The native replacement counts should remain `bootstrap=2` and `runtime=9` with
+zero installation errors. Graphics output is not expected to improve in this
+storage phase; existing graphics activity must not regress.
 
 ### Next phase after acceptance
 
-M3 begins by introducing a native VFS/index over the already extracted game
-content and moving the boot-WAD/file-access path out of `guest_overrides.cpp`
-without changing game logic.
+Continue M3 upward from raw sector semantics: identify the next stable
+resource/file API boundary and migrate additional game data access so the CDVD
+and SIF compatibility paths can shrink instead of gaining new cases.

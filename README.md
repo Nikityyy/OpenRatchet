@@ -28,14 +28,20 @@ match the installed Ghidra version.
 
 ## Current native boundary
 
-`src/runtime/openratchet_runtime.*` is the top-level host owner. Address-based game
-replacements are declared through `src/runtime/native_replacements.*`; current
+`src/runtime/openratchet_runtime.*` is the top-level host owner. Address-based
+game replacements are declared through `src/runtime/native_replacements.*`;
 legacy boot wrappers are routed through that same boundary until their PS2
 subsystems are replaced natively.
 
-The existing PS2Runtime-backed boot behavior is intentionally preserved during
-this first architecture phase. It is a fallback implementation, not the target
-platform architecture.
+`src/platform/native_vfs.*` owns indexed access to extracted WAD/WAD2 content
+using `build/toc.json`. The game-facing sector reader now serves indexed game
+resources directly from this native VFS and falls back to the generated
+EE/CDVD implementation only for disc ranges that have not yet been migrated.
+`build/toc.json` is therefore a required native runtime artifact alongside
+`build/extracted/PS2_MAIN.ELF`.
+
+PS2Runtime remains an EE/game-logic fallback and temporary compatibility backend,
+not the target platform architecture.
 
 ## Current prerequisites
 

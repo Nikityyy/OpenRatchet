@@ -54,6 +54,9 @@ add_executable(openratchet
     src/main.cpp
     src/runtime/openratchet_runtime.cpp
     src/runtime/native_replacements.cpp
+    src/platform/native_vfs.cpp
+    src/game/native_services.cpp
+    src/game/native_io.cpp
     src/game/native_replacements.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
@@ -80,6 +83,12 @@ if(BUILD_TESTING)
         tests/native_replacements_tests.cpp)
     target_include_directories(native_replacements_tests PRIVATE src)
     add_test(NAME native_replacements COMMAND native_replacements_tests)
+
+    add_executable(native_vfs_tests
+        tests/native_vfs_tests.cpp
+        src/platform/native_vfs.cpp)
+    target_include_directories(native_vfs_tests PRIVATE src)
+    add_test(NAME native_vfs COMMAND native_vfs_tests)
 
     add_executable(sif_startup_responses_tests
         tests/sif_startup_responses_tests.cpp

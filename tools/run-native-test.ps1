@@ -35,7 +35,8 @@ if ([string]::IsNullOrWhiteSpace($ElfPath)) {
 
 $requiredFiles = @(
     $ExecutablePath,
-    $ElfPath
+    $ElfPath,
+    (Join-Path $root 'build\toc.json')
 )
 $requiredDirectories = @(
     (Join-Path $root 'generated'),

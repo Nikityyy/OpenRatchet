@@ -58,11 +58,24 @@ inside startup code.
 - Every migration phase must leave a deterministic build/test boundary and be
   independently commit-safe.
 
+## Native storage boundary
+
+`platform::NativeVfs` indexes extracted WAD/WAD2 resources from
+`build/toc.json`. The game-facing synchronous sector reader at `0x12f208` is
+owned by OpenRatchet: ranges backed by indexed extracted resources are read
+directly into guest memory from host files. Unknown/raw disc ranges still fall
+back to the generated EE/CDVD path until their semantics are migrated.
+
+This boundary is intentionally above CDVD/SIF hardware. New known resources
+should be added to the VFS/resource layer rather than implemented as synthetic
+CDVD responses or sector-specific guest overrides.
+
 ## Temporary legacy layer
 
 `src/guest_overrides.cpp` is retained only to preserve the current verified
-boot while native subsystems are introduced. It contains known technical debt:
-SIF response synthesis, CDVD/WAD injection, DMA/scratchpad completion bridges,
-address-specific control-flow repair, and graphics diagnostics. New platform
-features must not be added there unless required solely to keep the verified
-fallback baseline alive during a bounded migration.
+boot while native subsystems are introduced. It still contains known technical
+debt: SIF response synthesis, DMA/scratchpad completion bridges,
+address-specific control-flow repair, and graphics diagnostics. Host WAD file
+I/O no longer belongs there. New platform features must not be added there
+unless required solely to keep the verified fallback baseline alive during a
+bounded migration.
