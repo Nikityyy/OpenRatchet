@@ -26,32 +26,37 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 M4 — Native Ratchet scene renderer.
 
-### Phase-7 change under verification
+### Phase-8 change under verification
 
-- Extend the native level-core load result with the complete core-index and
-  GS-RAM blobs required by renderer-owned texture decoding.
-- Add an independent R&C1 8-bit paletted texture decoder, including the PS2
-  CLUT index permutation and alpha expansion.
-- Add a native R&C1 tfrag decoder for the five embedded VIF storage buffers. It
-  reconstructs common/LOD01/LOD0 vertex streams, LOD0 strips, material changes,
-  UVs and vertex colors directly into host triangles without a VIF/VU emulator.
-- Move `native_level_viewer` from collision-debug geometry to actual textured
-  tfrag terrain rendered through raylib/OpenGL.
-- Keep the normal recompiled-game runtime untouched; this phase proves the
-  visual terrain asset/renderer path before game-state integration.
+- Decode the retail NTSC gameplay WAD alongside the renderer-owned level core
+  so native scene code can use authentic tie/shrub instance transforms without
+  routing those assets through guest RAM.
+- Generalize the R&C1 paletted texture decoder across the tfrag, tie and shrub
+  LevelCore texture tables.
+- Add native R&C1 tie LOD0 and shrub mesh decoders. They reconstruct the stored
+  GS command layout into host triangles, resolve class-local texture slots
+  through the LevelCore class tables, and apply gameplay instance matrices.
+- Add a native R&C1 sky decoder for shell geometry, vertex colours and its
+  self-contained PSMT8 texture/palette data.
+- Expand `native_level_viewer` from textured tfrag terrain to a combined native
+  scene containing tfrags, ties, shrubs and camera-relative sky shells.
+- Keep the normal recompiled-game runtime untouched; the separate viewer
+  remains a renderer-development microscope until live game-state integration.
 
 ### Acceptance test
 
-A Release build and all ten CTest tests must pass, including the new synthetic
-`tfrag` and texture format tests. `native_level_inspector` must remain
-`status=ok`. `tools/run-native-level-viewer.ps1 -LevelIndex 0` must print a
-`[OpenRatchet:tfrag] ... status=ok` line with nonzero tfrag/strip/triangle/batch
-counts and open a coherent textured rendering of the authentic level. The
-normal 20-second runtime regression must remain alive with the native WAD path
-intact.
+A Release build and all twelve CTest tests must pass, including the new
+`rac1_static_scene` and `rac1_sky` format tests. `native_level_inspector` must
+remain `status=ok` and report a nonzero decompressed gameplay WAD.
+`tools/run-native-level-viewer.ps1 -LevelIndex 0` must print both
+`[OpenRatchet:tfrag] ... status=ok` and `[OpenRatchet:scene] ... status=ok`.
+Authentic tie/shrub instance geometry and sky must be spatially coherent with
+Phase-7 terrain, with no exploded meshes or materially incorrect texture
+mapping. The normal 20-second runtime regression must remain alive with the
+native WAD path intact.
 
 ### Next phase after acceptance
 
-Phase 8 expands native scene coverage beyond terrain: sky plus static visual
-objects (ties/shrubs) and their texture/material paths, while keeping the
-renderer independent of the PS2 GS/VU pipeline.
+Phase 9 adds native moby class/model rendering and retail moby instances so
+Ratchet, crates, NPCs, enemies and other dynamic game objects can enter the
+native scene before animation and live game-state integration.

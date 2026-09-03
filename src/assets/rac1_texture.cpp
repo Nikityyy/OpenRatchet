@@ -69,32 +69,32 @@ const char* rac1TextureStatusName(Rac1TextureStatus status) noexcept {
     return "unknown";
 }
 
-Rac1TextureSetResult decodeRac1TfragTextures(
+Rac1TextureSetResult decodeRac1PaletteTextures(
     std::span<const std::uint8_t> core,
     std::span<const std::uint8_t> coreIndex,
     std::span<const std::uint8_t> gsRam,
-    Rac1ArrayRange tfragTextures,
+    Rac1ArrayRange textureTable,
     std::uint32_t texturesBaseOffset) {
-    if (tfragTextures.count == 0u) {
+    if (textureTable.count == 0u) {
         return {Rac1TextureStatus::Ok, {}};
     }
-    if (tfragTextures.count >
+    if (textureTable.count >
         std::numeric_limits<std::size_t>::max() / kTextureEntryBytes) {
         return fail(Rac1TextureStatus::IndexTableOutOfRange);
     }
     const std::size_t tableBytes =
-        static_cast<std::size_t>(tfragTextures.count) * kTextureEntryBytes;
-    if (!fits(tfragTextures.offset, tableBytes, coreIndex.size()) ||
+        static_cast<std::size_t>(textureTable.count) * kTextureEntryBytes;
+    if (!fits(textureTable.offset, tableBytes, coreIndex.size()) ||
         texturesBaseOffset > core.size()) {
         return fail(Rac1TextureStatus::IndexTableOutOfRange);
     }
 
     std::vector<Rac1Texture> textures;
-    textures.reserve(tfragTextures.count);
+    textures.reserve(textureTable.count);
 
-    for (std::uint32_t i = 0u; i < tfragTextures.count; ++i) {
+    for (std::uint32_t i = 0u; i < textureTable.count; ++i) {
         const std::size_t entryOffset =
-            static_cast<std::size_t>(tfragTextures.offset) +
+            static_cast<std::size_t>(textureTable.offset) +
             static_cast<std::size_t>(i) * kTextureEntryBytes;
         const std::int32_t dataOffsetSigned = readI32(coreIndex, entryOffset + 0x0u);
         const std::int16_t widthSigned = readI16(coreIndex, entryOffset + 0x4u);
@@ -155,6 +155,15 @@ Rac1TextureSetResult decodeRac1TfragTextures(
     }
 
     return {Rac1TextureStatus::Ok, std::move(textures)};
+}
+
+Rac1TextureSetResult decodeRac1TfragTextures(
+    std::span<const std::uint8_t> core,
+    std::span<const std::uint8_t> coreIndex,
+    std::span<const std::uint8_t> gsRam,
+    Rac1ArrayRange tfragTextures,
+    std::uint32_t texturesBaseOffset) {
+    return decodeRac1PaletteTextures(core, coreIndex, gsRam, tfragTextures, texturesBaseOffset);
 }
 
 } // namespace ratchet::assets

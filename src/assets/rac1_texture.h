@@ -33,10 +33,17 @@ struct Rac1TextureSetResult {
     }
 };
 
-// Decodes the R&C1 8-bit paletted tfrag texture table into ordinary RGBA8
-// host images. Pixel indices live in the decompressed core at
-// texturesBaseOffset + TextureEntry::dataOffset. Palettes live in the level's
-// raw GS-RAM blob at paletteIndex * 0x100 and use the PS2 palette swizzle.
+// Decodes any R&C1 LevelCore TextureEntry table (tfrag/tie/moby/shrub)
+// into ordinary RGBA8 host images. Pixel indices live in the decompressed
+// core at texturesBaseOffset + TextureEntry::dataOffset; palettes live in the
+// raw GS-RAM blob at paletteIndex * 0x100 and use the PS2 CLUT swizzle.
+Rac1TextureSetResult decodeRac1PaletteTextures(
+    std::span<const std::uint8_t> core,
+    std::span<const std::uint8_t> coreIndex,
+    std::span<const std::uint8_t> gsRam,
+    Rac1ArrayRange textureTable,
+    std::uint32_t texturesBaseOffset);
+
 Rac1TextureSetResult decodeRac1TfragTextures(
     std::span<const std::uint8_t> core,
     std::span<const std::uint8_t> coreIndex,

@@ -132,7 +132,7 @@ bool renderOffsetFits(std::uint32_t offset, std::size_t coreBytes) noexcept {
 
 Rac1LevelCoreLoadResult fail(Rac1LevelInspectStatus status,
                              Rac1LevelSummary summary) noexcept {
-    return {status, summary, {}, {}, {}};
+    return {status, summary, {}, {}, {}, {}};
 }
 
 } // namespace
@@ -165,6 +165,10 @@ const char* rac1LevelInspectStatusName(Rac1LevelInspectStatus status) noexcept {
         return "invalid-core-wad";
     case Rac1LevelInspectStatus::CoreDecompressionFailed:
         return "core-decompression-failed";
+    case Rac1LevelInspectStatus::InvalidGameplayWad:
+        return "invalid-gameplay-wad";
+    case Rac1LevelInspectStatus::GameplayDecompressionFailed:
+        return "gameplay-decompression-failed";
     case Rac1LevelInspectStatus::InvalidRenderOffsets:
         return "invalid-render-offsets";
     case Rac1LevelInspectStatus::InvalidIndexArrays:
@@ -368,6 +372,42 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
     summary.coreDecompressedBytes = decompressed.bytesWritten;
     core.resize(summary.coreDecompressedBytes);
 
+    // Gameplay is a second WAD stored in the amalgamated level sector span.
+    // It owns the live instance lists (ties/shrubs/mobys), while class geometry
+    // lives in the decompressed level core. Decode it now so native scene stages
+    // can join class data with authentic retail transforms without guest RAM.
+    std::uint64_t gameplayFileOffset = 0u;
+    std::uint64_t gameplayRangeBytes = 0u;
+    if (!sectorRangeToFileRange(summary.gameplayNtsc,
+                                discStartSector,
+                                fileBytes,
+                                gameplayFileOffset,
+                                gameplayRangeBytes) ||
+        gameplayRangeBytes < kWadHeaderBytes) {
+        return fail(Rac1LevelInspectStatus::InvalidGameplayWad, summary);
+    }
+    std::array<std::uint8_t, kWadHeaderBytes> gameplayHeader{};
+    if (!readExact(input, gameplayFileOffset, gameplayHeader) ||
+        gameplayHeader[0] != 'W' || gameplayHeader[1] != 'A' || gameplayHeader[2] != 'D') {
+        return fail(Rac1LevelInspectStatus::InvalidGameplayWad, summary);
+    }
+    summary.gameplayEncodedSize = readLe32(gameplayHeader.data() + 3u);
+    if (summary.gameplayEncodedSize < kWadHeaderBytes ||
+        summary.gameplayEncodedSize > gameplayRangeBytes) {
+        return fail(Rac1LevelInspectStatus::InvalidGameplayWad, summary);
+    }
+    std::vector<std::uint8_t> gameplayEncoded(summary.gameplayEncodedSize, 0u);
+    if (!readExact(input, gameplayFileOffset, gameplayEncoded)) {
+        return fail(Rac1LevelInspectStatus::InvalidGameplayWad, summary);
+    }
+    std::vector<std::uint8_t> gameplay(kMaxCoreOutputBytes, 0u);
+    const WadDecompressResult gameplayDecompressed = decompressWad(gameplayEncoded, gameplay);
+    if (!gameplayDecompressed.ok()) {
+        return fail(Rac1LevelInspectStatus::GameplayDecompressionFailed, summary);
+    }
+    summary.gameplayDecompressedBytes = gameplayDecompressed.bytesWritten;
+    gameplay.resize(summary.gameplayDecompressedBytes);
+
     if (!renderOffsetFits(summary.tfragsOffset, summary.coreDecompressedBytes) ||
         !renderOffsetFits(summary.occlusionOffset, summary.coreDecompressedBytes) ||
         !renderOffsetFits(summary.skyOffset, summary.coreDecompressedBytes) ||
@@ -377,7 +417,7 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
     }
 
     return {Rac1LevelInspectStatus::Ok, summary, std::move(core),
-            std::move(coreIndex), std::move(gsRam)};
+            std::move(coreIndex), std::move(gsRam), std::move(gameplay)};
 }
 
 Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,

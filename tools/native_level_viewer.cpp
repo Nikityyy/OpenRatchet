@@ -1,4 +1,6 @@
 #include "assets/rac1_level.h"
+#include "assets/rac1_sky.h"
+#include "assets/rac1_static_scene.h"
 #include "assets/rac1_texture.h"
 #include "assets/rac1_tfrag.h"
 #include "platform/native_vfs.h"
@@ -10,7 +12,6 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -19,11 +20,17 @@
 
 namespace {
 
-Vector3 toViewerSpace(const ratchet::assets::Rac1TfragVertex& v,
+Vector3 mapWorld(float x, float y, float z) {
+    // R&C uses Z-up. Rotate -90 degrees around X for the Y-up PC viewer.
+    return {x, z, -y};
+}
+
+Vector3 toViewerSpace(float x,
+                      float y,
+                      float z,
                       Vector3 center,
                       float scale) {
-    // R&C uses Z-up. Rotate -90 degrees around X for the Y-up PC viewer.
-    const Vector3 mapped{v.x, v.z, -v.y};
+    const Vector3 mapped = mapWorld(x, y, z);
     return {(mapped.x - center.x) * scale,
             (mapped.y - center.y) * scale,
             (mapped.z - center.z) * scale};
@@ -40,9 +47,7 @@ float viewerScale(const ratchet::assets::Rac1TfragBounds& b) {
     const float y = b.maxZ - b.minZ;
     const float z = b.maxY - b.minY;
     const float extent = std::max({x, y, z});
-    if (!std::isfinite(extent) || extent <= 0.0001f) {
-        return 1.0f;
-    }
+    if (!std::isfinite(extent) || extent <= 0.0001f) return 1.0f;
     return 80.0f / extent;
 }
 
@@ -51,24 +56,113 @@ const ratchet::platform::NativeAssetLocation* selectLevel(
     int requestedIndex) {
     if (requestedIndex >= 0) {
         const auto* level = vfs.findLevel(static_cast<std::uint32_t>(requestedIndex));
-        if (level != nullptr && std::filesystem::is_regular_file(level->path)) {
-            return level;
-        }
+        if (level != nullptr && std::filesystem::is_regular_file(level->path)) return level;
         return nullptr;
     }
     for (const auto& level : vfs.levels()) {
-        if (std::filesystem::is_regular_file(level.path)) {
-            return &level;
-        }
+        if (std::filesystem::is_regular_file(level.path)) return &level;
     }
     return nullptr;
 }
 
 struct NativeDrawBatch {
     Model model{};
-    std::uint32_t materialIndex = 0u;
     bool transparent = false;
 };
+
+std::vector<Texture2D> uploadTextures(const std::vector<ratchet::assets::Rac1Texture>& source) {
+    std::vector<Texture2D> result;
+    result.reserve(source.size());
+    for (const auto& textureSource : source) {
+        Image image{};
+        image.data = const_cast<std::uint8_t*>(textureSource.rgba.data());
+        image.width = static_cast<int>(textureSource.width);
+        image.height = static_cast<int>(textureSource.height);
+        image.mipmaps = 1;
+        image.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+        Texture2D texture = LoadTextureFromImage(image);
+        SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+        result.push_back(texture);
+    }
+    return result;
+}
+
+void unloadTextures(std::vector<Texture2D>& textures) {
+    for (Texture2D texture : textures) UnloadTexture(texture);
+    textures.clear();
+}
+
+void unloadBatches(std::vector<NativeDrawBatch>& batches) {
+    for (auto& batch : batches) UnloadModel(batch.model);
+    batches.clear();
+}
+
+template <typename Vertex, typename PositionFn>
+bool appendMeshBatch(const std::vector<Vertex>& vertices,
+                     std::uint32_t materialIndex,
+                     const std::vector<Texture2D>* gpuTextures,
+                     const std::vector<ratchet::assets::Rac1Texture>* sourceTextures,
+                     PositionFn&& positionFn,
+                     std::vector<NativeDrawBatch>& output) {
+    if (vertices.empty()) return true;
+    if (vertices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
+    if ((gpuTextures == nullptr) != (sourceTextures == nullptr)) return false;
+    if (gpuTextures != nullptr &&
+        (materialIndex >= gpuTextures->size() || materialIndex >= sourceTextures->size())) {
+        return false;
+    }
+
+    const std::size_t vertexCount = vertices.size();
+    Mesh mesh{};
+    mesh.vertexCount = static_cast<int>(vertexCount);
+    mesh.triangleCount = static_cast<int>(vertexCount / 3u);
+    mesh.vertices = static_cast<float*>(MemAlloc(static_cast<unsigned int>(vertexCount * 3u * sizeof(float))));
+    mesh.texcoords = static_cast<float*>(MemAlloc(static_cast<unsigned int>(vertexCount * 2u * sizeof(float))));
+    mesh.colors = static_cast<unsigned char*>(MemAlloc(static_cast<unsigned int>(vertexCount * 4u)));
+    if (mesh.vertices == nullptr || mesh.texcoords == nullptr || mesh.colors == nullptr) return false;
+
+    for (std::size_t i = 0u; i < vertexCount; ++i) {
+        const Vertex& source = vertices[i];
+        const Vector3 p = positionFn(source);
+        mesh.vertices[i * 3u + 0u] = p.x;
+        mesh.vertices[i * 3u + 1u] = p.y;
+        mesh.vertices[i * 3u + 2u] = p.z;
+        mesh.texcoords[i * 2u + 0u] = source.u;
+        mesh.texcoords[i * 2u + 1u] = source.v;
+        mesh.colors[i * 4u + 0u] = source.r;
+        mesh.colors[i * 4u + 1u] = source.g;
+        mesh.colors[i * 4u + 2u] = source.b;
+        mesh.colors[i * 4u + 3u] = source.a;
+    }
+
+    UploadMesh(&mesh, false);
+    Model model = LoadModelFromMesh(mesh);
+    if (model.materialCount <= 0 || model.materials == nullptr) {
+        UnloadModel(model);
+        return false;
+    }
+
+    bool transparent = false;
+    if (gpuTextures != nullptr) {
+        model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = (*gpuTextures)[materialIndex];
+        transparent = (*sourceTextures)[materialIndex].hasAlpha;
+    } else {
+        for (const auto& vertex : vertices) transparent |= vertex.a < 255u;
+    }
+    output.push_back({model, transparent});
+    return true;
+}
+
+void drawBatches(const std::vector<NativeDrawBatch>& batches, Vector3 position) {
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool wantTransparent = pass != 0;
+        for (const auto& batch : batches) {
+            if (batch.transparent == wantTransparent) {
+                DrawModel(batch.model, position, 1.0f, WHITE);
+            }
+        }
+    }
+}
 
 } // namespace
 
@@ -93,7 +187,6 @@ int main(int argc, char** argv) {
         std::cerr << "[OpenRatchet:viewer] VFS initialization failed\n";
         return 1;
     }
-
     const auto* level = selectLevel(vfs, requestedIndex);
     if (level == nullptr) {
         std::cerr << "[OpenRatchet:viewer] requested level is not extracted; "
@@ -112,41 +205,55 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    auto textures = ratchet::assets::decodeRac1TfragTextures(
-        loaded.core,
-        loaded.coreIndex,
-        loaded.gsRam,
-        loaded.summary.tfragTextures,
-        loaded.summary.texturesBaseOffset);
-    if (!textures.ok()) {
-        std::cerr << "[OpenRatchet:viewer] tfrag texture decode failed status="
-                  << ratchet::assets::rac1TextureStatusName(textures.status) << '\n';
-        return 1;
-    }
-    if (textures.textures.empty()) {
-        std::cerr << "[OpenRatchet:viewer] tfrag texture table is empty\n";
+    auto tfragTextures = ratchet::assets::decodeRac1PaletteTextures(
+        loaded.core, loaded.coreIndex, loaded.gsRam,
+        loaded.summary.tfragTextures, loaded.summary.texturesBaseOffset);
+    auto tieTextures = ratchet::assets::decodeRac1PaletteTextures(
+        loaded.core, loaded.coreIndex, loaded.gsRam,
+        loaded.summary.tieTextures, loaded.summary.texturesBaseOffset);
+    auto shrubTextures = ratchet::assets::decodeRac1PaletteTextures(
+        loaded.core, loaded.coreIndex, loaded.gsRam,
+        loaded.summary.shrubTextures, loaded.summary.texturesBaseOffset);
+    if (!tfragTextures.ok() || !tieTextures.ok() || !shrubTextures.ok()) {
+        std::cerr << "[OpenRatchet:viewer] level texture decode failed"
+                  << " tfrag=" << ratchet::assets::rac1TextureStatusName(tfragTextures.status)
+                  << " tie=" << ratchet::assets::rac1TextureStatusName(tieTextures.status)
+                  << " shrub=" << ratchet::assets::rac1TextureStatusName(shrubTextures.status)
+                  << '\n';
         return 1;
     }
 
     auto terrain = ratchet::assets::decodeRac1TfragTerrain(
         loaded.core,
         loaded.summary.tfragsOffset,
-        static_cast<std::uint32_t>(textures.textures.size()));
+        static_cast<std::uint32_t>(tfragTextures.textures.size()));
     if (!terrain.ok()) {
         std::cerr << "[OpenRatchet:viewer] tfrag decode failed offset=0x"
                   << std::hex << loaded.summary.tfragsOffset << std::dec
-                  << " status=" << ratchet::assets::rac1TfragStatusName(terrain.status)
-                  << '\n';
+                  << " status=" << ratchet::assets::rac1TfragStatusName(terrain.status) << '\n';
         return 1;
     }
 
-    std::size_t vertexCount = 0u;
-    for (const auto& batch : terrain.mesh.batches) {
-        if (batch.triangleVertices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-            std::cerr << "[OpenRatchet:viewer] tfrag batch too large\n";
-            return 1;
-        }
-        vertexCount += batch.triangleVertices.size();
+    auto staticScene = ratchet::assets::decodeRac1StaticScene(
+        loaded.core,
+        loaded.coreIndex,
+        loaded.gameplay,
+        loaded.summary.tieClasses,
+        loaded.summary.shrubClasses,
+        static_cast<std::uint32_t>(tieTextures.textures.size()),
+        static_cast<std::uint32_t>(shrubTextures.textures.size()));
+    if (!staticScene.ok()) {
+        std::cerr << "[OpenRatchet:viewer] tie/shrub decode failed status="
+                  << ratchet::assets::rac1StaticSceneStatusName(staticScene.status) << '\n';
+        return 1;
+    }
+
+    auto sky = ratchet::assets::decodeRac1Sky(loaded.core, loaded.summary.skyOffset);
+    if (!sky.ok()) {
+        std::cerr << "[OpenRatchet:viewer] sky decode failed offset=0x"
+                  << std::hex << loaded.summary.skyOffset << std::dec
+                  << " status=" << ratchet::assets::rac1SkyStatusName(sky.status) << '\n';
+        return 1;
     }
 
     const Vector3 center = mappedCenter(terrain.mesh.bounds);
@@ -160,7 +267,22 @@ int main(int argc, char** argv) {
               << " strips=" << terrain.mesh.stripCount
               << " triangles=" << terrain.mesh.triangleCount
               << " batches=" << terrain.mesh.batches.size()
-              << " textures=" << textures.textures.size()
+              << " textures=" << tfragTextures.textures.size()
+              << " status=ok\n";
+    std::cout << "[OpenRatchet:scene] gameplay=0x" << std::hex << loaded.gameplay.size()
+              << std::dec
+              << " tieClasses=" << staticScene.mesh.tieClassCount
+              << " tieInstances=" << staticScene.mesh.tieInstanceCount
+              << " tieTriangles=" << staticScene.mesh.tieTriangleCount
+              << " tieTextures=" << tieTextures.textures.size()
+              << " shrubClasses=" << staticScene.mesh.shrubClassCount
+              << " shrubInstances=" << staticScene.mesh.shrubInstanceCount
+              << " shrubTriangles=" << staticScene.mesh.shrubTriangleCount
+              << " shrubTextures=" << shrubTextures.textures.size()
+              << " skyShells=" << sky.mesh.shellCount
+              << " skyClusters=" << sky.mesh.clusterCount
+              << " skyTriangles=" << sky.mesh.triangleCount
+              << " skyTextures=" << sky.mesh.textures.size()
               << " status=ok\n";
     std::cout << "[OpenRatchet:viewer] bounds raw=("
               << terrain.mesh.bounds.minX << ','
@@ -171,76 +293,82 @@ int main(int argc, char** argv) {
               << terrain.mesh.bounds.maxZ << ") scale=" << scale << '\n';
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(1280, 720, "OpenRatchet - Native R&C1 Textured Terrain");
+    InitWindow(1280, 720, "OpenRatchet - Native R&C1 Scene");
     SetTargetFPS(60);
 
-    std::vector<Texture2D> gpuTextures;
-    gpuTextures.reserve(textures.textures.size());
-    for (const auto& source : textures.textures) {
-        Image image{};
-        image.data = const_cast<std::uint8_t*>(source.rgba.data());
-        image.width = static_cast<int>(source.width);
-        image.height = static_cast<int>(source.height);
-        image.mipmaps = 1;
-        image.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-        Texture2D texture = LoadTextureFromImage(image);
-        SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
-        gpuTextures.push_back(texture);
+    std::vector<Texture2D> tfragGpu = uploadTextures(tfragTextures.textures);
+    std::vector<Texture2D> tieGpu = uploadTextures(tieTextures.textures);
+    std::vector<Texture2D> shrubGpu = uploadTextures(shrubTextures.textures);
+    std::vector<Texture2D> skyGpu = uploadTextures(sky.mesh.textures);
+    std::vector<NativeDrawBatch> terrainBatches;
+    std::vector<NativeDrawBatch> staticBatches;
+    std::vector<NativeDrawBatch> skyBatches;
+
+    auto cleanup = [&]() {
+        unloadBatches(terrainBatches);
+        unloadBatches(staticBatches);
+        unloadBatches(skyBatches);
+        unloadTextures(tfragGpu);
+        unloadTextures(tieGpu);
+        unloadTextures(shrubGpu);
+        unloadTextures(skyGpu);
+        CloseWindow();
+    };
+
+    for (const auto& sourceBatch : terrain.mesh.batches) {
+        if (!appendMeshBatch(
+                sourceBatch.triangleVertices,
+                sourceBatch.materialIndex,
+                &tfragGpu,
+                &tfragTextures.textures,
+                [&](const ratchet::assets::Rac1TfragVertex& v) {
+                    return toViewerSpace(v.x, v.y, v.z, center, scale);
+                },
+                terrainBatches)) {
+            std::cerr << "[OpenRatchet:viewer] tfrag GPU mesh creation failed\n";
+            cleanup();
+            return 1;
+        }
     }
 
-    std::vector<NativeDrawBatch> drawBatches;
-    drawBatches.reserve(terrain.mesh.batches.size());
-    for (const auto& sourceBatch : terrain.mesh.batches) {
-        if (sourceBatch.triangleVertices.empty()) {
-            continue;
-        }
-        if (sourceBatch.materialIndex >= gpuTextures.size()) {
-            std::cerr << "[OpenRatchet:viewer] material index escaped decoded texture table\n";
-            for (Texture2D texture : gpuTextures) UnloadTexture(texture);
-            CloseWindow();
+    for (const auto& sourceBatch : staticScene.mesh.batches) {
+        const bool tie = sourceBatch.kind == ratchet::assets::Rac1StaticMaterialKind::Tie;
+        const auto& gpu = tie ? tieGpu : shrubGpu;
+        const auto& source = tie ? tieTextures.textures : shrubTextures.textures;
+        if (!appendMeshBatch(
+                sourceBatch.triangleVertices,
+                sourceBatch.materialIndex,
+                &gpu,
+                &source,
+                [&](const ratchet::assets::Rac1StaticVertex& v) {
+                    return toViewerSpace(v.x, v.y, v.z, center, scale);
+                },
+                staticBatches)) {
+            std::cerr << "[OpenRatchet:viewer] tie/shrub GPU mesh creation failed\n";
+            cleanup();
             return 1;
         }
+    }
 
-        const std::size_t batchVertexCount = sourceBatch.triangleVertices.size();
-        Mesh mesh{};
-        mesh.vertexCount = static_cast<int>(batchVertexCount);
-        mesh.triangleCount = static_cast<int>(batchVertexCount / 3u);
-        mesh.vertices = static_cast<float*>(MemAlloc(batchVertexCount * 3u * sizeof(float)));
-        mesh.texcoords = static_cast<float*>(MemAlloc(batchVertexCount * 2u * sizeof(float)));
-        mesh.colors = static_cast<unsigned char*>(MemAlloc(batchVertexCount * 4u));
-        if (mesh.vertices == nullptr || mesh.texcoords == nullptr || mesh.colors == nullptr) {
-            std::cerr << "[OpenRatchet:viewer] GPU mesh allocation failed\n";
-            CloseWindow();
+    for (const auto& sourceBatch : sky.mesh.batches) {
+        const bool textured = sourceBatch.materialIndex != UINT32_MAX;
+        const std::vector<Texture2D>* gpu = textured ? &skyGpu : nullptr;
+        const std::vector<ratchet::assets::Rac1Texture>* source =
+            textured ? &sky.mesh.textures : nullptr;
+        if (!appendMeshBatch(
+                sourceBatch.triangleVertices,
+                sourceBatch.materialIndex,
+                gpu,
+                source,
+                [&](const ratchet::assets::Rac1SkyVertex& v) {
+                    const Vector3 p = mapWorld(v.x, v.y, v.z);
+                    return Vector3{p.x * scale, p.y * scale, p.z * scale};
+                },
+                skyBatches)) {
+            std::cerr << "[OpenRatchet:viewer] sky GPU mesh creation failed\n";
+            cleanup();
             return 1;
         }
-
-        for (std::size_t i = 0u; i < batchVertexCount; ++i) {
-            const auto& source = sourceBatch.triangleVertices[i];
-            const Vector3 p = toViewerSpace(source, center, scale);
-            mesh.vertices[i * 3u + 0u] = p.x;
-            mesh.vertices[i * 3u + 1u] = p.y;
-            mesh.vertices[i * 3u + 2u] = p.z;
-            mesh.texcoords[i * 2u + 0u] = source.u;
-            mesh.texcoords[i * 2u + 1u] = source.v;
-            mesh.colors[i * 4u + 0u] = source.r;
-            mesh.colors[i * 4u + 1u] = source.g;
-            mesh.colors[i * 4u + 2u] = source.b;
-            mesh.colors[i * 4u + 3u] = source.a;
-        }
-
-        UploadMesh(&mesh, false);
-        Model model = LoadModelFromMesh(mesh);
-        if (model.materialCount <= 0 || model.materials == nullptr) {
-            std::cerr << "[OpenRatchet:viewer] model material creation failed\n";
-            UnloadModel(model);
-            for (Texture2D texture : gpuTextures) UnloadTexture(texture);
-            CloseWindow();
-            return 1;
-        }
-        model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = gpuTextures[sourceBatch.materialIndex];
-        drawBatches.push_back({model,
-                               sourceBatch.materialIndex,
-                               textures.textures[sourceBatch.materialIndex].hasAlpha});
     }
 
     Camera3D camera{};
@@ -250,62 +378,66 @@ int main(int argc, char** argv) {
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
+    const std::size_t totalTriangles = terrain.mesh.triangleCount +
+                                       staticScene.mesh.tieTriangleCount +
+                                       staticScene.mesh.shrubTriangleCount +
+                                       sky.mesh.triangleCount;
     bool wireframe = false;
     while (!WindowShouldClose()) {
         UpdateCamera(&camera, CAMERA_FREE);
-        if (IsKeyPressed(KEY_TAB)) {
-            wireframe = !wireframe;
-        }
+        if (IsKeyPressed(KEY_TAB)) wireframe = !wireframe;
 
         BeginDrawing();
-        ClearBackground({18, 20, 24, 255});
+        ClearBackground({sky.mesh.clearColor[0],
+                         sky.mesh.clearColor[1],
+                         sky.mesh.clearColor[2],
+                         255u});
         BeginMode3D(camera);
         rlDisableBackfaceCulling();
         if (wireframe) rlEnableWireMode();
 
-        // Draw opaque batches first, then alpha-containing materials. This is
-        // intentionally still a simple viewer; per-triangle depth sorting and
-        // exact GS CLAMP state belong to renderer refinement, not asset decode.
-        for (int transparentPass = 0; transparentPass < 2; ++transparentPass) {
-            const bool wantTransparent = transparentPass != 0;
-            for (const auto& batch : drawBatches) {
-                if (batch.transparent == wantTransparent) {
-                    DrawModel(batch.model, {0.0f, 0.0f, 0.0f}, 1.0f, WHITE);
-                }
-            }
-        }
+        // Sky shells are authored camera-relative by the game. They are a
+        // background layer, not world-space occluders. The retail renderer
+        // effectively draws them with depth compare ALWAYS and depth writes
+        // disabled; mirror that here so nearby shell geometry cannot hide
+        // distant terrain/static scenery as the free camera moves around.
+        rlDisableDepthTest();
+        rlDisableDepthMask();
+        drawBatches(skyBatches, camera.position);
+        rlEnableDepthMask();
+        rlEnableDepthTest();
+
+        drawBatches(terrainBatches, {0.0f, 0.0f, 0.0f});
+        drawBatches(staticBatches, {0.0f, 0.0f, 0.0f});
 
         if (wireframe) rlDisableWireMode();
         rlEnableBackfaceCulling();
         DrawGrid(20, 5.0f);
         EndMode3D();
 
-        DrawRectangle(12, 12, 650, 88, {0, 0, 0, 170});
-        DrawText("OpenRatchet native R&C1 textured tfrag terrain", 24, 22, 22, RAYWHITE);
-        DrawText(TextFormat("Level %u | %llu triangles | %llu textures | %s",
+        DrawRectangle(12, 12, 780, 110, {0, 0, 0, 170});
+        DrawText("OpenRatchet native R&C1 scene: tfrags + ties + shrubs + sky",
+                 24, 22, 22, RAYWHITE);
+        DrawText(TextFormat("Level %u | %llu triangles | ties %llu | shrubs %llu | sky %llu | %s",
                             loaded.summary.tocIndex,
-                            static_cast<unsigned long long>(terrain.mesh.triangleCount),
-                            static_cast<unsigned long long>(textures.textures.size()),
+                            static_cast<unsigned long long>(totalTriangles),
+                            static_cast<unsigned long long>(staticScene.mesh.tieInstanceCount),
+                            static_cast<unsigned long long>(staticScene.mesh.shrubInstanceCount),
+                            static_cast<unsigned long long>(sky.mesh.triangleCount),
                             wireframe ? "wireframe" : "textured"),
-                 24,
-                 50,
-                 18,
-                 LIGHTGRAY);
+                 24, 50, 18, LIGHTGRAY);
+        DrawText(TextFormat("Textures: tfrag %llu | tie %llu | shrub %llu | sky %llu",
+                            static_cast<unsigned long long>(tfragTextures.textures.size()),
+                            static_cast<unsigned long long>(tieTextures.textures.size()),
+                            static_cast<unsigned long long>(shrubTextures.textures.size()),
+                            static_cast<unsigned long long>(sky.mesh.textures.size())),
+                 24, 74, 16, GRAY);
         DrawText("Free camera: WASD/mouse/wheel | TAB: wireframe | ESC: close",
-                 24,
-                 74,
-                 16,
-                 GRAY);
+                 24, 96, 16, GRAY);
         DrawFPS(GetScreenWidth() - 90, 16);
         EndDrawing();
     }
 
-    for (auto& batch : drawBatches) {
-        UnloadModel(batch.model);
-    }
-    for (Texture2D texture : gpuTextures) {
-        UnloadTexture(texture);
-    }
-    CloseWindow();
+    cleanup();
     return 0;
 }

@@ -78,11 +78,13 @@ host buffer for renderer-owned asset decoders.
 ### Native level viewer
 
 Phase 6 established the PC-native renderer with authentic R&C1 collision
-geometry. Phase 7 moves the viewer onto the game's actual visual terrain path:
-OpenRatchet parses the five embedded tfrag VIF storage packets directly,
-reconstructs LOD0 strips as ordinary host triangles, decodes the R&C1 paletted
-texture table from the level core/GS-RAM blobs, and uploads textured batches to
-raylib/OpenGL. No VIF/VU/GS emulator is involved.
+geometry. Phase 7 moved it onto textured tfrag terrain. Phase 8 expands the
+same native scene with static visual objects and sky: OpenRatchet decompresses
+the retail gameplay WAD, joins tie/shrub class meshes to their authentic
+instance matrices, decodes their LevelCore texture tables, and parses the
+camera-relative sky shells and self-contained sky textures. These formats are
+converted directly to host triangles/RGBA images; no VIF/VU/GS emulator is
+involved.
 
 After extracting level 0 and building Release, run:
 
@@ -90,9 +92,12 @@ After extracting level 0 and building Release, run:
 .\tools\run-native-level-viewer.ps1 -LevelIndex 0
 ```
 
-The window now displays textured tfrag terrain. Use `TAB` to toggle wireframe.
+The window displays the native R&C1 scene currently covered by the renderer:
+textured tfrag terrain, ties, shrubs and sky. Use `TAB` to toggle wireframe.
 The collision decoder remains covered by tests as an independent geometry
-oracle, but the viewer's default path is the visual tfrag data used by the game.
+oracle. `native_level_viewer` is a development microscope only; the shipping
+port will render these assets inside the normal OpenRatchet runtime using live
+game state.
 
 ## Current prerequisites
 

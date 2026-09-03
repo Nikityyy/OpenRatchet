@@ -94,6 +94,10 @@ int main(int argc, char** argv) {
               << "+0x" << s.coreData.size
               << " encoded=0x" << s.coreEncodedSize
               << " decompressed=0x" << s.coreDecompressedBytes << std::dec << '\n';
+    std::cout << "[OpenRatchet:level] gameplay encoded=0x" << std::hex
+              << s.gameplayEncodedSize
+              << " decompressed=0x" << s.gameplayDecompressedBytes
+              << std::dec << '\n';
     std::cout << "[OpenRatchet:level] render tfrags=0x" << std::hex << s.tfragsOffset
               << " sky=0x" << s.skyOffset
               << " collision=0x" << s.collisionOffset

@@ -59,6 +59,8 @@ add_executable(openratchet
     src/assets/rac1_collision.cpp
     src/assets/rac1_texture.cpp
     src/assets/rac1_tfrag.cpp
+    src/assets/rac1_static_scene.cpp
+    src/assets/rac1_sky.cpp
     src/platform/native_vfs.cpp
     src/game/native_services.cpp
     src/game/native_io.cpp
@@ -91,6 +93,8 @@ add_executable(native_level_viewer
     src/assets/rac1_collision.cpp
     src/assets/rac1_texture.cpp
     src/assets/rac1_tfrag.cpp
+    src/assets/rac1_static_scene.cpp
+    src/assets/rac1_sky.cpp
     src/assets/wad_decompressor.cpp
     src/platform/native_vfs.cpp)
 target_include_directories(native_level_viewer PRIVATE src)
@@ -132,6 +136,18 @@ if(BUILD_TESTING)
         src/assets/rac1_tfrag.cpp)
     target_include_directories(rac1_tfrag_tests PRIVATE src)
     add_test(NAME rac1_tfrag COMMAND rac1_tfrag_tests)
+
+    add_executable(rac1_static_scene_tests
+        tests/rac1_static_scene_tests.cpp
+        src/assets/rac1_static_scene.cpp)
+    target_include_directories(rac1_static_scene_tests PRIVATE src)
+    add_test(NAME rac1_static_scene COMMAND rac1_static_scene_tests)
+
+    add_executable(rac1_sky_tests
+        tests/rac1_sky_tests.cpp
+        src/assets/rac1_sky.cpp)
+    target_include_directories(rac1_sky_tests PRIVATE src)
+    add_test(NAME rac1_sky COMMAND rac1_sky_tests)
 
     add_executable(native_level_inspector
         tools/native_level_inspector.cpp

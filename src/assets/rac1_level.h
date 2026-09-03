@@ -37,6 +37,8 @@ enum class Rac1LevelInspectStatus : std::uint8_t {
     InvalidCoreHeader,
     InvalidCoreWad,
     CoreDecompressionFailed,
+    InvalidGameplayWad,
+    GameplayDecompressionFailed,
     InvalidRenderOffsets,
     InvalidIndexArrays,
 };
@@ -101,6 +103,8 @@ struct Rac1LevelSummary {
 
     std::uint32_t coreEncodedSize = 0u;
     std::size_t coreDecompressedBytes = 0u;
+    std::uint32_t gameplayEncodedSize = 0u;
+    std::size_t gameplayDecompressedBytes = 0u;
 };
 
 struct Rac1LevelInspectResult {
@@ -118,6 +122,7 @@ struct Rac1LevelCoreLoadResult {
     std::vector<std::uint8_t> core;
     std::vector<std::uint8_t> coreIndex;
     std::vector<std::uint8_t> gsRam;
+    std::vector<std::uint8_t> gameplay;
 
     [[nodiscard]] bool ok() const noexcept {
         return status == Rac1LevelInspectStatus::Ok;

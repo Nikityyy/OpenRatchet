@@ -137,25 +137,37 @@ the beginning of the decompressed core.
 collision octree and provides a useful geometry oracle without touching VIF,
 VU, GIF, GS or guest memory.
 
-The visual terrain path is now separate and renderer-owned.
-`assets::decodeRac1TfragTerrain` parses the retail tfrag block, walks its five
-embedded VIF command buffers as serialized asset packets, reconstructs the LOD0
-vertex-info/position/strip streams, and emits ordinary host triangles grouped by
-texture material. It does not execute VU microcode or emulate VIF state beyond
-the packet layout required to read the stored data.
+The visual scene path is renderer-owned. `assets::decodeRac1TfragTerrain`
+parses the retail tfrag block, walks its five embedded VIF command buffers as
+serialized asset packets, reconstructs LOD0 vertex/position/strip streams, and
+emits ordinary host triangles grouped by texture material. It does not execute
+VU microcode or emulate VIF state beyond the packet layout required to read the
+stored data.
 
-`assets::decodeRac1TfragTextures` reads the level-core texture entries, indexed
-pixel data and raw GS-RAM CLUT data into ordinary RGBA8 host images.
-`loadRac1LevelCore` therefore returns the complete core-index and GS-RAM blobs
-in addition to the decompressed core. The PC renderer consumes those host assets
-directly.
+`assets::decodeRac1PaletteTextures` decodes any R&C1 LevelCore paletted texture
+table (tfrag/tie/moby/shrub) from core pixel indices plus the extracted GS-RAM
+CLUT blob into ordinary RGBA8 host images. `loadRac1LevelCore` returns the
+complete core index and GS-RAM blobs in addition to the decompressed core.
 
-`native_level_viewer` links to raylib/OpenGL, uploads the reconstructed tfrag
-triangles and decoded textures to native GPU resources, and displays them with a
-free camera. The PS2 GS framebuffer, VU execution and GIF stream are not part of
-this path. Exact GS material-state refinements such as per-strip CLAMP and
-transparency ordering can be layered onto the native renderer without changing
-asset ownership.
+Phase 8 also makes the retail NTSC gameplay WAD renderer-owned. The level loader
+natively decompresses it into a host buffer. `assets::decodeRac1StaticScene`
+joins the LevelCore tie/shrub class geometry to the gameplay instance blocks,
+applies their retail 4x4 matrices, resolves class-local texture slots through
+the class texture maps, and emits world-space host triangles. Tie/shrub packet
+formats are decoded as serialized asset data; no VU/GS execution is involved.
+
+`assets::decodeRac1Sky` parses the level-core sky header, shells and clusters,
+including camera-relative geometry, vertex colours, and the sky block's own
+paletted textures. The resulting shell meshes and RGBA8 images are native
+renderer resources.
+
+`native_level_viewer` links to raylib/OpenGL and combines tfrags, ties, shrubs
+and sky into one PC-native scene. The PS2 GS framebuffer, VU execution and GIF
+stream are not part of this path. The viewer remains a development tool rather
+than a shipping frontend; the next architectural boundary is feeding these
+native renderers from the running recompiled game's camera and object state.
+Exact lighting, LOD, CLAMP, fog and transparency refinements can be layered on
+without changing native asset ownership.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

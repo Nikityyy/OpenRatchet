@@ -38,9 +38,20 @@ std::vector<std::uint8_t> makeFixture() {
     writeLe32(bytes, kHeaderOffset + 0x000u, 7u);
     writeLe32(bytes, kHeaderOffset + 0x004u, 0x2434u);
     writeRange(bytes, kHeaderOffset + 0x008u, kDataStart, 5u);
-    writeRange(bytes, kHeaderOffset + 0x010u, 0u, 0u);
+    writeRange(bytes, kHeaderOffset + 0x010u, 105u, 1u);
     writeRange(bytes, kHeaderOffset + 0x018u, 0u, 0u);
     writeRange(bytes, kHeaderOffset + 0x020u, 0u, 0u);
+
+    // A tiny valid gameplay WAD in its own sector range.
+    const std::size_t gameplayWad = (105u - kLevelStart) * kSectorBytes;
+    bytes[gameplayWad + 0u] = 'W';
+    bytes[gameplayWad + 1u] = 'A';
+    bytes[gameplayWad + 2u] = 'D';
+    writeLe32(bytes, gameplayWad + 3u, 0x31u);
+    bytes[gameplayWad + 0x10u] = 49u;
+    for (std::size_t i = 0u; i < 32u; ++i) {
+        bytes[gameplayWad + 0x11u + i] = static_cast<std::uint8_t>(0x80u + i);
+    }
 
     // Level-data header: core index, raw GS RAM, then compressed core.
     writeRange(bytes, kDataOffset + 0x10u, 0x100u, 0x1000u);
@@ -105,7 +116,8 @@ int main() {
         return 1;
     }
     if (loaded.coreIndex.size() != 0x1000u || loaded.gsRam.size() != 0x200u ||
-        loaded.gsRam.front() != 0xa5u || loaded.core.size() != 32u) {
+        loaded.gsRam.front() != 0xa5u || loaded.core.size() != 32u ||
+        loaded.gameplay.size() != 32u || loaded.gameplay.front() != 0x80u) {
         std::cerr << "rac1_level_tests: renderer-owned core/index/GS blobs mismatch\n";
         return 1;
     }
@@ -123,7 +135,8 @@ int main() {
         s.data.startSector != 110u || s.data.sectorCount != 5u ||
         s.coreIndex.offset != 0x100u || s.coreIndex.size != 0x1000u ||
         s.coreData.offset != 0x1400u || s.coreEncodedSize != 0x31u ||
-        s.coreDecompressedBytes != 32u ||
+        s.coreDecompressedBytes != 32u || s.gameplayEncodedSize != 0x31u ||
+        s.gameplayDecompressedBytes != 32u ||
         s.tfragsOffset != 4u || s.skyOffset != 8u || s.collisionOffset != 12u ||
         s.gsRamTable.offset != 0x0c0u || s.gsRamTable.count != 2u ||
         s.mobyClasses.offset != 0x100u || s.mobyClasses.count != 3u ||
