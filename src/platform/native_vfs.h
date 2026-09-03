@@ -27,10 +27,10 @@ struct NativeVfsSummary {
     std::size_t missingAssets = 0u;
 };
 
-// Native view over the files already extracted from the user's disc.  The
-// current phase indexes sector-addressed WAD/WAD2 resources from build/toc.json
-// and resolves guest sector reads directly to those host files.  Higher-level
-// resource APIs can be layered on top without reintroducing CDVD/SIF hardware.
+// Native view over the files already extracted from the user's disc. The VFS
+// owns both host-file resolution for extracted assets and a host-side image of
+// the game's disc TOC. Guest code can therefore consume file metadata without
+// routing through CDVD/SIF/IOP services.
 class NativeVfs final {
 public:
     static constexpr std::uint32_t kSectorBytes = 0x800u;
@@ -74,11 +74,32 @@ public:
                          std::size_t destinationCapacity,
                          std::size_t& bytesRead) const;
 
+    // Copies the native host-side image of the retail disc TOC. toc.json files
+    // created before OpenRatchet started exporting the final 38 level-directory
+    // entries are accepted: their known prefix is exact and the unavailable
+    // tail is zero-filled until the extraction pipeline is rerun.
+    bool copyDiscToc(std::uint8_t* destination,
+                     std::size_t destinationCapacity,
+                     std::size_t& bytesWritten) const;
+
+    [[nodiscard]] std::size_t discTocSize() const noexcept {
+        return tocImage_.size();
+    }
+    [[nodiscard]] std::size_t discTocKnownBytes() const noexcept {
+        return tocKnownBytes_;
+    }
+    [[nodiscard]] bool discTocComplete() const noexcept {
+        return tocComplete_;
+    }
+
 private:
     std::filesystem::path extractedRoot_;
     std::filesystem::path tocPath_;
     std::vector<NativeAssetLocation> assets_;
+    std::vector<std::uint8_t> tocImage_;
+    std::size_t tocKnownBytes_ = 0u;
     NativeVfsSummary summary_{};
+    bool tocComplete_ = false;
     bool ready_ = false;
 };
 

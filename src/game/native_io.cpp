@@ -5,7 +5,6 @@
 #include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -18,35 +17,18 @@ namespace ratchet::game {
 namespace {
 
 constexpr std::uint32_t kGuestRamBytes = 0x02000000u;
-constexpr std::uint32_t kDiscRegionProbeSector = 0x121u;
-constexpr std::uint32_t kBootSourceGlobal = 0x138e40u;
-constexpr std::uint32_t kBootSectorCountGlobal = 0x138e44u;
-constexpr std::uint32_t kLegacyBootTop = 0x1ff8000u;
+constexpr std::uint32_t kGameDiscTocBase = 0x00137b80u;
+constexpr std::uint32_t kLegacyBootTop = 0x01ff8000u;
 
 PS2Runtime::RecompiledFunction g_sectorReadFallback = nullptr;
+PS2Runtime::RecompiledFunction g_discTocFallback = nullptr;
 std::uint32_t g_nativeReadDiagnostics = 0u;
 std::uint32_t g_fallbackReadDiagnostics = 0u;
+std::uint32_t g_nativeTocDiagnostics = 0u;
 
 void returnToGuestCaller(R5900Context* ctx, std::uint32_t result) {
     SET_GPR_U32(ctx, 2, result);
     ctx->pc = GPR_U32(ctx, 31);
-}
-
-void publishBootAssetMetadata(std::uint8_t* rdram,
-                              R5900Context* ctx,
-                              PS2Runtime* runtime,
-                              const platform::NativeVfs& vfs) {
-    const platform::NativeAssetLocation* boot =
-        vfs.findAsset(platform::NativeAssetKind::Wad2, 0u);
-    if (boot == nullptr) {
-        return;
-    }
-
-    WRITE32(kBootSourceGlobal, boot->startSector);
-    WRITE32(kBootSectorCountGlobal, boot->sectorCount);
-    std::cerr << "[OpenRatchet:VFS] published boot metadata sector=0x"
-              << std::hex << boot->startSector
-              << " sectors=0x" << boot->sectorCount << std::dec << '\n';
 }
 
 bool tryNativeIndexedRead(std::uint8_t* rdram,
@@ -95,9 +77,9 @@ bool tryLegacyBootAlias(std::uint8_t* rdram,
                         std::uint32_t sourceSector,
                         std::uint32_t sectorCount,
                         std::uint32_t destination) {
-    // Preserve the old bounded safety net for the already-observed state where
-    // the guest reaches its boot buffer before sector metadata has propagated.
-    // The data itself is now owned by the VFS rather than guest_overrides.cpp.
+    // Bounded compatibility path retained only while Phase 3 validates the
+    // native disc-TOC owner. A correct TOC causes the caller to request WAD2/0
+    // with a real sector/count pair and this branch is never entered.
     if (sourceSector != 0u || sectorCount != 0u || destination != kLegacyBootTop ||
         destination >= kGuestRamBytes) {
         return false;
@@ -144,9 +126,8 @@ void nativeSectorRead(std::uint8_t* rdram,
         }
     }
 
-    // Not every raw disc sector has been promoted into the extracted VFS yet.
-    // Keep the original EE/CDVD path only for those unresolved ranges. This is
-    // deliberately a fallback, not the owner of indexed WAD/WAD2 reads.
+    // Raw ranges that have not yet been promoted into the extracted VFS remain
+    // on the generated EE/CDVD path. Indexed game assets never take this path.
     ++g_fallbackReadDiagnostics;
     if (g_fallbackReadDiagnostics <= 8u) {
         std::cerr << "[OpenRatchet:VFS] fallback sector read count="
@@ -161,15 +142,51 @@ void nativeSectorRead(std::uint8_t* rdram,
     } else {
         returnToGuestCaller(ctx, 0u);
     }
+}
 
-    // The current boot still obtains the R&C data-file location through an
-    // unresolved raw disc metadata path. Publish the same game state from the
-    // authoritative TOC index, without hard-coding 0x3809 or the WAD length.
-    if (services.vfs != nullptr && services.vfs->ready() &&
-        sourceSector == kDiscRegionProbeSector && sectorCount == 1u &&
-        READ32(kBootSectorCountGlobal) == 0u) {
-        publishBootAssetMetadata(rdram, ctx, runtime, *services.vfs);
+void nativeLoadDiscToc(std::uint8_t* rdram,
+                       R5900Context* ctx,
+                       PS2Runtime* runtime) {
+    const NativeGameServices& services = nativeGameServices();
+    if (services.vfs == nullptr || !services.vfs->ready() ||
+        services.vfs->discTocSize() == 0u ||
+        !isRangeWithin(kGameDiscTocBase,
+                       services.vfs->discTocSize(),
+                       kGuestRamBytes)) {
+        if (g_discTocFallback != nullptr) {
+            g_discTocFallback(rdram, ctx, runtime);
+        } else {
+            returnToGuestCaller(ctx, 0u);
+        }
+        return;
     }
+
+    std::size_t bytesWritten = 0u;
+    if (!services.vfs->copyDiscToc(rdram + kGameDiscTocBase,
+                                   kGuestRamBytes - kGameDiscTocBase,
+                                   bytesWritten)) {
+        if (g_discTocFallback != nullptr) {
+            g_discTocFallback(rdram, ctx, runtime);
+        } else {
+            returnToGuestCaller(ctx, 0u);
+        }
+        return;
+    }
+
+    ++g_nativeTocDiagnostics;
+    if (g_nativeTocDiagnostics <= 4u) {
+        std::cerr << "[OpenRatchet:VFS] native disc TOC count="
+                  << g_nativeTocDiagnostics
+                  << " destination=0x" << std::hex << kGameDiscTocBase
+                  << " bytes=0x" << bytesWritten
+                  << " known=0x" << services.vfs->discTocKnownBytes()
+                  << " complete=" << (services.vfs->discTocComplete() ? 1 : 0)
+                  << std::dec << '\n';
+    }
+
+    // FUN_0012f2b8 returns 1 after copying the 0x2960-byte table. Reproduce the
+    // game-visible contract directly; no SIF/IOP transaction is required.
+    returnToGuestCaller(ctx, 1u);
 }
 
 } // namespace
@@ -180,6 +197,12 @@ void declareNativeIoReplacements(runtime::NativeReplacementRegistry& registry) {
                  runtime::NativeReplacementStage::Runtime,
                  nativeSectorRead,
                  &g_sectorReadFallback);
+
+    registry.add(0x12f2b8u,
+                 "native.io.load-disc-toc",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeLoadDiscToc,
+                 &g_discTocFallback);
 }
 
 } // namespace ratchet::game

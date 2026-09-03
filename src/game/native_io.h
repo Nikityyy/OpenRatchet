@@ -6,10 +6,10 @@ class NativeReplacementRegistry;
 
 namespace ratchet::game {
 
-// Native replacements for game-facing storage APIs. The first migrated entry
-// is the synchronous sector reader at 0x12f208: indexed extracted resources are
-// read directly from the host VFS, while unknown disc ranges temporarily fall
-// back to the recompiled implementation.
+// Native replacements for game-facing storage APIs. OpenRatchet now owns the
+// synchronous sector reader at 0x12f208 and the disc-TOC loader at 0x12f2b8.
+// Indexed assets and their metadata are sourced from the extracted host VFS;
+// unresolved raw disc ranges alone retain a generated fallback.
 void declareNativeIoReplacements(runtime::NativeReplacementRegistry& registry);
 
 } // namespace ratchet::game

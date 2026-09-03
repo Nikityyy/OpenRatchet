@@ -49,7 +49,7 @@ int main() {
         std::ofstream output(toc);
         output << R"({
   "version": 1,
-  "toc_size": 32,
+  "toc_size": 44,
   "wads": [
     { "num": 0, "start": 50, "length": 1 },
     { "num": 1, "start": 0, "length": 0 }
@@ -58,7 +58,8 @@ int main() {
     { "num": 0, "start": 100, "length": 2 },
     { "num": 1, "start": 102, "length": 1 }
   ],
-  "video": [], "vags": [], "vags2": []
+  "video": [], "vags": [], "vags2": [],
+  "leveldirs": [ { "num": 0, "start": 777 } ]
 })";
     }
 
@@ -95,6 +96,58 @@ int main() {
                 "sector lookup resolves into the containing extracted asset");
     test.expect(vfs.findAssetContainingSector(99u) == nullptr,
                 "unindexed disc gaps remain unresolved");
+
+    std::array<std::uint8_t, 44> tocImage{};
+    std::size_t tocBytes = 0u;
+    test.expect(vfs.copyDiscToc(tocImage.data(), tocImage.size(), tocBytes),
+                "native VFS reconstructs the game-visible disc TOC");
+    test.expect(tocBytes == 44u && vfs.discTocKnownBytes() == 44u &&
+                    vfs.discTocComplete(),
+                "complete TOC metadata reports the exact declared size");
+    const auto readLe32 = [&tocImage](std::size_t offset) {
+        return static_cast<std::uint32_t>(tocImage[offset]) |
+               (static_cast<std::uint32_t>(tocImage[offset + 1u]) << 8u) |
+               (static_cast<std::uint32_t>(tocImage[offset + 2u]) << 16u) |
+               (static_cast<std::uint32_t>(tocImage[offset + 3u]) << 24u);
+    };
+    test.expect(readLe32(0u) == 1u && readLe32(4u) == 44u,
+                "TOC image preserves version and declared size");
+    test.expect(readLe32(24u) == 100u && readLe32(28u) == 2u,
+                "TOC image preserves WAD2/0 start and sector count");
+    test.expect(readLe32(40u) == 777u,
+                "TOC image preserves trailing level-directory locations");
+
+    // Old OpenRatchet extraction artifacts omitted the 38 level-directory
+    // entries from JSON even though toc_size included them. They must stay
+    // usable during migration, with an exact prefix and deterministic zero tail.
+    const fs::path legacyToc = root / "toc-legacy.json";
+    {
+        std::ofstream output(legacyToc);
+        output << R"({
+  "version": 1, "toc_size": 44,
+  "wads": [
+    { "num": 0, "start": 50, "length": 1 },
+    { "num": 1, "start": 0, "length": 0 }
+  ],
+  "vags": [],
+  "wads2": [
+    { "num": 0, "start": 100, "length": 2 },
+    { "num": 1, "start": 102, "length": 1 }
+  ],
+  "video": [], "vags2": []
+})";
+    }
+    NativeVfs legacyVfs;
+    test.expect(legacyVfs.initialize(root / "extracted", legacyToc),
+                "legacy TOC JSON without leveldirs remains supported");
+    std::array<std::uint8_t, 44> legacyImage{};
+    std::size_t legacyBytes = 0u;
+    test.expect(legacyVfs.copyDiscToc(legacyImage.data(), legacyImage.size(), legacyBytes) &&
+                    legacyBytes == 44u && legacyVfs.discTocKnownBytes() == 40u &&
+                    !legacyVfs.discTocComplete(),
+                "legacy TOC reports exact known prefix and incomplete tail");
+    test.expect(legacyImage[40] == 0u && legacyImage[43] == 0u,
+                "legacy-missing TOC tail is deterministically zero-filled");
 
     std::array<std::uint8_t, NativeVfs::kSectorBytes> oneSector{};
     std::string source;

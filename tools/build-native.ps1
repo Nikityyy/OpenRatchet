@@ -2,7 +2,7 @@
 param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
     [string]$Configuration = 'Release',
-    [ValidateSet('ALL_BUILD', 'openratchet', 'native_replacements_tests', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
+    [ValidateSet('ALL_BUILD', 'openratchet', 'native_replacements_tests', 'native_vfs_tests', 'wad_decompressor_tests', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
     [string]$Target = 'ALL_BUILD',
     # Use only when generated project metadata has changed and MSBuild's
     # incremental tracking has not picked up a newly added source file.
@@ -44,31 +44,72 @@ foreach ($expected in @(
     }
 }
 
-# CMake can regenerate Visual Studio project files from ZERO_CHECK while
-# MSBuild is already running. A target added by that regeneration is not part of
-# the dependency graph MSBuild loaded at process start, so ALL_BUILD can finish
-# successfully without building the new target. Configure first whenever the
-# root project changed (or the requested .vcxproj does not exist), then start
-# MSBuild against the fresh project graph.
-$needsConfigure = -not (Test-Path -LiteralPath $project) -or `
-    -not (Test-Path -LiteralPath $generateStamp) -or `
-    ((Get-Item -LiteralPath $rootCmake).LastWriteTimeUtc -gt
-        (Get-Item -LiteralPath $generateStamp).LastWriteTimeUtc)
+# Patch ZIPs deliberately contain only changed files. Archive extraction can
+# preserve an older LastWriteTime than an object file already present under
+# build/native. Both CMake and MSBuild are timestamp-driven, so that can cause a
+# successful-looking build to silently reuse a binary from the previous phase.
+#
+# Git is the authoritative phase boundary: after each accepted phase is
+# committed, applying the next patch leaves exactly its changed/new files dirty.
+# Touch build-relevant dirty files before configuring so incremental MSBuild
+# cannot mistake patched source for an older input.
+$git = Get-Command git.exe -ErrorAction SilentlyContinue
+if (-not $git) {
+    $git = Get-Command git -ErrorAction SilentlyContinue
+}
+if (-not $git) {
+    throw 'git was not found on PATH; cannot establish dirty build inputs safely.'
+}
 
-if ($needsConfigure) {
-    $cmake = Get-Command cmake.exe -ErrorAction SilentlyContinue
-    if (-not $cmake) {
-        $cmake = Get-Command cmake -ErrorAction SilentlyContinue
-    }
-    if (-not $cmake) {
-        throw 'cmake was not found on PATH.'
-    }
+$dirtyRelativePaths = @()
+$dirtyRelativePaths += & $git.Source -C $root diff --name-only --diff-filter=ACMRTUXB --
+if ($LASTEXITCODE -ne 0) { throw 'git diff failed while determining dirty build inputs.' }
+$dirtyRelativePaths += & $git.Source -C $root diff --cached --name-only --diff-filter=ACMRTUXB --
+if ($LASTEXITCODE -ne 0) { throw 'git diff --cached failed while determining dirty build inputs.' }
+$dirtyRelativePaths += & $git.Source -C $root ls-files --others --exclude-standard
+if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed while determining untracked build inputs.' }
 
-    Write-Host 'CMake project metadata is stale; configuring before MSBuild...'
-    & $cmake.Source -S $root -B $buildDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "CMake configure failed with exit code $LASTEXITCODE."
+$buildInputExtensions = @(
+    '.c', '.cc', '.cpp', '.cxx',
+    '.h', '.hh', '.hpp', '.hxx', '.inl',
+    '.cmake', '.toml', '.json', '.csv'
+)
+$dirtyBuildInputs = @()
+foreach ($relativePath in ($dirtyRelativePaths | Sort-Object -Unique)) {
+    if (-not $relativePath) { continue }
+    $candidate = Join-Path $root ($relativePath -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+
+    $leaf = Split-Path -Leaf $candidate
+    $extension = [IO.Path]::GetExtension($candidate).ToLowerInvariant()
+    if ($leaf -eq 'CMakeLists.txt' -or $buildInputExtensions -contains $extension) {
+        $dirtyBuildInputs += $candidate
     }
+}
+
+if ($dirtyBuildInputs.Count -gt 0) {
+    $touchTime = [DateTime]::UtcNow
+    foreach ($inputPath in $dirtyBuildInputs) {
+        (Get-Item -LiteralPath $inputPath).LastWriteTimeUtc = $touchTime
+    }
+    Write-Host "Refreshed timestamps for $($dirtyBuildInputs.Count) dirty build input(s)."
+}
+
+# Always invoke configure explicitly. This is intentionally cheap compared with
+# compiling the generated game and guarantees that CMake reads the current
+# project contents even when an extracted CMakeLists.txt has an old timestamp.
+$cmake = Get-Command cmake.exe -ErrorAction SilentlyContinue
+if (-not $cmake) {
+    $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+}
+if (-not $cmake) {
+    throw 'cmake was not found on PATH.'
+}
+
+Write-Host 'Configuring CMake project before MSBuild...'
+& $cmake.Source -S $root -B $buildDir
+if ($LASTEXITCODE -ne 0) {
+    throw "CMake configure failed with exit code $LASTEXITCODE."
 }
 
 if (-not (Test-Path -LiteralPath $project)) {

@@ -61,10 +61,18 @@ inside startup code.
 ## Native storage boundary
 
 `platform::NativeVfs` indexes extracted WAD/WAD2 resources from
-`build/toc.json`. The game-facing synchronous sector reader at `0x12f208` is
-owned by OpenRatchet: ranges backed by indexed extracted resources are read
-directly into guest memory from host files. Unknown/raw disc ranges still fall
-back to the generated EE/CDVD path until their semantics are migrated.
+`build/toc.json` and reconstructs the game's in-memory disc TOC. The game-facing
+synchronous sector reader at `0x12f208` is owned by OpenRatchet: ranges backed
+by indexed extracted resources are read directly into guest memory from host
+files. The TOC loader at `0x12f2b8` is also native and copies the host-derived
+table directly to the game's fixed TOC region instead of asking the IOP for the
+0x2960-byte blob. Unknown/raw disc ranges still fall back to the generated
+EE/CDVD path until their semantics are migrated.
+
+The extraction wrapper now preserves the trailing 38 level-directory locations
+that the upstream JSON dumper historically omitted. Existing `toc.json` files
+remain usable: their 0x28c8-byte known prefix is reconstructed exactly and the
+legacy-missing 0x98-byte tail is zero-filled until extraction is rerun.
 
 This boundary is intentionally above CDVD/SIF hardware. New known resources
 should be added to the VFS/resource layer rather than implemented as synthetic
@@ -79,3 +87,25 @@ address-specific control-flow repair, and graphics diagnostics. Host WAD file
 I/O no longer belongs there. New platform features must not be added there
 unless required solely to keep the verified fallback baseline alive during a
 bounded migration.
+
+## Native compressed-asset boundary
+
+`assets::decompressWad` is a PS2-independent implementation of the R&C1 WAD
+stream semantics used by game function `0x20b618`. It operates only on host
+byte spans: no scratchpad, SPR DMA, CHCR polling, or PS2Runtime device state is
+part of the decoder API.
+
+During the Phase-3 migration gate the native decoder runs in shadow mode after
+the existing guest decompressor, but the legacy SPR/DMAC bridge is no longer
+used as the correctness oracle. With the authentic full WAD source restored,
+that bridge reports a 0x8f4600-byte result while the native decoder produces a
+coherent 0xa346c-byte archive. The native result was independently cross-checked
+against the known Ratchet WAD packet algorithm and matches it byte-for-byte.
+
+The regression test anchors the target retail boot WAD to its independently
+established encoded/output fingerprints and, when the extracted WAD2 corpus is
+present, validates all 249 compressed streams across 165 files against a fixed
+aggregate manifest. Shadow mode remains non-authoritative for guest state: it
+cannot change guest memory or control flow. Once the runtime trace reports
+`status=ok oracle=match`, ownership of `0x20b618` can move to the native decoder
+and the legacy decompressor SPR/DMAC bridge can be deleted instead of expanded.

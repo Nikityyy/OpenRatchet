@@ -1,6 +1,7 @@
 #include "guest_overrides.h"
 
 #include "guest_range.h"
+#include "game/native_assets.h"
 #include "sif_rpc_transport.h"
 #include "sif_startup_responses.h"
 #include "runtime/native_replacements.h"
@@ -114,6 +115,8 @@ void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     static uint32_t count = 0u;
     ++count;
     const __m128i savedReturnAddress = GPR_VEC(ctx, 31);
+    const uint32_t inputAddress = GPR_U32(ctx, 4);
+    const uint32_t outputAddress = GPR_U32(ctx, 5);
     if (count <= 4u) {
         std::cerr << "[OpenRatchet:guest] 20b618 enter count=" << count
                   << " a0=0x" << std::hex << GPR_U32(ctx, 4)
@@ -121,7 +124,7 @@ void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                   << " ra=0x" << GPR_U32(ctx, 31)
                   << " pc=0x" << ctx->pc << std::dec << std::endl;
     }
-    copyGuestDecompressorInputToScratchpad(*runtime, GPR_U32(ctx, 4));
+    copyGuestDecompressorInputToScratchpad(*runtime, inputAddress);
     if (g_guest20b618Original != nullptr) {
         for (uint32_t resumeCount = 0u; resumeCount < 200000u; ++resumeCount) {
             g_guest20b618Original(rdram, ctx, runtime);
@@ -131,7 +134,7 @@ void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 // its CHCR start bit. The root-owned SPR copy above
                 // completed the transfer; clear the emulated completion bit
                 // before resuming the generated wait loop.
-                completeGuestSprTransfer(*runtime, GPR_U32(ctx, 4));
+                completeGuestSprTransfer(*runtime, inputAddress);
             }
             if (waitPc < 0x20b660u || waitPc > 0x20b8e0u) {
                 break;
@@ -147,6 +150,9 @@ void guest_20b618(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         std::cerr << "[OpenRatchet:guest] 20b618 repaired return pc=0x"
                   << std::hex << savedReturnPc << std::dec << std::endl;
     }
+    game::validateNativeWadDecompressorShadow(
+        rdram, inputAddress, outputAddress, GPR_U32(ctx, 2));
+
     if (count <= 4u) {
         uint32_t nonZeroOutput = 0u;
         for (uint32_t i = 0u; i < 0x100u; ++i) {

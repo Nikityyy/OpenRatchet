@@ -54,9 +54,11 @@ add_executable(openratchet
     src/main.cpp
     src/runtime/openratchet_runtime.cpp
     src/runtime/native_replacements.cpp
+    src/assets/wad_decompressor.cpp
     src/platform/native_vfs.cpp
     src/game/native_services.cpp
     src/game/native_io.cpp
+    src/game/native_assets.cpp
     src/game/native_replacements.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
@@ -89,6 +91,25 @@ if(BUILD_TESTING)
         src/platform/native_vfs.cpp)
     target_include_directories(native_vfs_tests PRIVATE src)
     add_test(NAME native_vfs COMMAND native_vfs_tests)
+
+    add_executable(wad_decompressor_tests
+        tests/wad_decompressor_tests.cpp
+        src/assets/wad_decompressor.cpp)
+    target_include_directories(wad_decompressor_tests PRIVATE src)
+
+    set(WAD_DECOMPRESSOR_TEST_ARGS)
+    set(RATCHET_BOOT_WAD
+        "${CMAKE_CURRENT_SOURCE_DIR}/build/extracted/wads2/wad2_0.wad")
+    set(RATCHET_WADS2_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/build/extracted/wads2")
+    if(EXISTS "${RATCHET_BOOT_WAD}")
+        list(APPEND WAD_DECOMPRESSOR_TEST_ARGS --boot "${RATCHET_BOOT_WAD}")
+    endif()
+    if(IS_DIRECTORY "${RATCHET_WADS2_DIR}")
+        list(APPEND WAD_DECOMPRESSOR_TEST_ARGS --corpus "${RATCHET_WADS2_DIR}")
+    endif()
+    add_test(NAME wad_decompressor
+        COMMAND wad_decompressor_tests ${WAD_DECOMPRESSOR_TEST_ARGS})
 
     add_executable(sif_startup_responses_tests
         tests/sif_startup_responses_tests.cpp

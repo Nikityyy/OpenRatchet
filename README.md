@@ -34,11 +34,22 @@ legacy boot wrappers are routed through that same boundary until their PS2
 subsystems are replaced natively.
 
 `src/platform/native_vfs.*` owns indexed access to extracted WAD/WAD2 content
-using `build/toc.json`. The game-facing sector reader now serves indexed game
-resources directly from this native VFS and falls back to the generated
-EE/CDVD implementation only for disc ranges that have not yet been migrated.
-`build/toc.json` is therefore a required native runtime artifact alongside
-`build/extracted/PS2_MAIN.ELF`.
+using `build/toc.json`. It also reconstructs the game-visible disc TOC, so the
+loader at `0x12f2b8` no longer needs an IOP/SIF request on the native path. The
+game-facing sector reader serves indexed resources directly from host files and
+falls back to the generated EE/CDVD implementation only for raw ranges that have
+not yet been migrated. `build/toc.json` is therefore a required native runtime
+artifact alongside `build/extracted/PS2_MAIN.ELF`. New extractions preserve the
+retail TOC's final 38 level-directory entries as well.
+
+`src/assets/wad_decompressor.*` is the first native compressed-asset primitive.
+For the current migration gate it shadows `0x20b618` without changing guest
+state. Correctness is no longer inferred from the temporary SPR/DMAC bridge:
+the target boot WAD is pinned to an independently established native output
+fingerprint, and the test suite can validate all 249 compressed streams in the
+165-file extracted WAD2 corpus against an aggregate reference manifest. The
+following phase can therefore make the native decoder authoritative and remove
+the decompressor's SPR/DMAC compatibility bridge.
 
 PS2Runtime remains an EE/game-logic fallback and temporary compatibility backend,
 not the target platform architecture.

@@ -20,6 +20,11 @@ struct TocSectlen {
     std::uint32_t length = 0u;
 };
 
+struct TocLocation {
+    std::uint32_t num = 0u;
+    std::uint32_t start = 0u;
+};
+
 std::optional<std::uint32_t> parseUnsignedField(std::string_view object,
                                                 std::string_view field) {
     const std::string key = "\"" + std::string(field) + "\"";
@@ -119,6 +124,78 @@ bool parseSectlenArray(const std::string& json,
     return false;
 }
 
+bool parseLocationArray(const std::string& json,
+                        std::string_view arrayName,
+                        std::vector<TocLocation>& output,
+                        std::string& error,
+                        bool required = true) {
+    const std::string key = "\"" + std::string(arrayName) + "\"";
+    const std::size_t keyPosition = json.find(key);
+    if (keyPosition == std::string::npos) {
+        if (!required) {
+            output.clear();
+            return true;
+        }
+        error = "missing array '" + std::string(arrayName) + "'";
+        return false;
+    }
+
+    const std::size_t arrayBegin = json.find('[', keyPosition + key.size());
+    if (arrayBegin == std::string::npos) {
+        error = "missing '[' for array '" + std::string(arrayName) + "'";
+        return false;
+    }
+
+    std::size_t cursor = arrayBegin + 1u;
+    while (cursor < json.size()) {
+        while (cursor < json.size() &&
+               (json[cursor] == ' ' || json[cursor] == '\t' ||
+                json[cursor] == '\r' || json[cursor] == '\n' ||
+                json[cursor] == ',')) {
+            ++cursor;
+        }
+
+        if (cursor >= json.size()) {
+            break;
+        }
+        if (json[cursor] == ']') {
+            return true;
+        }
+        if (json[cursor] != '{') {
+            error = "unexpected token while parsing array '" +
+                    std::string(arrayName) + "'";
+            return false;
+        }
+
+        const std::size_t objectEnd = json.find('}', cursor + 1u);
+        if (objectEnd == std::string::npos) {
+            error = "unterminated object in array '" + std::string(arrayName) + "'";
+            return false;
+        }
+
+        const std::string_view object(json.data() + cursor, objectEnd - cursor + 1u);
+        const auto num = parseUnsignedField(object, "num");
+        const auto start = parseUnsignedField(object, "start");
+        if (!num || !start) {
+            error = "invalid location object in array '" + std::string(arrayName) + "'";
+            return false;
+        }
+
+        output.push_back({*num, *start});
+        cursor = objectEnd + 1u;
+    }
+
+    error = "unterminated array '" + std::string(arrayName) + "'";
+    return false;
+}
+
+void appendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+    bytes.push_back(static_cast<std::uint8_t>(value & 0xffu));
+    bytes.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xffu));
+    bytes.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xffu));
+    bytes.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xffu));
+}
+
 std::filesystem::path assetPath(const std::filesystem::path& root,
                                 NativeAssetKind kind,
                                 std::uint32_t index) {
@@ -183,6 +260,9 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
     extractedRoot_ = extractedRoot;
     tocPath_ = tocPath;
     assets_.clear();
+    tocImage_.clear();
+    tocKnownBytes_ = 0u;
+    tocComplete_ = false;
     summary_ = {};
 
     std::ifstream input(tocPath_, std::ios::binary);
@@ -199,15 +279,71 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
         return false;
     }
 
+    const auto version = parseUnsignedField(json, "version");
+    const auto tocSize = parseUnsignedField(json, "toc_size");
     std::vector<TocSectlen> wads;
+    std::vector<TocLocation> vags;
     std::vector<TocSectlen> wads2;
+    std::vector<TocSectlen> video;
+    std::vector<TocLocation> vags2;
+    std::vector<TocLocation> leveldirs;
     std::string parseError;
-    if (!parseSectlenArray(json, "wads", wads, parseError) ||
-        !parseSectlenArray(json, "wads2", wads2, parseError)) {
+    if (!version || !tocSize || *tocSize < 8u ||
+        !parseSectlenArray(json, "wads", wads, parseError) ||
+        !parseLocationArray(json, "vags", vags, parseError) ||
+        !parseSectlenArray(json, "wads2", wads2, parseError) ||
+        !parseSectlenArray(json, "video", video, parseError) ||
+        !parseLocationArray(json, "vags2", vags2, parseError) ||
+        !parseLocationArray(json, "leveldirs", leveldirs, parseError, false)) {
+        if (parseError.empty()) {
+            parseError = "missing/invalid TOC header";
+        }
         std::cerr << "[OpenRatchet:VFS] TOC parse failed: " << parseError
                   << " path=" << tocPath_.string() << '\n';
         return false;
     }
+
+    // Reconstruct the exact in-memory table consumed by the game. The retail
+    // layout is version/size, WAD sectlen entries, VAG locations, WAD2
+    // sectlen entries, video sectlen entries, VAG2 locations, then 38 level
+    // directory locations. Older toc.json files omitted that final array; in
+    // that case the known prefix remains exact and the unavailable tail is
+    // zero-filled until extraction is rerun with the updated parser wrapper.
+    appendU32(tocImage_, *version);
+    appendU32(tocImage_, *tocSize);
+    for (const TocSectlen& entry : wads) {
+        appendU32(tocImage_, entry.start);
+        appendU32(tocImage_, entry.length);
+    }
+    for (const TocLocation& entry : vags) {
+        appendU32(tocImage_, entry.start);
+    }
+    for (const TocSectlen& entry : wads2) {
+        appendU32(tocImage_, entry.start);
+        appendU32(tocImage_, entry.length);
+    }
+    for (const TocSectlen& entry : video) {
+        appendU32(tocImage_, entry.start);
+        appendU32(tocImage_, entry.length);
+    }
+    for (const TocLocation& entry : vags2) {
+        appendU32(tocImage_, entry.start);
+    }
+    for (const TocLocation& entry : leveldirs) {
+        appendU32(tocImage_, entry.start);
+    }
+
+    tocKnownBytes_ = tocImage_.size();
+    if (tocKnownBytes_ > *tocSize) {
+        std::cerr << "[OpenRatchet:VFS] serialized TOC exceeds declared size known=0x"
+                  << std::hex << tocKnownBytes_ << " declared=0x" << *tocSize
+                  << std::dec << " path=" << tocPath_.string() << '\n';
+        tocImage_.clear();
+        tocKnownBytes_ = 0u;
+        return false;
+    }
+    tocComplete_ = tocKnownBytes_ == *tocSize;
+    tocImage_.resize(*tocSize, 0u);
 
     const auto append = [this](NativeAssetKind kind,
                                const std::vector<TocSectlen>& entries) {
@@ -301,6 +437,9 @@ bool NativeVfs::initialize(const std::filesystem::path& extractedRoot,
               << " sector=0x" << std::hex << boot->startSector
               << " sectors=0x" << boot->sectorCount << std::dec
               << " path=" << boot->path.string() << '\n';
+    std::cerr << "[OpenRatchet:VFS] disc TOC bytes=0x" << std::hex
+              << tocImage_.size() << " known=0x" << tocKnownBytes_
+              << " complete=" << (tocComplete_ ? 1 : 0) << std::dec << '\n';
     return true;
 }
 
@@ -441,6 +580,20 @@ bool NativeVfs::readAssetPrefix(NativeAssetKind kind,
     }
 
     bytesRead = wanted;
+    return true;
+}
+
+bool NativeVfs::copyDiscToc(std::uint8_t* destination,
+                            std::size_t destinationCapacity,
+                            std::size_t& bytesWritten) const {
+    bytesWritten = 0u;
+    if (!ready_ || destination == nullptr || tocImage_.empty() ||
+        tocImage_.size() > destinationCapacity) {
+        return false;
+    }
+
+    std::memcpy(destination, tocImage_.data(), tocImage_.size());
+    bytesWritten = tocImage_.size();
     return true;
 }
 
