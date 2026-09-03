@@ -1,4 +1,5 @@
 #include "assets/rac1_level.h"
+#include "assets/rac1_moby.h"
 #include "assets/rac1_sky.h"
 #include "assets/rac1_static_scene.h"
 #include "assets/rac1_texture.h"
@@ -211,13 +212,17 @@ int main(int argc, char** argv) {
     auto tieTextures = ratchet::assets::decodeRac1PaletteTextures(
         loaded.core, loaded.coreIndex, loaded.gsRam,
         loaded.summary.tieTextures, loaded.summary.texturesBaseOffset);
+    auto mobyTextures = ratchet::assets::decodeRac1PaletteTextures(
+        loaded.core, loaded.coreIndex, loaded.gsRam,
+        loaded.summary.mobyTextures, loaded.summary.texturesBaseOffset);
     auto shrubTextures = ratchet::assets::decodeRac1PaletteTextures(
         loaded.core, loaded.coreIndex, loaded.gsRam,
         loaded.summary.shrubTextures, loaded.summary.texturesBaseOffset);
-    if (!tfragTextures.ok() || !tieTextures.ok() || !shrubTextures.ok()) {
+    if (!tfragTextures.ok() || !tieTextures.ok() || !mobyTextures.ok() || !shrubTextures.ok()) {
         std::cerr << "[OpenRatchet:viewer] level texture decode failed"
                   << " tfrag=" << ratchet::assets::rac1TextureStatusName(tfragTextures.status)
                   << " tie=" << ratchet::assets::rac1TextureStatusName(tieTextures.status)
+                  << " moby=" << ratchet::assets::rac1TextureStatusName(mobyTextures.status)
                   << " shrub=" << ratchet::assets::rac1TextureStatusName(shrubTextures.status)
                   << '\n';
         return 1;
@@ -245,6 +250,18 @@ int main(int argc, char** argv) {
     if (!staticScene.ok()) {
         std::cerr << "[OpenRatchet:viewer] tie/shrub decode failed status="
                   << ratchet::assets::rac1StaticSceneStatusName(staticScene.status) << '\n';
+        return 1;
+    }
+
+    auto mobys = ratchet::assets::decodeRac1MobyScene(
+        loaded.core,
+        loaded.coreIndex,
+        loaded.gameplay,
+        loaded.summary.mobyClasses,
+        static_cast<std::uint32_t>(mobyTextures.textures.size()));
+    if (!mobys.ok()) {
+        std::cerr << "[OpenRatchet:viewer] moby decode failed status="
+                  << ratchet::assets::rac1MobyStatusName(mobys.status) << '\n';
         return 1;
     }
 
@@ -284,6 +301,30 @@ int main(int argc, char** argv) {
               << " skyTriangles=" << sky.mesh.triangleCount
               << " skyTextures=" << sky.mesh.textures.size()
               << " status=ok\n";
+    for (const auto& skipped : mobys.mesh.skippedClasses) {
+        std::cout << "[OpenRatchet:moby:skip] oClass=" << skipped.oClass
+                  << " instances=" << skipped.instanceCount
+                  << " reason=" << ratchet::assets::rac1MobySkipReasonName(skipped.reason)
+                  << " sourceTriangles=" << skipped.sourceTriangleCount
+                  << " specialDiscardTriangles=" << skipped.specialMaterialTriangleCount
+                  << '\n';
+    }
+    const std::size_t accountedMobyInstances =
+        mobys.mesh.renderedInstanceCount + mobys.mesh.intentionallyNonVisibleInstanceCount;
+    std::cout << "[OpenRatchet:moby] classes=" << mobys.mesh.classCount
+              << " renderable=" << mobys.mesh.renderableClassCount
+              << " instances=" << mobys.mesh.instanceCount
+              << " rendered=" << mobys.mesh.renderedInstanceCount
+              << " skipped=" << mobys.mesh.skippedInstanceCount
+              << " intentionallyInvisible=" << mobys.mesh.intentionallyNonVisibleInstanceCount
+              << " accounted=" << accountedMobyInstances
+              << " missing=" << mobys.mesh.missingClassInstanceCount
+              << " unaccounted=" << mobys.mesh.unaccountedInstanceCount
+              << " sourceTriangles=" << mobys.mesh.sourceTriangleCount
+              << " triangles=" << mobys.mesh.triangleCount
+              << " specialDiscardTriangles=" << mobys.mesh.specialMaterialTriangleCount
+              << " textures=" << mobyTextures.textures.size()
+              << " status=ok\n";
     std::cout << "[OpenRatchet:viewer] bounds raw=("
               << terrain.mesh.bounds.minX << ','
               << terrain.mesh.bounds.minY << ','
@@ -293,23 +334,27 @@ int main(int argc, char** argv) {
               << terrain.mesh.bounds.maxZ << ") scale=" << scale << '\n';
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(1280, 720, "OpenRatchet - Native R&C1 Scene");
+    InitWindow(1280, 720, "OpenRatchet - Native R&C1 Scene + Mobys");
     SetTargetFPS(60);
 
     std::vector<Texture2D> tfragGpu = uploadTextures(tfragTextures.textures);
     std::vector<Texture2D> tieGpu = uploadTextures(tieTextures.textures);
+    std::vector<Texture2D> mobyGpu = uploadTextures(mobyTextures.textures);
     std::vector<Texture2D> shrubGpu = uploadTextures(shrubTextures.textures);
     std::vector<Texture2D> skyGpu = uploadTextures(sky.mesh.textures);
     std::vector<NativeDrawBatch> terrainBatches;
     std::vector<NativeDrawBatch> staticBatches;
+    std::vector<NativeDrawBatch> mobyBatches;
     std::vector<NativeDrawBatch> skyBatches;
 
     auto cleanup = [&]() {
         unloadBatches(terrainBatches);
         unloadBatches(staticBatches);
+        unloadBatches(mobyBatches);
         unloadBatches(skyBatches);
         unloadTextures(tfragGpu);
         unloadTextures(tieGpu);
+        unloadTextures(mobyGpu);
         unloadTextures(shrubGpu);
         unloadTextures(skyGpu);
         CloseWindow();
@@ -350,6 +395,22 @@ int main(int argc, char** argv) {
         }
     }
 
+    for (const auto& sourceBatch : mobys.mesh.batches) {
+        if (!appendMeshBatch(
+                sourceBatch.triangleVertices,
+                sourceBatch.materialIndex,
+                &mobyGpu,
+                &mobyTextures.textures,
+                [&](const ratchet::assets::Rac1MobyVertex& v) {
+                    return toViewerSpace(v.x, v.y, v.z, center, scale);
+                },
+                mobyBatches)) {
+            std::cerr << "[OpenRatchet:viewer] moby GPU mesh creation failed\n";
+            cleanup();
+            return 1;
+        }
+    }
+
     for (const auto& sourceBatch : sky.mesh.batches) {
         const bool textured = sourceBatch.materialIndex != UINT32_MAX;
         const std::vector<Texture2D>* gpu = textured ? &skyGpu : nullptr;
@@ -381,6 +442,7 @@ int main(int argc, char** argv) {
     const std::size_t totalTriangles = terrain.mesh.triangleCount +
                                        staticScene.mesh.tieTriangleCount +
                                        staticScene.mesh.shrubTriangleCount +
+                                       mobys.mesh.triangleCount +
                                        sky.mesh.triangleCount;
     bool wireframe = false;
     while (!WindowShouldClose()) {
@@ -417,27 +479,31 @@ int main(int argc, char** argv) {
 
         drawBatches(terrainBatches, {0.0f, 0.0f, 0.0f});
         drawBatches(staticBatches, {0.0f, 0.0f, 0.0f});
+        drawBatches(mobyBatches, {0.0f, 0.0f, 0.0f});
 
         if (wireframe) rlDisableWireMode();
         rlEnableBackfaceCulling();
         DrawGrid(20, 5.0f);
         EndMode3D();
 
-        DrawRectangle(12, 12, 780, 110, {0, 0, 0, 170});
-        DrawText("OpenRatchet native R&C1 scene: tfrags + ties + shrubs + sky",
+        DrawRectangle(12, 12, 900, 110, {0, 0, 0, 170});
+        DrawText("OpenRatchet native R&C1 scene: tfrags + ties + shrubs + mobys + sky",
                  24, 22, 22, RAYWHITE);
-        DrawText(TextFormat("Level %u | %llu triangles | ties %llu | shrubs %llu | sky %llu | %s",
+        DrawText(TextFormat("Level %u | %llu triangles | ties %llu | shrubs %llu | mobys %llu/%llu | sky %llu | %s",
                             loaded.summary.tocIndex,
                             static_cast<unsigned long long>(totalTriangles),
                             static_cast<unsigned long long>(staticScene.mesh.tieInstanceCount),
                             static_cast<unsigned long long>(staticScene.mesh.shrubInstanceCount),
+                            static_cast<unsigned long long>(mobys.mesh.renderedInstanceCount),
+                            static_cast<unsigned long long>(mobys.mesh.instanceCount),
                             static_cast<unsigned long long>(sky.mesh.triangleCount),
                             wireframe ? "wireframe" : "textured"),
                  24, 50, 18, LIGHTGRAY);
-        DrawText(TextFormat("Textures: tfrag %llu | tie %llu | shrub %llu | sky %llu",
+        DrawText(TextFormat("Textures: tfrag %llu | tie %llu | shrub %llu | moby %llu | sky %llu",
                             static_cast<unsigned long long>(tfragTextures.textures.size()),
                             static_cast<unsigned long long>(tieTextures.textures.size()),
                             static_cast<unsigned long long>(shrubTextures.textures.size()),
+                            static_cast<unsigned long long>(mobyTextures.textures.size()),
                             static_cast<unsigned long long>(sky.mesh.textures.size())),
                  24, 74, 16, GRAY);
         DrawText("Click: lock mouse | WASD/mouse/wheel | TAB: wireframe | ESC: close",

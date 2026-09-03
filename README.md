@@ -78,13 +78,12 @@ host buffer for renderer-owned asset decoders.
 ### Native level viewer
 
 Phase 6 established the PC-native renderer with authentic R&C1 collision
-geometry. Phase 7 moved it onto textured tfrag terrain. Phase 8 expands the
-same native scene with static visual objects and sky: OpenRatchet decompresses
-the retail gameplay WAD, joins tie/shrub class meshes to their authentic
-instance matrices, decodes their LevelCore texture tables, and parses the
-camera-relative sky shells and self-contained sky textures. These formats are
-converted directly to host triangles/RGBA images; no VIF/VU/GS emulator is
-involved.
+geometry. Phase 7 moved it onto textured tfrag terrain. Phase 8 added ties,
+shrubs and camera-relative sky. Phase 9 extends the same native scene to R&C1
+mobys: OpenRatchet parses moby LOD0 packet/vertex-cache data, class texture
+remaps and retail gameplay instance transforms, then renders the resulting
+bind-pose object meshes through the PC-native path. These formats are converted
+directly to host triangles/RGBA images; no VIF/VU/GS emulator is involved.
 
 After extracting level 0 and building Release, run:
 
@@ -93,11 +92,12 @@ After extracting level 0 and building Release, run:
 ```
 
 The window displays the native R&C1 scene currently covered by the renderer:
-textured tfrag terrain, ties, shrubs and sky. Use `TAB` to toggle wireframe.
-The collision decoder remains covered by tests as an independent geometry
-oracle. `native_level_viewer` is a development microscope only; the shipping
-port will render these assets inside the normal OpenRatchet runtime using live
-game state.
+textured tfrag terrain, ties, shrubs, bind-pose mobys and sky. Use `TAB` to
+toggle wireframe. Click inside the window to capture the mouse. The collision
+decoder remains covered by tests as an independent geometry oracle.
+`native_level_viewer` is a development microscope only; the shipping port will
+render these assets inside the normal OpenRatchet runtime using live game state.
+Moby skeletal animation is the next renderer boundary.
 
 ## Current prerequisites
 

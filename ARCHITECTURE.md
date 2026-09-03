@@ -161,13 +161,22 @@ including camera-relative geometry, vertex colours, and the sky block's own
 paletted textures. The resulting shell meshes and RGBA8 images are native
 renderer resources.
 
-`native_level_viewer` links to raylib/OpenGL and combines tfrags, ties, shrubs
-and sky into one PC-native scene. The PS2 GS framebuffer, VU execution and GIF
-stream are not part of this path. The viewer remains a development tool rather
-than a shipping frontend; the next architectural boundary is feeding these
-native renderers from the running recompiled game's camera and object state.
-Exact lighting, LOD, CLAMP, fog and transparency refinements can be layered on
-without changing native asset ownership.
+`assets::decodeRac1MobyScene` owns the first dynamic-object model boundary. It
+reads R&C1 moby class entries, LOD0 packet VIF storage, the persistent 512-slot
+vertex cache, duplicate-cache references and packed material/index streams,
+then lazily decodes the classes referenced by gameplay and joins those meshes
+to moby scale/rotation/position/colour instances. Output is ordinary world-space
+host triangles grouped by the global moby texture table. This phase intentionally emits the stored bind pose; moby
+skeleton/joint/sequence evaluation remains a separate animation layer.
+
+`native_level_viewer` links to raylib/OpenGL and combines tfrags, ties, shrubs,
+bind-pose mobys and sky into one PC-native scene. The PS2 GS framebuffer, VU
+execution and GIF stream are not part of this path. The viewer remains a
+development tool rather than a shipping frontend; after native moby animation,
+the architectural boundary is feeding these renderers from the running
+recompiled game's camera and object state. Exact lighting, LOD, CLAMP, fog and
+transparency refinements can be layered on without changing native asset
+ownership.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

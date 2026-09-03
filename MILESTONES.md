@@ -26,37 +26,39 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 M4 — Native Ratchet scene renderer.
 
-### Phase-8 change under verification
+### Phase-9 change under verification
 
-- Decode the retail NTSC gameplay WAD alongside the renderer-owned level core
-  so native scene code can use authentic tie/shrub instance transforms without
-  routing those assets through guest RAM.
-- Generalize the R&C1 paletted texture decoder across the tfrag, tie and shrub
-  LevelCore texture tables.
-- Add native R&C1 tie LOD0 and shrub mesh decoders. They reconstruct the stored
-  GS command layout into host triangles, resolve class-local texture slots
-  through the LevelCore class tables, and apply gameplay instance matrices.
-- Add a native R&C1 sky decoder for shell geometry, vertex colours and its
-  self-contained PSMT8 texture/palette data.
-- Expand `native_level_viewer` from textured tfrag terrain to a combined native
-  scene containing tfrags, ties, shrubs and camera-relative sky shells.
+- Decode R&C1 moby class-table entries, LOD0 packet meshes, persistent 512-slot
+  packet vertex caches, duplicate cache references, packed strip/material index
+  streams, and class-local texture remaps into ordinary host triangles.
+- Decode the retail gameplay moby instance block and apply each instance's
+  uniform scale, ZYX Euler rotation, position and ambient colour to the native
+  class mesh.
+- Decode the LevelCore moby texture table through the existing native palette
+  texture path and add moby batches to `native_level_viewer` alongside tfrags,
+  ties, shrubs and sky.
+- Keep this phase deliberately bind-pose/static. Moby skeletons, joints,
+  animation sequences and live runtime transforms belong to the next renderer
+  phase; gameplay-referenced logic-only classes are counted and skipped rather
+  than treated as malformed visual data, while unreferenced class blobs are not
+  decoded by the scene pass.
 - Keep the normal recompiled-game runtime untouched; the separate viewer
-  remains a renderer-development microscope until live game-state integration.
+  remains the renderer-development microscope until live game-state integration.
 
 ### Acceptance test
 
-A Release build and all twelve CTest tests must pass, including the new
-`rac1_static_scene` and `rac1_sky` format tests. `native_level_inspector` must
-remain `status=ok` and report a nonzero decompressed gameplay WAD.
-`tools/run-native-level-viewer.ps1 -LevelIndex 0` must print both
-`[OpenRatchet:tfrag] ... status=ok` and `[OpenRatchet:scene] ... status=ok`.
-Authentic tie/shrub instance geometry and sky must be spatially coherent with
-Phase-7 terrain, with no exploded meshes or materially incorrect texture
-mapping. The normal 20-second runtime regression must remain alive with the
-native WAD path intact.
+A Release build and all thirteen CTest tests must pass, including the new
+`rac1_moby` format test. `native_level_inspector` must remain `status=ok`.
+`tools/run-native-level-viewer.ps1 -LevelIndex 0` must print the existing
+`[OpenRatchet:tfrag] ... status=ok`, `[OpenRatchet:scene] ... status=ok`, and a
+new `[OpenRatchet:moby] ... status=ok` line with nonzero rendered instances and
+triangles. Authentic moby geometry must be spatially coherent with the accepted
+Phase-8 scene and use plausible textures; bind-pose/static objects are expected
+at this stage. The normal 20-second runtime regression must remain alive with
+the native WAD path intact.
 
 ### Next phase after acceptance
 
-Phase 9 adds native moby class/model rendering and retail moby instances so
-Ratchet, crates, NPCs, enemies and other dynamic game objects can enter the
-native scene before animation and live game-state integration.
+Phase 10 adds native moby skeletal/model animation and pose evaluation, then
+uses that animated model boundary as the basis for connecting the renderer to
+live recompiled-game object state.
