@@ -2,6 +2,7 @@
 
 #include "assets/rac1_level.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -56,6 +57,24 @@ struct Rac1MobyVertex {
     std::uint8_t g = 255u;
     std::uint8_t b = 255u;
     std::uint8_t a = 255u;
+
+    // Phase 10 Step 9: preserve the source identity of every visible triangle
+    // vertex. skinVertexIndex indexes the flattened explicit-vertex stream used
+    // by the Step 8 skinning executor; duplicate/cache vertices inherit the
+    // original explicit source index rather than creating another skinned point.
+    std::int32_t oClass = 0;
+    std::uint32_t instanceIndex = 0u;
+    std::uint32_t skinVertexIndex = 0u;
+};
+
+struct Rac1MobyRenderedInstance {
+    std::uint32_t instanceIndex = 0u;
+    std::int32_t oClass = 0;
+    float classVertexScale = 1.0f;
+    float scale = 1.0f;
+    std::array<float, 3> position{};
+    std::array<float, 3> rotation{};
+    std::size_t skinVertexCount = 0u;
 };
 
 struct Rac1MobyBatch {
@@ -65,6 +84,7 @@ struct Rac1MobyBatch {
 
 struct Rac1MobySceneMesh {
     std::vector<Rac1MobyBatch> batches;
+    std::vector<Rac1MobyRenderedInstance> renderedInstances;
 
     // Class table entries present in the level index.
     std::size_t classCount = 0u;
@@ -110,6 +130,14 @@ struct Rac1MobyResult {
 // table. Gameplay instances provide oClass, scale, Euler rotation, position and
 // ambient colour. Logic-only classes (offset 0 / no packet table) are counted
 // but skipped rather than treated as malformed render data.
+// Converts one Step-8 raw skinned position into the same world space used by
+// decodeRac1MobyScene: class vertex scale, gameplay instance scale, intrinsic
+// ZYX rotation, then gameplay translation. This is the exact bridge used by the
+// Step 9 dynamic viewer path.
+std::array<float, 3> transformRac1MobySkinnedPositionToWorld(
+    const Rac1MobyRenderedInstance& instance,
+    const std::array<float, 3>& rawPosition) noexcept;
+
 Rac1MobyResult decodeRac1MobyScene(
     std::span<const std::uint8_t> core,
     std::span<const std::uint8_t> coreIndex,

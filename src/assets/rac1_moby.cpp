@@ -499,6 +499,7 @@ struct LocalVertex {
     float z = 0.0f;
     float u = 0.0f;
     float v = 0.0f;
+    std::uint32_t skinVertexIndex = 0u;
 };
 struct LocalOutputVertex : LocalVertex {
     std::int32_t material = -1;
@@ -512,6 +513,8 @@ struct DecodedClass {
     bool intentionallyNonVisible = false;
     Rac1MobySkipReason skipReason = Rac1MobySkipReason::NoClassData;
     std::vector<LocalBatch> batches;
+    float classScale = 1.0f;
+    std::size_t skinningVertexCount = 0u;
     // Post-async-trim triangles represented by the packet stream. Some can
     // intentionally carry the retail negative/special material, which is
     // discarded in the fragment shader rather than sampled as a texture.
@@ -541,6 +544,7 @@ bool decodeClass(std::span<const std::uint8_t> core,
     const std::uint8_t highLodCount = core[base + 0x4u];
     const std::uint8_t lowLodCount = core[base + 0x5u];
     const float classScale = readF32(core, base + 0x24u) * kVertexScale;
+    decoded.classScale = classScale;
 
     // packetTableOffset == 0 is the explicit no-mesh representation used by
     // the R&C class format (noclip likewise leaves MobyClass.mesh null). If
@@ -594,6 +598,7 @@ bool decodeClass(std::span<const std::uint8_t> core,
     // this to texture 0 for every packet makes otherwise-correct models borrow the
     // first global moby texture (very visibly Ratchet fur on crates in level 0).
     std::int32_t currentMaterial = textureCount > 0u ? 0 : -1;
+    std::uint32_t nextSkinVertexIndex = 0u;
 
     for (std::size_t packetIndex = 0u; packetIndex < highLodCount; ++packetIndex) {
         PacketData packet{};
@@ -620,6 +625,7 @@ bool decodeClass(std::span<const std::uint8_t> core,
                 source.z * classScale,
                 st[0] * kTexcoordScale,
                 st[1] * kTexcoordScale,
+                nextSkinVertexIndex++,
             };
             realPacket.push_back(vertex);
             vertexCache[source.cacheAddress] = vertex;
@@ -706,6 +712,7 @@ bool decodeClass(std::span<const std::uint8_t> core,
         return false;
     }
 
+    decoded.skinningVertexCount = static_cast<std::size_t>(nextSkinVertexIndex);
     decoded.sourceTriangleCount = outputVertices.size() / 3u;
     std::unordered_map<std::uint32_t, std::size_t> batchByMaterial;
     for (std::size_t i = 0u; i < outputVertices.size(); i += 3u) {
@@ -732,7 +739,7 @@ bool decodeClass(std::span<const std::uint8_t> core,
         auto& batch = decoded.batches[it->second].triangleVertices;
         for (std::size_t j = 0u; j < 3u; ++j) {
             const LocalOutputVertex& vertex = outputVertices[i + j];
-            batch.push_back({vertex.x, vertex.y, vertex.z, vertex.u, vertex.v});
+            batch.push_back({vertex.x, vertex.y, vertex.z, vertex.u, vertex.v, vertex.skinVertexIndex});
         }
         ++decoded.triangleCount;
     }
@@ -807,9 +814,19 @@ std::size_t batchFor(Rac1MobySceneMesh& mesh, std::uint32_t material) {
 
 void appendInstance(Rac1MobySceneMesh& mesh,
                     const DecodedClass& decoded,
-                    const Instance& instance) {
+                    const Instance& instance,
+                    std::uint32_t instanceIndex) {
     const Quaternion q = quaternionFromEulerZyx(
         instance.rotation[0], instance.rotation[1], instance.rotation[2]);
+    mesh.renderedInstances.push_back({
+        instanceIndex,
+        instance.oClass,
+        decoded.classScale,
+        instance.scale,
+        instance.position,
+        instance.rotation,
+        decoded.skinningVertexCount,
+    });
     for (const LocalBatch& sourceBatch : decoded.batches) {
         auto& destination = mesh.batches[batchFor(mesh, sourceBatch.material)].triangleVertices;
         destination.reserve(destination.size() + sourceBatch.triangleVertices.size());
@@ -837,6 +854,9 @@ void appendInstance(Rac1MobySceneMesh& mesh,
                 255u,
                 255u,
                 255u,
+                instance.oClass,
+                instanceIndex,
+                source.skinVertexIndex,
             });
         }
     }
@@ -848,6 +868,23 @@ Rac1MobyResult fail(Rac1MobyStatus status, Rac1MobySceneMesh mesh = {}) {
 }
 
 } // namespace
+
+std::array<float, 3> transformRac1MobySkinnedPositionToWorld(
+    const Rac1MobyRenderedInstance& instance,
+    const std::array<float, 3>& rawPosition) noexcept {
+    const float scale = instance.classVertexScale * instance.scale;
+    const Quaternion q = quaternionFromEulerZyx(
+        instance.rotation[0], instance.rotation[1], instance.rotation[2]);
+    const auto rotated = rotate(q,
+                                rawPosition[0] * scale,
+                                rawPosition[1] * scale,
+                                rawPosition[2] * scale);
+    return {
+        rotated[0] + instance.position[0],
+        rotated[1] + instance.position[1],
+        rotated[2] + instance.position[2],
+    };
+}
 
 const char* rac1MobyStatusName(Rac1MobyStatus status) noexcept {
     switch (status) {
@@ -913,7 +950,8 @@ Rac1MobyResult decodeRac1MobyScene(
     decodedClasses.reserve(std::min(classEntries.size(), instances.size()));
     Rac1MobyStatus detailedStatus = Rac1MobyStatus::Ok;
 
-    for (const Instance& instance : instances) {
+    for (std::size_t instanceIndex = 0u; instanceIndex < instances.size(); ++instanceIndex) {
+        const Instance& instance = instances[instanceIndex];
         auto decodedIt = decodedClasses.find(instance.oClass);
         if (decodedIt == decodedClasses.end()) {
             const auto classIt = classEntries.find(instance.oClass);
@@ -961,7 +999,7 @@ Rac1MobyResult decodeRac1MobyScene(
             }
             continue;
         }
-        appendInstance(mesh, decodedIt->second, instance);
+        appendInstance(mesh, decodedIt->second, instance, static_cast<std::uint32_t>(instanceIndex));
         mesh.sourceTriangleCount += decodedIt->second.sourceTriangleCount;
         mesh.specialMaterialTriangleCount += decodedIt->second.specialMaterialTriangleCount;
         ++mesh.renderedInstanceCount;
@@ -972,6 +1010,7 @@ Rac1MobyResult decodeRac1MobyScene(
     const bool trianglesAccounted =
         mesh.triangleCount + mesh.specialMaterialTriangleCount == mesh.sourceTriangleCount;
     if (accounted != mesh.instanceCount ||
+        mesh.renderedInstances.size() != mesh.renderedInstanceCount ||
         mesh.skippedInstanceCount != mesh.intentionallyNonVisibleInstanceCount ||
         !trianglesAccounted || mesh.missingClassInstanceCount != 0u ||
         mesh.unaccountedInstanceCount != 0u) {

@@ -88,8 +88,17 @@ struct Rac1LevelSummary {
     std::uint32_t effectBankOffset = 0u;
     std::uint32_t particleDefsOffset = 0u;
     std::uint32_t soundRemapOffset = 0u;
-    std::uint32_t ratchetSequencesOffset = 0u;
-    std::uint32_t sceneViewSize = 0u;
+    // Raw LevelCoreHeader +0x74 value. Earlier Phase-10 notes assigned this
+    // to Ratchet animation data. Step 12 disproved that assignment, so keep
+    // the lane explicitly unnamed until a retail consumer proves its role.
+    std::uint32_t coreHeader74 = 0u;
+    // LevelCoreHeader +0x78: core-index-relative table of Ratchet's external
+    // animation sequence pointers. Level 0 contains exactly 134 entries, matching
+    // oClass 0's sequenceCount byte.
+    std::uint32_t ratchetSequenceTableOffset = 0u;
+    // Raw LevelCoreHeader +0x7c value. The previous sceneViewSize name was
+    // not backed by a verified consumer and is intentionally retired.
+    std::uint32_t coreHeader7c = 0u;
     std::uint32_t gadgetCount = 0u;
     std::uint32_t gadgetOffset = 0u;
     std::uint32_t assetsCompressedSize = 0u;

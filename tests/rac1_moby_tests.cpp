@@ -259,7 +259,8 @@ int main() {
         mesh.skippedInstanceCount != 0u || mesh.missingClassInstanceCount != 0u ||
         mesh.unaccountedInstanceCount != 0u || !mesh.skippedClasses.empty() ||
         mesh.sourceTriangleCount != 3u || mesh.specialMaterialTriangleCount != 0u ||
-        mesh.triangleCount != 3u || mesh.batches.size() != 2u) {
+        mesh.triangleCount != 3u || mesh.batches.size() != 2u ||
+        mesh.renderedInstances.size() != 1u) {
         std::cerr << "unexpected moby counts/material\n";
         return 1;
     }
@@ -293,6 +294,34 @@ int main() {
     }
     if (!sawOrigin || !sawX || !sawY) {
         std::cerr << "instance/class transform or texcoords were not applied\n";
+        return 1;
+    }
+
+    // Phase 10 Step 9: visible triangle vertices retain the exact explicit
+    // skinning source that produced their position, including across packet
+    // cache reuse. The fixture has seven explicit vertices in each of two
+    // packets, so the flattened Step-8 source domain contains 14 entries.
+    const auto& rendered = mesh.renderedInstances.front();
+    if (rendered.instanceIndex != 0u || rendered.oClass != 42 ||
+        !near(rendered.classVertexScale, 1.0f) || !near(rendered.scale, 1.0f) ||
+        !near(rendered.position[0], 10.0f) || !near(rendered.position[1], 20.0f) ||
+        !near(rendered.position[2], 30.0f) || rendered.skinVertexCount != 14u) {
+        std::cerr << "rendered moby instance animation metadata mismatch\n";
+        return 1;
+    }
+    for (const auto& batch : mesh.batches) {
+        for (const auto& v : batch.triangleVertices) {
+            if (v.oClass != 42 || v.instanceIndex != 0u || v.skinVertexIndex >= 14u) {
+                std::cerr << "visible moby vertex lost skin-source identity\n";
+                return 1;
+            }
+        }
+    }
+    const auto transformed = ratchet::assets::transformRac1MobySkinnedPositionToWorld(
+        rendered, {1.0f, 2.0f, 3.0f});
+    if (!near(transformed[0], 11.0f) || !near(transformed[1], 22.0f) ||
+        !near(transformed[2], 33.0f)) {
+        std::cerr << "skinned raw-to-world transform mismatch\n";
         return 1;
     }
     for (const auto& v : material2->triangleVertices) {

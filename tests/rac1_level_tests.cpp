@@ -76,6 +76,9 @@ std::vector<std::uint8_t> makeFixture() {
     writeRange(bytes, core + 0x50u, 10u, 0x800u);
     writeRange(bytes, core + 0x58u, 11u, 0x900u);
     writeLe32(bytes, core + 0x60u, 16u);
+    writeLe32(bytes, core + 0x74u, 0x345678u);
+    writeLe32(bytes, core + 0x78u, 0x9a0u);
+    writeLe32(bytes, core + 0x7cu, 0xabcdefu);
     writeLe32(bytes, core + 0x88u, 0x31u);
     writeLe32(bytes, core + 0x8cu, 32u);
 
@@ -142,7 +145,10 @@ int main() {
         s.mobyClasses.offset != 0x100u || s.mobyClasses.count != 3u ||
         s.tieClasses.offset != 0x200u || s.tieClasses.count != 4u ||
         s.shrubClasses.offset != 0x300u || s.shrubClasses.count != 5u ||
-        s.tfragTextures.offset != 0x400u || s.tfragTextures.count != 6u) {
+        s.tfragTextures.offset != 0x400u || s.tfragTextures.count != 6u ||
+        s.coreHeader74 != 0x345678u ||
+        s.ratchetSequenceTableOffset != 0x9a0u ||
+        s.coreHeader7c != 0xabcdefu) {
         std::cerr << "rac1_level_tests: parsed metadata mismatch\n";
         return 1;
     }

@@ -62,6 +62,7 @@ add_executable(openratchet
     src/assets/rac1_static_scene.cpp
     src/assets/rac1_sky.cpp
     src/assets/rac1_moby.cpp
+    src/assets/rac1_moby_animation.cpp
     src/platform/native_vfs.cpp
     src/game/native_services.cpp
     src/game/native_io.cpp
@@ -97,6 +98,7 @@ add_executable(native_level_viewer
     src/assets/rac1_static_scene.cpp
     src/assets/rac1_sky.cpp
     src/assets/rac1_moby.cpp
+    src/assets/rac1_moby_animation.cpp
     src/assets/wad_decompressor.cpp
     src/platform/native_vfs.cpp)
 target_include_directories(native_level_viewer PRIVATE src)
@@ -156,6 +158,12 @@ if(BUILD_TESTING)
         src/assets/rac1_moby.cpp)
     target_include_directories(rac1_moby_tests PRIVATE src)
     add_test(NAME rac1_moby COMMAND rac1_moby_tests)
+
+    add_executable(rac1_moby_animation_tests
+        tests/rac1_moby_animation_tests.cpp
+        src/assets/rac1_moby_animation.cpp)
+    target_include_directories(rac1_moby_animation_tests PRIVATE src)
+    add_test(NAME rac1_moby_animation COMMAND rac1_moby_animation_tests)
 
     add_executable(native_level_inspector
         tools/native_level_inspector.cpp

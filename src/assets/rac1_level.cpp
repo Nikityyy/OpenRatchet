@@ -314,8 +314,9 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
     summary.effectBankOffset = readLe32(coreHeader.data() + 0x68u);
     summary.particleDefsOffset = readLe32(coreHeader.data() + 0x6cu);
     summary.soundRemapOffset = readLe32(coreHeader.data() + 0x70u);
-    summary.ratchetSequencesOffset = readLe32(coreHeader.data() + 0x74u);
-    summary.sceneViewSize = readLe32(coreHeader.data() + 0x7cu);
+    summary.coreHeader74 = readLe32(coreHeader.data() + 0x74u);
+    summary.ratchetSequenceTableOffset = readLe32(coreHeader.data() + 0x78u);
+    summary.coreHeader7c = readLe32(coreHeader.data() + 0x7cu);
     summary.gadgetCount = readLe32(coreHeader.data() + 0x80u);
     summary.gadgetOffset = readLe32(coreHeader.data() + 0x84u);
     summary.assetsCompressedSize = readLe32(coreHeader.data() + 0x88u);

@@ -166,8 +166,17 @@ reads R&C1 moby class entries, LOD0 packet VIF storage, the persistent 512-slot
 vertex cache, duplicate-cache references and packed material/index streams,
 then lazily decodes the classes referenced by gameplay and joins those meshes
 to moby scale/rotation/position/colour instances. Output is ordinary world-space
-host triangles grouped by the global moby texture table. This phase intentionally emits the stored bind pose; moby
-skeleton/joint/sequence evaluation remains a separate animation layer.
+host triangles grouped by the global moby texture table. Phase 9 intentionally
+emits the stored bind pose. Phase 10 adds a separate native animation layer:
+`assets::inspectRac1MobyAnimationMetadata` validates each referenced class's
+rig, sequence/frame layout and packed skinning program; the pose evaluator then
+decodes dense/sparse joint transforms, applies the retail class+0x14
+post-compose, and executes the R&C1 matrix-transfer / 2-way / 3-way / main
+skinning semantics directly on the CPU with persistent matrix-register state.
+The renderer therefore consumes ordinary host vertices rather than emulating
+VU0. Ratchet (`oClass 0`) is a storage exception, not a codec exception:
+LevelCoreHeader `+0x78` selects a core-index-resident table of external sequence
+pointers, while the pointed-to sequences use the same pose/skinning pipeline.
 
 `native_level_viewer` links to raylib/OpenGL and combines tfrags, ties, shrubs,
 bind-pose mobys and sky into one PC-native scene. The PS2 GS framebuffer, VU

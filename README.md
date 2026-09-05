@@ -97,7 +97,26 @@ toggle wireframe. Click inside the window to capture the mouse. The collision
 decoder remains covered by tests as an independent geometry oracle.
 `native_level_viewer` is a development microscope only; the shipping port will
 render these assets inside the normal OpenRatchet runtime using live game state.
-Moby skeletal animation is the next renderer boundary.
+Phase 10 now owns the native R&C1 moby animation pipeline: class/sequence
+metadata, dense and sparse pose decoding, retail class+0x14 post-compose,
+persistent VU0-style matrix-register semantics reproduced on the CPU, native
+skinning, and pose-space interpolation. Level 0 validates all 847 ordinary
+skeletal frames through this path. Ratchet
+(`oClass 0`) uses the same pose/skinning codec but stores its 134 sequence
+pointers in the external core-index table selected by LevelCoreHeader `+0x78`.
+Step 12A validates all 2,558 Ratchet frames through the same native skinning
+pipeline. Step 12B makes the development viewer animate the rendered Ratchet
+instance from the first structurally complete moving external sequence, using
+retail pose-space interpolation and a dynamic vertex buffer. The same-sequence
+end-of-sequence rule is also evidence-backed: retail `FUN_0020d580` advances
+frame B and wraps it to frame 0 while preserving fractional interpolation state,
+so the viewer includes the final->first interpolation segment instead of hard
+resetting. Absolute sequence timing and live sequence selection remain owned by
+the Phase-11 game-state bridge rather than guessed by the viewer. Phase 10 is
+complete: Windows acceptance validates all ordinary Level-0 skeletal frames and
+all 2,558 Ratchet frames through the native pose/skinning pipeline, plus a
+visibly continuous Ratchet loop using the retail final-to-first frame rule.
+Phase 11 is therefore the next development boundary.
 
 ## Current prerequisites
 
