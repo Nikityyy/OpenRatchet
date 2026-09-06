@@ -86,6 +86,7 @@ add_executable(openratchet
     src/game/rac1_live_state.cpp
     src/game/rac1_live_animation.cpp
     src/game/rac1_live_transform.cpp
+    src/game/rac1_live_camera.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
     src/sif_startup_responses.cpp
@@ -148,6 +149,12 @@ if(BUILD_TESTING)
         src/game/rac1_live_transform.cpp)
     target_include_directories(rac1_live_transform_tests PRIVATE src)
     add_test(NAME rac1_live_transform COMMAND rac1_live_transform_tests)
+
+    add_executable(rac1_live_camera_tests
+        tests/rac1_live_camera_tests.cpp
+        src/game/rac1_live_camera.cpp)
+    target_include_directories(rac1_live_camera_tests PRIVATE src)
+    add_test(NAME rac1_live_camera COMMAND rac1_live_camera_tests)
 
     add_executable(native_platform_bootstrap_tests
         tests/native_platform_bootstrap_tests.cpp

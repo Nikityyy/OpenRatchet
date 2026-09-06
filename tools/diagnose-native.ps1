@@ -124,6 +124,7 @@ Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenR
 Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
 Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
 Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines
+Write-RecentMatches 'Live gameplay camera' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:camera\]' $TailLines
 Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
 Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
 Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines

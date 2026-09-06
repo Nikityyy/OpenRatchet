@@ -3,6 +3,7 @@
 #include "game/native_replacements.h"
 #include "game/native_services.h"
 #include "game/rac1_live_animation.h"
+#include "game/rac1_live_camera.h"
 #include "game/rac1_live_state.h"
 #include "game/rac1_live_transform.h"
 #include "guest_overrides.h"
@@ -201,6 +202,41 @@ void logLiveRatchetTransform(
               << '\n';
 }
 
+
+void logLiveCamera(const game::Rac1LiveCameraResult& cameraResult) {
+    using Layout = game::Rac1LiveCameraLayout;
+
+    const auto printVec3 = [](const std::array<float, 3>& value) {
+        std::cerr << '(' << value[0] << ',' << value[1] << ',' << value[2] << ')';
+    };
+    const auto printVec4 = [](const std::array<float, 4>& value) {
+        std::cerr << '(' << value[0] << ',' << value[1] << ',' << value[2] << ','
+                  << value[3] << ')';
+    };
+
+    std::cerr << "[OpenRatchet:live:camera]"
+              << " source=guest-rdram"
+              << " state=0x" << std::hex << Layout::kStateBase << std::dec
+              << " position=";
+    printVec3(cameraResult.camera.worldPosition);
+    std::cerr << " orientationX=";
+    printVec3(cameraResult.camera.orientationX);
+    std::cerr << " orientationY=";
+    printVec3(cameraResult.camera.orientationY);
+    std::cerr << " orientationZ=";
+    printVec3(cameraResult.camera.orientationZ);
+    std::cerr << " clipX=";
+    printVec4(cameraResult.camera.clipX);
+    std::cerr << " clipY=";
+    printVec4(cameraResult.camera.clipY);
+    std::cerr << " clipZ=";
+    printVec4(cameraResult.camera.clipZ);
+    std::cerr << " clipW=";
+    printVec4(cameraResult.camera.clipW);
+    std::cerr << " status=" << game::rac1LiveCameraStatusName(cameraResult.status)
+              << '\n';
+}
+
 } // namespace
 
 struct OpenRatchetRuntime::Impl {
@@ -212,13 +248,15 @@ struct OpenRatchetRuntime::Impl {
     std::optional<game::Rac1LiveRatchetAnimationStatus> lastLoggedAnimationStatus;
     game::Rac1LiveRatchetTransformResult liveRatchetTransform;
     std::optional<game::Rac1LiveRatchetTransformStatus> lastLoggedTransformStatus;
+    game::Rac1LiveCameraResult liveCamera;
+    std::optional<game::Rac1LiveCameraStatus> lastLoggedCameraStatus;
     std::uint64_t liveMobyPresentationCount = 0u;
     bool initialized = false;
 
     void inspectLiveMobyState(PS2Runtime& runtime) {
-        // Steps 11.3/11.4 consume live animation and world-transform state on
-        // every coherent host/guest handoff. Only diagnostics are throttled;
-        // semantic bridge state never inherits the old Step-11.2 cadence.
+        // Steps 11.3-11.5 consume live animation, world-transform and camera
+        // state on every coherent host/guest handoff. Only diagnostics are
+        // throttled; semantic bridge state never inherits the old Step-11.2 cadence.
         const std::uint64_t presentation = liveMobyPresentationCount++;
         const bool diagnosticTick =
             presentation == 0u || (presentation % 60u) == 0u;
@@ -226,11 +264,12 @@ struct OpenRatchetRuntime::Impl {
         game::Rac1LiveMobyPoolSnapshot snapshot;
         game::Rac1LiveRatchetAnimationResult animation;
         game::Rac1LiveRatchetTransformResult transform;
+        game::Rac1LiveCameraResult camera;
         {
             // The fallback game thread mutates RDRAM while it executes. Use the
-            // runtime's existing guest-execution handoff so both the pool and
-            // its live sequence/frame IDs and consumed endpoint packets come
-            // from one coherent read.
+            // runtime's existing guest-execution handoff so the pool, live
+            // object state and independent global camera state come from one
+            // coherent read.
             // Logging occurs after this scope so stderr I/O never holds the
             // execution mutex.
             PS2Runtime::GuestExecutionScope guestExecution(&runtime);
@@ -240,6 +279,7 @@ struct OpenRatchetRuntime::Impl {
             snapshot = game::inspectRac1LiveMobyPool(guestRdram);
             animation = game::inspectRac1LiveRatchetAnimation(guestRdram, snapshot);
             transform = game::inspectRac1LiveRatchetWorldTransform(snapshot);
+            camera = game::inspectRac1LiveCamera(guestRdram);
         }
 
         const bool animationStatusChanged =
@@ -250,6 +290,9 @@ struct OpenRatchetRuntime::Impl {
             !lastLoggedTransformStatus ||
             *lastLoggedTransformStatus != transform.status;
         liveRatchetTransform = transform;
+        const bool cameraStatusChanged =
+            !lastLoggedCameraStatus || *lastLoggedCameraStatus != camera.status;
+        liveCamera = camera;
 
         if (diagnosticTick) {
             const LiveMobySnapshotSignature signature = liveMobySignature(snapshot);
@@ -266,6 +309,10 @@ struct OpenRatchetRuntime::Impl {
         if (diagnosticTick || transformStatusChanged) {
             lastLoggedTransformStatus = transform.status;
             logLiveRatchetTransform(transform);
+        }
+        if (diagnosticTick || cameraStatusChanged) {
+            lastLoggedCameraStatus = camera.status;
+            logLiveCamera(camera);
         }
     }
 };

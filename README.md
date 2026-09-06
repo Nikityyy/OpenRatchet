@@ -207,7 +207,35 @@ stays clean, runtime replacements remain `21/21` with `install_errors=0`, and
 the 20-second live run reports one authentic Ratchet with `unaccounted=0` plus
 `[OpenRatchet:live:ratchet-transform] ... status=basis-not-materialized`. That
 zero-basis snapshot is the proved Retail pre-materialization state, not a host
-rotation fallback or a startup blocker. Step 11.5 camera bridging is next.
+rotation fallback or a startup blocker.
+
+Step 11.5 is complete at a separate Retail camera boundary. The camera state is
+the fixed 0x3A0-byte global rooted at `0x00186F40`, independently zeroed by
+`sub_001E9B10`. `FUN_0020D868` proves `+0x140` as the world-space observer
+position; `FUN_001ED2B0`/`sub_001EDAA8` publish selected orientation vectors at
+`+0x350/+0x360/+0x370`, with `FUN_00218D10` providing the independent
+`(256,256,64)` plus identity-orientation initialization oracle. The native bridge
+does not derive a guessed Raylib camera or FOV. Instead it preserves Retail's
+materialized clip vectors at `+0x100/+0x110/+0x120/+0x130`, whose exact consumer
+`FUN_0022BF94` computes `clipX*x + clipY*y + clipZ*z + clipW*w` before clipping
+and perspective division. `rac1_live_camera_tests` pins those addresses and the
+matrix direction; `[OpenRatchet:live:camera]` exposes the coherent live state.
+Windows acceptance is green: Release links, **21/21 CTests pass**, the Phase-10
+viewer remains fully regression-free, `third_party/PS2Recomp` remains clean,
+runtime replacements are still `21/21` with `install_errors=0`, and the 20-second
+run reports the authentic all-zero construction state
+`status=orientation-not-materialized`. This is preserved as pre-materialization
+evidence, not replaced by a fake identity camera/FOV.
+
+Step 11.6 is now next. The visibly fragmented/horizontal-line output of
+`openratchet.exe` is still the old PS2Runtime GS/framebuffer presentation path;
+it is not the Phase-10 native level renderer and is not a reason to deepen GS
+emulation. Step 11.6 transfers final window/frame ownership to the already
+validated native renderer and then consumes the proved live Moby/animation/
+transform/camera bridges as they materialize. Construction states such as
+`endpoints-not-materialized`, `basis-not-materialized` and
+`orientation-not-materialized` remain explicit and must not be replaced by
+invented host values.
 
 
 Phase 11 has now promoted the controller and save bootstrap above SIF instead

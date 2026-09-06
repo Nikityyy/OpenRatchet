@@ -331,7 +331,8 @@ read-only guest-RDRAM byte span and decodes only retail-proved R&C1 Moby-pool
 fields. The decoder owns no PS2Runtime object or renderer. Step 11.4 extends the
 raw contract with the proved live world-position (`+0x10`), raw model scale
 (`+0x2C`), Retail rotation input (`+0x40`) and cached basis columns
-(`+0xC0/+0xD0/+0xE0`); camera interpretation remains outside this boundary.
+(`+0xC0/+0xD0/+0xE0`). Step 11.5 keeps camera ownership separate again: the
+camera is an independent Retail global, not a field inferred from the Moby pool.
 
 During Phase 11, `OpenRatchetRuntime` is the owner of the temporary attachment
 to the still-running EE fallback. It obtains the actual 32 MiB RDRAM pointer
@@ -433,8 +434,51 @@ observes the authentic all-zero cached basis as `basis-not-materialized` while
 Moby accounting remains exact. That sampled construction state is preserved as
 evidence rather than promoted into a startup blocker or replaced with a host
 rotation. Step 11.4 does not transfer renderer ownership; that remains Step 11.6.
-Step 11.5 is the next active ownership boundary and must independently prove the
-retail gameplay camera/view state.
+
+Step 11.5 introduces `game::inspectRac1LiveCamera` as an independent, fixed-global
+camera contract. Retail `sub_001E9B10` clears exactly 0x3A0 bytes rooted at
+`0x00186F40`; no Moby pointer is involved. `FUN_0020D868` loads
+`0x00187080 = state+0x140` and subtracts it from Moby world position, proving the
+camera/observer world-position role. Camera producers `FUN_001ED2B0` and
+`sub_001EDAA8` copy the selected camera transform into position `+0x140` and
+three orientation vectors at `+0x350/+0x360/+0x370`. `FUN_00218D10`
+independently initializes those fields to position `(256,256,64)` and identity
+xyz orientation, while `sub_001EAF88` materializes the same nine orientation
+floats through Retail's own matrix helpers.
+
+OpenRatchet does not reverse that state into guessed Euler angles, target/up or
+FOV. The stronger renderer oracle is the matrix Retail already materializes:
+`FUN_001F2260` consumes the selected orientation and builds the downstream camera
+matrices. `FUN_0022BF94` then loads `state+0x100/+0x110/+0x120/+0x130` and
+computes each clip-space vector as exactly
+`clipX*x + clipY*y + clipZ*z + clipW*w` before `vclipw` and reciprocal-W
+perspective division. `FUN_00227A08` independently consumes the neighboring
+`+0xC0..+0xF0` camera matrix together with `+0x140` position. The native bridge
+therefore preserves the four Retail clip vectors in exact consumer order;
+conversion to a future host rendering API remains Step 11.6. All-zero
+orientation or clip blocks keep explicit construction-state statuses, while
+non-finite values fail closed. Runtime reads happen under the same coherent
+`GuestExecutionScope` as 11.3/11.4, but the camera decoder itself remains
+PS2Runtime- and renderer-free. Windows acceptance is complete: Release links,
+21/21 CTests pass, the Phase-10 native viewer remains regression-free,
+`third_party/PS2Recomp` stays clean, runtime replacements remain 21/21 with zero
+install errors, and the 20-second live run observes the authentic zeroed camera
+construction state as `orientation-not-materialized`. That sampled state is not
+promoted into a startup blocker and is never replaced with an invented identity
+camera/FOV.
+
+Step 11.6 is the renderer-ownership boundary. `openratchet.exe` currently still
+presents the PS2Runtime GS/framebuffer compatibility output; the observed
+horizontal-line/fragmented image comes from that fallback presentation path, not
+from the already validated Phase-6..10 native renderer. Step 11.6 must therefore
+supersede final presentation with the existing native renderer rather than
+improve GS emulation. The old GS path may remain internally while still needed
+by fallback execution, but it must cease to own the final window image. Static
+scene ownership can move first; live Ratchet/Moby animation, transforms and
+camera state are consumed only when their proved materialization contracts allow
+it. Explicit `endpoints-not-materialized`, `basis-not-materialized` and
+`orientation-not-materialized` states must never be converted into guessed host
+values merely to produce a prettier frame.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

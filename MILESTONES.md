@@ -369,10 +369,50 @@ retail simulation before any native input or gameplay ownership is introduced.
   construction state with one Ratchet and `unaccounted=0`. This sampled zero
   basis is evidence of pre-materialization, not a blocker oracle and not a
   reason to synthesize host orientation. Step 11.5 is the next active step.
-- **Step 11.5 (`TODO`):** Independently prove and bridge the retail gameplay
-  camera/view state.
-- **Step 11.6 (`TODO`):** Continuously update native rendered Moby instances
-  from the live simulation snapshot.
+- **Step 11.5 (`DONE`):** The gameplay-camera boundary is proved
+  independently of the Moby pool and bridged read-only from Retail's global
+  0x3A0-byte camera state at `0x00186F40`. `sub_001E9B10` zeroes exactly that
+  block. `FUN_0020D868` independently consumes `state+0x140` (`0x187080`) as
+  the xyz observer/camera world position in Moby spatial logic, while
+  `FUN_001ED2B0` and `sub_001EDAA8` publish the selected camera transform's
+  position and three orientation vectors to `+0x140` and
+  `+0x350/+0x360/+0x370`. `FUN_00218D10` provides an independent initialization
+  oracle: position `(256,256,64)` plus the identity xyz orientation.
+
+  The renderer-facing view/projection contract is taken from Retail's already
+  materialized matrix rather than reconstructed from a guessed FOV or host
+  camera convention. `FUN_001F2260` builds the camera matrices from the selected
+  orientation, and `FUN_0022BF94` directly loads qwords `+0x100/+0x110/+0x120/
+  +0x130`, combines them as `clipX*x + clipY*y + clipZ*z + clipW*w`, then runs
+  `vclipw` and perspective division. `FUN_00227A08` independently consumes the
+  adjacent `+0xC0..+0xF0` matrix together with `+0x140` position. Therefore
+  `src/game/rac1_live_camera.*` preserves the exact Retail position,
+  orientation-vector and clip-transform values without deriving target/up,
+  Euler angles, handedness or FOV. All-zero orientation and clip matrices remain
+  explicit pre-materialization states; non-finite values fail closed.
+
+  `rac1_live_camera_tests` pins the literal Retail addresses, the exact
+  X/Y/Z/W clip-vector multiplication order, the Retail init state and all
+  materialization/error gates. The runtime samples this independent global in
+  the same coherent `GuestExecutionScope` as the other Phase-11 state and logs
+  `[OpenRatchet:live:camera]`; diagnostics expose it directly. Local GCC/Clang
+  `-Werror` validation is green for the new test and complete runtime TU.
+  Windows acceptance is also green: Release build/link succeeds, **21/21 CTests
+  pass**, the full Phase-10 native viewer remains regression-free,
+  `third_party/PS2Recomp` stays clean, runtime replacements remain `21/21` with
+  `install_errors=0`, and the mandatory 20-second fallback run stays alive with
+  graphics activity. The sampled camera state is the authentic all-zero
+  construction state `status=orientation-not-materialized`; this is evidence of
+  pre-materialization, not a reason to fabricate identity orientation, FOV or a
+  host camera. Step 11.6 is now the next active step.
+- **Step 11.6 (`TODO`, NEXT):** Transfer final frame ownership in
+  `openratchet.exe` from the PS2 GS/framebuffer presentation path to the existing
+  native Phase-6..10 renderer, then continuously update native scene/Moby state
+  from the proved 11.2-11.5 live bridges. The current horizontal-line/fragmented
+  fallback image is therefore not a GS bug to emulate around; it is precisely the
+  presentation path Step 11.6 is meant to supersede. No fake camera, transform or
+  animation state may be introduced when a live component is still in an
+  explicit pre-materialization status.
 - **Step 11.7 (`TODO`):** Full Phase-11 regression and mandatory 20-second
   runtime gate before commit.
 
