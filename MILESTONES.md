@@ -405,14 +405,65 @@ retail simulation before any native input or gameplay ownership is introduced.
   construction state `status=orientation-not-materialized`; this is evidence of
   pre-materialization, not a reason to fabricate identity orientation, FOV or a
   host camera. Step 11.6 is now the next active step.
-- **Step 11.6 (`TODO`, NEXT):** Transfer final frame ownership in
+- **Step 11.6 (`IN PROGRESS`):** Transfer final frame ownership in
   `openratchet.exe` from the PS2 GS/framebuffer presentation path to the existing
   native Phase-6..10 renderer, then continuously update native scene/Moby state
   from the proved 11.2-11.5 live bridges. The current horizontal-line/fragmented
   fallback image is therefore not a GS bug to emulate around; it is precisely the
-  presentation path Step 11.6 is meant to supersede. No fake camera, transform or
-  animation state may be introduced when a live component is still in an
-  explicit pre-materialization status.
+  presentation path Step 11.6 supersedes. No fake camera, transform or animation
+  state may be introduced when a live component is still in an explicit
+  pre-materialization status.
+
+  - **Step 11.6A (`DONE`):** The narrow
+    ownership cut is the existing PS2Runtime post-GS/pre-`EndDrawing` host
+    callback. OpenRatchet first flushes the already queued compatibility draw,
+    clears that image, and then owns the final visible frame; PS2Runtime remains
+    only the fallback EE/window host and `third_party/PS2Recomp` is unchanged.
+    The Phase-10 mesh upload/draw helpers are extracted into
+    `src/render/native_mesh_renderer.*` and reused by both the standalone viewer
+    and the runtime, so no second renderer is introduced.
+
+    Runtime scene identity is fail-closed. A successful *complete* native indexed
+    sector read may publish its exact asset identity, and the only currently
+    accepted Retail->native level mapping is the independently proved Level-0
+    request `wads2[69]` (`0x38F6`, `0x834` sectors -> `0x01654000`) -> native
+    level index 0. Partial reads, neighboring WAD indices, different destinations
+    and unmatched ranges cannot activate a level. `rac1_render_bridge_tests` pins
+    this negative space.
+
+    The runtime static-world renderer reuses the authoritative native Level-0
+    texture/tfrag/tie/shrub decoders and keeps their vertices in Retail world
+    coordinates. When Step-11.5 reports `status=ok`, its four already-materialized
+    clip columns are loaded directly as the host projection matrix in exact
+    `clipX*x + clipY*y + clipZ*z + clipW*w` order; there is no `Camera3D`, guessed
+    FOV, target/up reconstruction or axis remap. When camera state is not
+    materialized, the scene is explicitly deferred. Sky remains
+    `deferred-retail-transform-unbridged`, and live Mobys remain
+    `deferred-live-identity-unbridged`; neither receives a viewer/demo fallback.
+
+    Renderer accounting logs `mapped/materialized/rendered/deferred/unaccounted`
+    plus renderer, Moby-pool, camera, animation and transform states;
+    `tools/diagnose-native.ps1` surfaces the permanent `OpenRatchet:render:*`
+    gates directly. Local
+    `-Wall -Wextra -Werror` gates pass for the render bridge, native VFS observer,
+    runtime renderer, runtime translation unit and the modified viewer. A real
+    Level-0 decoder smoke gate materializes 78 terrain batches / 24,520 terrain
+    triangles and 201 tie+shrub batches / 396,708 tie + 327,841 shrub triangles.
+    Windows acceptance is complete: Release builds and links successfully, **22/22**
+    CTests pass, the Phase-10 native level viewer remains regression-free,
+    `third_party/PS2Recomp` stays clean, runtime replacements remain **21/21**
+    with `install_errors=0`, and the mandatory 20-second runtime remains alive
+    with graphics activity and harness exit 0. The proved Level-0 transfer maps
+    and materializes the native scene with `unaccounted=0`. At the sampled
+    checkpoint the Retail camera remains authentically
+    `orientation-not-materialized`, so renderer accounting correctly reports
+    `rendered=0 deferred=1` rather than inventing a host camera. The resulting
+    black native-owned frame is therefore the expected fail-closed output of
+    11.6A, not a GS presentation regression.
+  - **Step 11.6B (`TODO`):** Bridge the remaining renderer-facing Retail identity
+    needed for live Mobys/Ratchet and the Retail sky transform, then consume the
+    already proved 11.3 pose packets and 11.4 basis/position/scale only when each
+    component is actually materialized. No Phase-12 input semantics are included.
 - **Step 11.7 (`TODO`):** Full Phase-11 regression and mandatory 20-second
   runtime gate before commit.
 

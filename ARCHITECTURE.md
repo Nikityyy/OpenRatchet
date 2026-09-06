@@ -341,18 +341,24 @@ through `PS2Runtime::memory().getRDRAM()` and snapshots it under
 function-boundary handoff, so host reads do not race guest writes. Snapshot
 formatting/logging is done only after releasing the execution scope.
 
-PS2Runtime's host-presentation callback is used temporarily as the host/guest
-handoff clock while the fallback runtime still owns the executable loop. This
-is not a new rendering dependency and does not make the callback part of R&C1
-game semantics. Phase 11.3 refreshes the semantic live-animation selection on
-every coherent callback; only stderr diagnostics are throttled. The callback
-exists solely to observe live guest state until the native application loop
-takes over later phases. Phase 11.2 keeps the pool bridge read-only: it never
-fabricates RDRAM pool globals, transforms, or camera state. After the proved
-platform/transport prerequisites above were lifted to their native boundaries,
-Retail itself reaches `sub_001E9B10`, publishes `0x15FF18` and `0x15FF20`, and
-the decoder reports `[OpenRatchet:live:moby] ... status=ok` with
-`unaccounted=0`.
+Through Step 11.5, PS2Runtime's host-presentation callback is only the coherent
+host/guest handoff clock while the fallback runtime owns the executable loop.
+It never becomes part of R&C1 game semantics: live pool/animation/transform/
+camera state is decoded from Retail RDRAM, and only diagnostics are throttled.
+Phase 11.2 keeps the pool bridge read-only and never fabricates RDRAM pool
+globals, transforms, or camera state. After the proved platform/transport
+prerequisites above were lifted to their native boundaries, Retail itself reaches
+`sub_001E9B10`, publishes `0x15FF18` and `0x15FF20`, and the decoder reports
+`[OpenRatchet:live:moby] ... status=ok` with `unaccounted=0`.
+
+Step 11.6 deliberately reuses that same callback as a *host presentation
+ownership boundary*, not as a game-semantic dependency. PS2Runtime may still run
+its internal GS compatibility work for fallback execution, but its queued final
+frame is flushed before the OpenRatchet callback draws and is then cleared away.
+The visible window frame from that point is OpenRatchet-owned. The callback may
+therefore host the native renderer while PS2Runtime still owns the temporary
+window/event loop; moving the application loop itself remains a later ownership
+cleanup and is not required to reintroduce GS presentation.
 
 Completed Phase 11.3 adds a separate runtime-agnostic animation contract above that pool.
 `game::inspectRac1LiveRatchetAnimation` requires exactly one traversed
@@ -467,18 +473,38 @@ construction state as `orientation-not-materialized`. That sampled state is not
 promoted into a startup blocker and is never replaced with an invented identity
 camera/FOV.
 
-Step 11.6 is the renderer-ownership boundary. `openratchet.exe` currently still
-presents the PS2Runtime GS/framebuffer compatibility output; the observed
-horizontal-line/fragmented image comes from that fallback presentation path, not
-from the already validated Phase-6..10 native renderer. Step 11.6 must therefore
-supersede final presentation with the existing native renderer rather than
-improve GS emulation. The old GS path may remain internally while still needed
-by fallback execution, but it must cease to own the final window image. Static
-scene ownership can move first; live Ratchet/Moby animation, transforms and
-camera state are consumed only when their proved materialization contracts allow
-it. Explicit `endpoints-not-materialized`, `basis-not-materialized` and
-`orientation-not-materialized` states must never be converted into guessed host
-values merely to produce a prettier frame.
+Step 11.6 is the renderer-ownership boundary. Step 11.6A moves final
+presentation to OpenRatchet at the existing post-GS/pre-`EndDrawing` callback:
+the compatibility draw is flushed first, then cleared, so a delayed GS batch
+cannot regain visible ownership after native rendering starts. The old GS path
+may remain internally while still needed by fallback execution, but it no longer
+defines the intended final window image.
+
+There is still exactly one native renderer path. The Phase-10 viewer and runtime
+share `render/native_mesh_renderer.*`; the runtime feeds that path authoritative
+native tfrag/tie/shrub data in untouched Retail world coordinates. Scene
+activation is tied only to proved Retail resource identity: currently exactly a
+successful full `wads2[69]` (`0x38F6`, `0x834` -> `0x01654000`) transfer maps
+to native Level 0. Neighboring WADs, partial ranges and different destinations
+remain unmapped. Camera conversion likewise
+uses the already materialized Step-11.5 clip columns directly as an OpenGL/rlgl
+column-major projection matrix. No host `Camera3D`, FOV, target/up, handedness or
+axis convention is reconstructed.
+
+Static scene ownership can therefore move before all dynamic state is available.
+Live Ratchet/Moby animation and transforms are consumed only when their proved
+materialization and identity contracts allow it; sky rendering waits for its
+Retail runtime transform. Explicit `endpoints-not-materialized`,
+`basis-not-materialized` and `orientation-not-materialized` states remain
+`deferred` and must never be converted into guessed host values merely to produce
+a prettier frame. Renderer accounting keeps mapped, materialized, rendered,
+deferred and unaccounted counts explicit. Step 11.6A is Windows-validated:
+Release links, 22/22 CTests pass, the Phase-10 viewer is regression-free,
+`third_party/PS2Recomp` remains clean, runtime replacements stay 21/21, and the
+20-second runtime proves Level 0 mapped/materialized with `unaccounted=0`. The
+sampled camera is still the authentic `orientation-not-materialized` state, so
+the native-owned user-visible frame is intentionally black with
+`rendered=0 deferred=1` until Retail materializes the clip transform.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

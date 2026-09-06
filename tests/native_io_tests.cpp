@@ -49,6 +49,29 @@ const ratchet::runtime::NativeReplacement* findReplacement(
     return nullptr;
 }
 
+struct ObservedIndexedRead {
+    std::size_t count = 0u;
+    ratchet::platform::NativeAssetKind kind = ratchet::platform::NativeAssetKind::Wad;
+    std::uint32_t index = 0u;
+    std::uint32_t sourceSector = 0u;
+    std::uint32_t sectorCount = 0u;
+    std::uint32_t destination = 0u;
+};
+
+void observeIndexedRead(void* userData,
+                        const ratchet::platform::NativeAssetLocation& asset,
+                        std::uint32_t sourceSector,
+                        std::uint32_t sectorCount,
+                        std::uint32_t destination) {
+    auto& observed = *static_cast<ObservedIndexedRead*>(userData);
+    ++observed.count;
+    observed.kind = asset.kind;
+    observed.index = asset.index;
+    observed.sourceSector = sourceSector;
+    observed.sectorCount = sectorCount;
+    observed.destination = destination;
+}
+
 } // namespace
 
 int main() {
@@ -93,7 +116,9 @@ int main() {
     NativeVfs vfs;
     test.expect(vfs.initialize(root / "extracted", toc),
                 "VFS fixture initializes");
-    ratchet::game::bindNativeGameServices(NativeGameServices{&vfs});
+    ObservedIndexedRead observedRead;
+    ratchet::game::bindNativeGameServices(
+        NativeGameServices{&vfs, observeIndexedRead, &observedRead});
 
     NativeReplacementRegistry registry;
     ratchet::game::declareNativeIoReplacements(registry);
@@ -144,6 +169,13 @@ int main() {
         }
         test.expect(managerUnchanged,
                     "native game-sector start does not synthesize 989snd transport state");
+        test.expect(observedRead.count == 1u &&
+                        observedRead.kind == ratchet::platform::NativeAssetKind::Wad &&
+                        observedRead.index == 0u &&
+                        observedRead.sourceSector == 1506u &&
+                        observedRead.sectorCount == 9u &&
+                        observedRead.destination == kDestination,
+                    "exact indexed game-sector read publishes semantic asset identity");
     }
 
     if (wrapper != nullptr && wrapper->function != nullptr) {
@@ -171,6 +203,21 @@ int main() {
         }
         test.expect(managerUnchanged,
                     "native game-sector HLE does not synthesize 989snd transport state");
+        test.expect(observedRead.count == 2u,
+                    "both exact game-sector boundaries publish indexed asset identity");
+
+        R5900Context partial;
+        SET_GPR_U32(&partial, 4, kDestination);
+        SET_GPR_U32(&partial, 5, 1506u);
+        SET_GPR_U32(&partial, 6, 1u);
+        SET_GPR_U32(&partial, 31, 0x00f00dbau);
+        wrapper->function(rdram.data(), &partial, nullptr);
+
+        test.expect(getRegU32(&partial, 2) == NativeVfs::kSectorBytes &&
+                        partial.pc == 0x00f00dbau,
+                    "successful partial indexed read still completes natively");
+        test.expect(observedRead.count == 2u,
+                    "successful partial reads cannot publish complete asset identity");
 
         std::fill(rdram.begin() + kDestination,
                   rdram.begin() + kDestination + NativeVfs::kSectorBytes,
@@ -188,6 +235,8 @@ int main() {
         test.expect(rdram[kDestination] == 0x7eu &&
                         rdram[kDestination + NativeVfs::kSectorBytes - 1u] == 0x7eu,
                     "unresolved native game-sector load cannot fabricate or partially write data");
+        test.expect(observedRead.count == 2u,
+                    "unresolved reads cannot publish a fabricated asset identity");
     }
 
     ratchet::game::unbindNativeGameServices();

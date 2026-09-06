@@ -124,6 +124,16 @@ void nativeGameSectorReadImpl(std::uint8_t* rdram,
     const std::uint32_t sectorCount = GPR_U32(ctx, 6);
 
     const NativeGameServices& services = nativeGameServices();
+    const platform::NativeAssetLocation* exactIndexedAsset = nullptr;
+    if (services.vfs != nullptr && services.vfs->ready()) {
+        const platform::NativeAssetLocation* candidate =
+            services.vfs->findAssetContainingSector(sourceSector);
+        if (candidate != nullptr && sourceSector == candidate->startSector &&
+            sectorCount == candidate->sectorCount) {
+            exactIndexedAsset = candidate;
+        }
+    }
+
     if (services.vfs != nullptr && services.vfs->ready() &&
         tryNativeIndexedRead(rdram,
                              ctx,
@@ -131,6 +141,13 @@ void nativeGameSectorReadImpl(std::uint8_t* rdram,
                              sourceSector,
                              sectorCount,
                              destination)) {
+        if (exactIndexedAsset != nullptr && services.indexedAssetReadObserver != nullptr) {
+            services.indexedAssetReadObserver(services.indexedAssetReadUserData,
+                                              *exactIndexedAsset,
+                                              sourceSector,
+                                              sectorCount,
+                                              destination);
+        }
         ++successDiagnostics;
         if (successDiagnostics <= 12u) {
             std::cerr << "[OpenRatchet:VFS] " << component

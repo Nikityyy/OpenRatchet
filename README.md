@@ -227,15 +227,33 @@ run reports the authentic all-zero construction state
 `status=orientation-not-materialized`. This is preserved as pre-materialization
 evidence, not replaced by a fake identity camera/FOV.
 
-Step 11.6 is now next. The visibly fragmented/horizontal-line output of
-`openratchet.exe` is still the old PS2Runtime GS/framebuffer presentation path;
-it is not the Phase-10 native level renderer and is not a reason to deepen GS
-emulation. Step 11.6 transfers final window/frame ownership to the already
-validated native renderer and then consumes the proved live Moby/animation/
-transform/camera bridges as they materialize. Construction states such as
-`endpoints-not-materialized`, `basis-not-materialized` and
-`orientation-not-materialized` remain explicit and must not be replaced by
-invented host values.
+Step 11.6 is now in progress. Step 11.6A is complete and establishes the narrow final-frame
+ownership cut without deepening GS emulation: the existing PS2Runtime host draw
+callback occurs after the compatibility framebuffer draw has been queued and
+before `EndDrawing`. OpenRatchet flushes that old batch first, clears it, and
+then owns the visible frame. `third_party/PS2Recomp` is not modified. The common
+Phase-10 texture/mesh upload and draw helpers now live in
+`src/render/native_mesh_renderer.*` and are used by both the standalone viewer
+and `openratchet.exe`, avoiding a second renderer implementation.
+
+Runtime scene selection is tied to proved Retail identity rather than a hardcoded
+demo level. Successful complete native indexed reads can publish their exact
+asset; currently only the independently proved Level-0 initialization request
+`wads2[69]` (`0x38F6`, `0x834` sectors -> `0x01654000`) maps to native Level 0.
+Partial, neighboring or differently targeted reads stay unmapped. Once mapped,
+the runtime reuses the authoritative
+native tfrag/tie/shrub decoders in raw Retail coordinates. If the Step-11.5 camera
+clip transform is materialized, its four columns are loaded directly in the
+proved `clipX*x + clipY*y + clipZ*z + clipW*w` order. If not, rendering remains
+explicitly deferred: no Raylib demo camera, FOV, identity transform, pose-bank
+substitution or axis guess is injected. Sky and live Moby/Ratchet drawing remain
+separate 11.6 work until their runtime renderer-facing identity/transform
+contracts are proved. Step 11.6A is Windows-validated: Release links, **22/22**
+CTests pass, the Phase-10 viewer remains regression-free, PS2Recomp stays clean,
+and the 20-second runtime maps/materializes native Level 0 with `unaccounted=0`.
+The sampled Retail camera remains `orientation-not-materialized`, therefore the
+native-owned frame correctly stays black with `rendered=0 deferred=1`; no fake
+viewer camera is introduced merely to force visible output.
 
 
 Phase 11 has now promoted the controller and save bootstrap above SIF instead

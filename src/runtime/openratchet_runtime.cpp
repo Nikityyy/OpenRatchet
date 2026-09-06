@@ -9,8 +9,11 @@
 #include "guest_overrides.h"
 #include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
+#include "render/rac1_render_bridge.h"
+#include "render/rac1_runtime_renderer.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -23,6 +26,9 @@
 #endif
 
 #include "ps2_runtime.h"
+
+#include <raylib.h>
+#include <rlgl.h>
 
 namespace ratchet {
 namespace {
@@ -237,12 +243,36 @@ void logLiveCamera(const game::Rac1LiveCameraResult& cameraResult) {
               << '\n';
 }
 
+struct NativeRenderAccountingSignature {
+    int requestedLevel = -1;
+    bool sceneMaterialized = false;
+    bool sceneRendered = false;
+    std::size_t liveMobyRecords = 0u;
+    std::size_t mobyPoolUnaccounted = 0u;
+    game::Rac1LiveMobyPoolStatus mobyPoolStatus =
+        game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
+    game::Rac1LiveCameraStatus cameraStatus =
+        game::Rac1LiveCameraStatus::GuestMemoryTooSmall;
+    game::Rac1LiveRatchetAnimationStatus animationStatus =
+        game::Rac1LiveRatchetAnimationStatus::PoolNotReady;
+    game::Rac1LiveRatchetTransformStatus transformStatus =
+        game::Rac1LiveRatchetTransformStatus::PoolNotReady;
+    render::Rac1RuntimeRendererStatus rendererStatus =
+        render::Rac1RuntimeRendererStatus::Uninitialized;
+
+    bool operator==(const NativeRenderAccountingSignature&) const = default;
+};
+
 } // namespace
 
 struct OpenRatchetRuntime::Impl {
     platform::NativeVfs vfs;
     PS2Runtime eeFallback;
     runtime::NativeReplacementRegistry replacements;
+    render::Rac1RuntimeRenderer nativeRenderer;
+    std::atomic<int> requestedNativeLevel{-1};
+    std::optional<int> rendererAttemptedLevel;
+    std::optional<NativeRenderAccountingSignature> lastRenderAccounting;
     std::optional<LiveMobySnapshotSignature> lastLiveMobySignature;
     game::Rac1LiveRatchetAnimationResult liveRatchetAnimation;
     std::optional<game::Rac1LiveRatchetAnimationStatus> lastLoggedAnimationStatus;
@@ -251,7 +281,37 @@ struct OpenRatchetRuntime::Impl {
     game::Rac1LiveCameraResult liveCamera;
     std::optional<game::Rac1LiveCameraStatus> lastLoggedCameraStatus;
     std::uint64_t liveMobyPresentationCount = 0u;
+    std::size_t liveMobyRecordCount = 0u;
+    std::size_t liveMobyPoolUnaccounted = 0u;
+    game::Rac1LiveMobyPoolStatus liveMobyPoolStatus =
+        game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
     bool initialized = false;
+
+    static void observeIndexedAssetRead(
+        void* userData,
+        const platform::NativeAssetLocation& asset,
+        std::uint32_t sourceSector,
+        std::uint32_t sectorCount,
+        std::uint32_t destination) {
+        auto& self = *static_cast<Impl*>(userData);
+        const auto mapped = render::nativeLevelForRetailAssetRead(
+            asset, sourceSector, sectorCount, destination);
+        if (!mapped) return;
+
+        const int next = static_cast<int>(*mapped);
+        const int previous = self.requestedNativeLevel.exchange(
+            next, std::memory_order_release);
+        if (previous != next) {
+            std::cerr << "[OpenRatchet:render:level-map]"
+                      << " asset=" << platform::nativeAssetName(asset)
+                      << " source=0x" << std::hex << sourceSector
+                      << " sectors=0x" << sectorCount
+                      << " destination=0x" << destination << std::dec
+                      << " nativeLevel=" << next
+                      << " mapping=retail-proved"
+                      << " status=ok\n";
+        }
+    }
 
     void inspectLiveMobyState(PS2Runtime& runtime) {
         // Steps 11.3-11.5 consume live animation, world-transform and camera
@@ -293,6 +353,17 @@ struct OpenRatchetRuntime::Impl {
         const bool cameraStatusChanged =
             !lastLoggedCameraStatus || *lastLoggedCameraStatus != camera.status;
         liveCamera = camera;
+        liveMobyRecordCount = snapshot.records.size();
+        liveMobyPoolStatus = snapshot.status;
+        liveMobyPoolUnaccounted = 0u;
+        if (snapshot.status == game::Rac1LiveMobyPoolStatus::Ok) {
+            const std::size_t accounted =
+                snapshot.traversedMobyCount + snapshot.skippedNegativeStateCount;
+            liveMobyPoolUnaccounted =
+                snapshot.slotsBeforeTerminator >= accounted
+                    ? snapshot.slotsBeforeTerminator - accounted
+                    : accounted - snapshot.slotsBeforeTerminator;
+        }
 
         if (diagnosticTick) {
             const LiveMobySnapshotSignature signature = liveMobySignature(snapshot);
@@ -314,6 +385,163 @@ struct OpenRatchetRuntime::Impl {
             lastLoggedCameraStatus = camera.status;
             logLiveCamera(camera);
         }
+    }
+
+    void initializeNativePresentation() {
+        std::cerr << "[OpenRatchet:render:ownership]"
+                  << " owner=native"
+                  << " boundary=ps2runtime-post-gs-pre-enddrawing"
+                  << " gsFinalPresentation=0"
+                  << " status=ok\n";
+    }
+
+    void shutdownNativePresentation() {
+        nativeRenderer.unload();
+        rendererAttemptedLevel.reset();
+    }
+
+    void ensureMappedLevelLoaded() {
+        const int requested = requestedNativeLevel.load(std::memory_order_acquire);
+        if (requested < 0 || (rendererAttemptedLevel && *rendererAttemptedLevel == requested)) {
+            return;
+        }
+
+        nativeRenderer.unload();
+        rendererAttemptedLevel = requested;
+        const auto* level = vfs.findLevel(static_cast<std::uint32_t>(requested));
+        if (level == nullptr) {
+            std::cerr << "[OpenRatchet:render:scene-load]"
+                      << " nativeLevel=" << requested
+                      << " mapped=1 materialized=0 rendered=0 deferred=1 unaccounted=0"
+                      << " status=level-not-indexed\n";
+            return;
+        }
+
+        const bool loaded = nativeRenderer.loadLevel(*level);
+        const auto& summary = nativeRenderer.summary();
+        std::cerr << "[OpenRatchet:render:scene-load]"
+                  << " nativeLevel=" << requested
+                  << " mapped=1"
+                  << " materialized=" << (loaded ? 1 : 0)
+                  << " terrainBatches=" << summary.terrainBatches
+                  << " staticBatches=" << summary.staticBatches
+                  << " terrainTriangles=" << summary.terrainTriangles
+                  << " tieTriangles=" << summary.tieTriangles
+                  << " shrubTriangles=" << summary.shrubTriangles
+                  << " rendered=0"
+                  << " deferred=1"
+                  << " unaccounted=0"
+                  << " sky=deferred-retail-transform-unbridged"
+                  << " mobys=deferred-live-identity-unbridged"
+                  << " status="
+                  << render::rac1RuntimeRendererStatusName(nativeRenderer.status())
+                  << '\n';
+    }
+
+    void drawStaticWorldWithRetailCamera() {
+        if (!nativeRenderer.ready() || !liveCamera.ok()) return;
+
+        // FUN_0022BF94 uses vclipw.xyz against +/-w, matching OpenGL clip
+        // semantics exactly. Feed its four proved qword columns directly to
+        // rlgl; no Camera3D, FOV, target/up or axis conversion is reconstructed.
+        const auto clip = render::rac1RetailClipMatrixColumnMajor(liveCamera.camera);
+        rlDrawRenderBatchActive();
+        rlMatrixMode(RL_PROJECTION);
+        rlPushMatrix();
+        rlLoadIdentity();
+        rlMultMatrixf(clip.data());
+        rlMatrixMode(RL_MODELVIEW);
+        rlPushMatrix();
+        rlLoadIdentity();
+        rlEnableDepthTest();
+
+        nativeRenderer.drawStaticWorld();
+        rlDrawRenderBatchActive();
+
+        rlDisableDepthTest();
+        rlPopMatrix();
+        rlMatrixMode(RL_PROJECTION);
+        rlPopMatrix();
+        rlMatrixMode(RL_MODELVIEW);
+    }
+
+    void logNativeRenderAccounting(bool sceneRendered) {
+        const int requested = requestedNativeLevel.load(std::memory_order_acquire);
+        const bool mapped = requested >= 0;
+        const bool materialized = nativeRenderer.ready();
+        const std::size_t mappedCount = mapped ? 1u : 0u;
+        const std::size_t renderedCount = sceneRendered ? 1u : 0u;
+        const bool sceneAccountingOrdered = renderedCount <= mappedCount;
+        const std::size_t deferredCount =
+            sceneAccountingOrdered ? mappedCount - renderedCount : 0u;
+        const std::size_t sceneUnaccounted =
+            sceneAccountingOrdered ? 0u : renderedCount - mappedCount;
+        const std::size_t liveMobyMapped = 0u;
+        const std::size_t liveMobyRendered = 0u;
+        const std::size_t liveMobyDeferred = liveMobyRecordCount;
+        const std::size_t liveMobyUnaccounted =
+            liveMobyRecordCount - liveMobyDeferred;
+        const bool accountingOk = sceneUnaccounted == 0u &&
+                                  liveMobyUnaccounted == 0u &&
+                                  liveMobyPoolUnaccounted == 0u;
+
+        NativeRenderAccountingSignature signature{
+            requested,
+            materialized,
+            sceneRendered,
+            liveMobyRecordCount,
+            liveMobyPoolUnaccounted,
+            liveMobyPoolStatus,
+            liveCamera.status,
+            liveRatchetAnimation.status,
+            liveRatchetTransform.status,
+            nativeRenderer.status(),
+        };
+        const bool periodic =
+            liveMobyPresentationCount <= 1u || (liveMobyPresentationCount % 60u) == 0u;
+        if (!periodic && lastRenderAccounting && *lastRenderAccounting == signature) return;
+        lastRenderAccounting = signature;
+
+        std::cerr << "[OpenRatchet:render:frame]"
+                  << " owner=native"
+                  << " nativeLevel=";
+        if (mapped) std::cerr << requested;
+        else std::cerr << "unmapped";
+        std::cerr << " mapped=" << mappedCount
+                  << " materialized=" << (materialized ? 1 : 0)
+                  << " rendered=" << renderedCount
+                  << " deferred=" << deferredCount
+                  << " unaccounted=" << sceneUnaccounted
+                  << " renderer="
+                  << render::rac1RuntimeRendererStatusName(nativeRenderer.status())
+                  << " camera=" << game::rac1LiveCameraStatusName(liveCamera.status)
+                  << " sky=deferred"
+                  << " mobyPool=" << game::rac1LiveMobyPoolStatusName(liveMobyPoolStatus)
+                  << " liveMobyMapped=" << liveMobyMapped
+                  << " liveMobyRendered=" << liveMobyRendered
+                  << " liveMobyDeferred=" << liveMobyDeferred
+                  << " liveMobyUnaccounted=" << liveMobyUnaccounted
+                  << " poolUnaccounted=" << liveMobyPoolUnaccounted
+                  << " animation="
+                  << game::rac1LiveRatchetAnimationStatusName(liveRatchetAnimation.status)
+                  << " transform="
+                  << game::rac1LiveRatchetTransformStatusName(liveRatchetTransform.status)
+                  << " status=" << (accountingOk ? "ok" : "accounting-error") << '\n';
+    }
+
+    void presentNativeFrame(PS2Runtime& runtime) {
+        inspectLiveMobyState(runtime);
+
+        // PS2Runtime queued its compatibility DrawTexturePro before this callback.
+        // Flush it first, then clear it away so no delayed GS batch can regain
+        // final-frame ownership after OpenRatchet starts drawing.
+        rlDrawRenderBatchActive();
+        ClearBackground(BLACK);
+
+        ensureMappedLevelLoaded();
+        const bool sceneRendered = nativeRenderer.ready() && liveCamera.ok();
+        if (sceneRendered) drawStaticWorldWithRetailCamera();
+        logNativeRenderAccounting(sceneRendered);
     }
 };
 
@@ -339,7 +567,11 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
         std::cerr << "[OpenRatchet:native] native VFS initialization failed\n";
         return false;
     }
-    game::bindNativeGameServices({&impl_->vfs});
+    game::bindNativeGameServices({
+        &impl_->vfs,
+        &Impl::observeIndexedAssetRead,
+        impl_.get(),
+    });
 
     game::declareNativeReplacements(impl_->replacements);
 
@@ -350,17 +582,20 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
                  impl_->replacements,
                  runtime::NativeReplacementStage::Bootstrap);
 
-    // PS2Runtime currently exposes its host presentation loop through this
-    // callback boundary. OpenRatchet uses it only as a temporary read-only
-    // sampling clock while PS2Runtime remains the EE fallback executor. The
-    // no-op init/shutdown callbacks are required by PS2Runtime to enable draw
-    // callbacks; no debug UI is created here.
+    // PS2Runtime still owns the fallback EE executor and creates the host
+    // window, but its post-GS/pre-EndDrawing callback is now the deliberate
+    // final presentation ownership cut. OpenRatchet flushes and supersedes the
+    // compatibility framebuffer there, using only proved native scene/live state.
     impl_->eeFallback.setDebugUiCallbacks(
-        [](PS2Runtime&, void*) {},
-        [](PS2Runtime& runtime, void* userData) {
-            static_cast<Impl*>(userData)->inspectLiveMobyState(runtime);
+        [](PS2Runtime&, void* userData) {
+            static_cast<Impl*>(userData)->initializeNativePresentation();
         },
-        [](PS2Runtime&, void*) {},
+        [](PS2Runtime& runtime, void* userData) {
+            static_cast<Impl*>(userData)->presentNativeFrame(runtime);
+        },
+        [](PS2Runtime&, void* userData) {
+            static_cast<Impl*>(userData)->shutdownNativePresentation();
+        },
         impl_.get());
 
     if (!impl_->eeFallback.initialize("OpenRatchet")) {

@@ -87,6 +87,9 @@ add_executable(openratchet
     src/game/rac1_live_animation.cpp
     src/game/rac1_live_transform.cpp
     src/game/rac1_live_camera.cpp
+    src/render/native_mesh_renderer.cpp
+    src/render/rac1_render_bridge.cpp
+    src/render/rac1_runtime_renderer.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
     src/sif_startup_responses.cpp
@@ -119,7 +122,8 @@ add_executable(native_level_viewer
     src/assets/rac1_moby.cpp
     src/assets/rac1_moby_animation.cpp
     src/assets/wad_decompressor.cpp
-    src/platform/native_vfs.cpp)
+    src/platform/native_vfs.cpp
+    src/render/native_mesh_renderer.cpp)
 target_include_directories(native_level_viewer PRIVATE src)
 target_link_libraries(native_level_viewer PRIVATE raylib)
 
@@ -155,6 +159,13 @@ if(BUILD_TESTING)
         src/game/rac1_live_camera.cpp)
     target_include_directories(rac1_live_camera_tests PRIVATE src)
     add_test(NAME rac1_live_camera COMMAND rac1_live_camera_tests)
+
+    add_executable(rac1_render_bridge_tests
+        tests/rac1_render_bridge_tests.cpp
+        src/render/rac1_render_bridge.cpp
+        src/game/rac1_live_camera.cpp)
+    target_include_directories(rac1_render_bridge_tests PRIVATE src)
+    add_test(NAME rac1_render_bridge COMMAND rac1_render_bridge_tests)
 
     add_executable(native_platform_bootstrap_tests
         tests/native_platform_bootstrap_tests.cpp
