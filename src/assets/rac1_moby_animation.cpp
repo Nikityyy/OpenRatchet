@@ -1407,6 +1407,7 @@ Rac1RatchetAnimationBankResult inspectRac1RatchetAnimationBank(
 namespace {
 
 struct PoseFrameView {
+    std::span<const std::uint8_t> bytes{};
     std::size_t quaternionBase = 0u;
     std::size_t stream1Base = 0u;
     std::size_t stream2Base = 0u;
@@ -1418,37 +1419,26 @@ struct PoseFrameView {
     std::size_t stream1ActiveCount = 0u;
 };
 
-bool resolvePoseFrameView(
-    std::span<const std::uint8_t> core,
+bool resolvePosePacketView(
+    std::span<const std::uint8_t> bytes,
+    std::size_t packetBase,
+    std::size_t packetLimit,
     const Rac1MobyAnimationClass& cls,
-    const Rac1MobySequenceLayout& layout,
-    std::uint8_t frameIndex,
     bool exposePrimaryDiagnostics,
     PoseFrameView& view,
     Rac1MobyPoseResult& result) {
-    if (frameIndex >= layout.frameOffsets.size()) {
-        result.status = Rac1MobyPoseStatus::FrameIndexOutOfRange;
-        return false;
-    }
-
-    const std::size_t frameBase = layout.frameBaseOffset != 0u
-        ? static_cast<std::size_t>(layout.frameBaseOffset)
-        : static_cast<std::size_t>(cls.classOffset);
-    const std::size_t dataEnd = layout.dataEndOffset != 0u
-        ? static_cast<std::size_t>(layout.dataEndOffset)
-        : static_cast<std::size_t>(cls.classEndOffset);
-    std::size_t frameAbsolute = 0u;
-    if (!checkedAdd(frameBase, layout.frameOffsets[frameIndex], frameAbsolute) ||
-        !fits(frameAbsolute, 0x10u, core.size()) || frameAbsolute >= dataEnd) {
+    if (packetLimit > bytes.size() || packetBase >= packetLimit ||
+        !fits(packetBase, 0x10u, bytes.size()) || packetBase + 0x10u > packetLimit) {
         result.status = Rac1MobyPoseStatus::FrameOutOfRange;
         return false;
     }
 
-    view.payloadQwordCount = readU16(core, frameAbsolute + 0x06u);
-    view.stream1Offset = readU16(core, frameAbsolute + 0x08u);
-    view.stream1Count = readU16(core, frameAbsolute + 0x0au);
-    view.stream2Offset = readU16(core, frameAbsolute + 0x0cu);
-    view.stream2Count = readU16(core, frameAbsolute + 0x0eu);
+    view.bytes = bytes;
+    view.payloadQwordCount = readU16(bytes, packetBase + 0x06u);
+    view.stream1Offset = readU16(bytes, packetBase + 0x08u);
+    view.stream1Count = readU16(bytes, packetBase + 0x0au);
+    view.stream2Offset = readU16(bytes, packetBase + 0x0cu);
+    view.stream2Count = readU16(bytes, packetBase + 0x0eu);
 
     if (exposePrimaryDiagnostics) {
         result.pose.payloadQwordCount = view.payloadQwordCount;
@@ -1462,20 +1452,10 @@ bool resolvePoseFrameView(
     std::size_t frameBytes = 0u;
     if (!checkedMul(view.payloadQwordCount, 0x10u, payloadBytes) ||
         !checkedAdd(0x10u, payloadBytes, frameBytes) ||
-        !fits(frameAbsolute, frameBytes, core.size()) ||
-        frameAbsolute + frameBytes > dataEnd) {
+        !fits(packetBase, frameBytes, bytes.size()) ||
+        packetBase + frameBytes > packetLimit) {
         result.status = Rac1MobyPoseStatus::FrameOutOfRange;
         return false;
-    }
-    if (static_cast<std::size_t>(frameIndex) + 1u < layout.frameOffsets.size()) {
-        std::size_t nextFrameAbsolute = 0u;
-        if (!checkedAdd(frameBase,
-                        layout.frameOffsets[static_cast<std::size_t>(frameIndex) + 1u],
-                        nextFrameAbsolute) ||
-            frameAbsolute + frameBytes > nextFrameAbsolute) {
-            result.status = Rac1MobyPoseStatus::FrameOutOfRange;
-            return false;
-        }
     }
 
     std::size_t denseBytes = 0u;
@@ -1506,7 +1486,7 @@ bool resolvePoseFrameView(
         return false;
     }
 
-    view.quaternionBase = frameAbsolute + 0x10u;
+    view.quaternionBase = packetBase + 0x10u;
     view.stream1Base = view.quaternionBase + view.stream1Offset;
     view.stream2Base = view.quaternionBase + view.stream2Offset;
 
@@ -1516,9 +1496,9 @@ bool resolvePoseFrameView(
     // quaternion reconstruction path that remains the next oracle task.
     for (std::size_t entryIndex = 0u; entryIndex < view.stream1Count; ++entryIndex) {
         const std::size_t entry = view.stream1Base + entryIndex * 8u;
-        if (readI32(core, entry) < 0) {
+        if (readI32(bytes, entry) < 0) {
             ++view.stream1ActiveCount;
-            const std::uint8_t jointIndex = core[entry + 6u];
+            const std::uint8_t jointIndex = bytes[entry + 6u];
             if (jointIndex >= cls.jointCount) {
                 result.status = Rac1MobyPoseStatus::InvalidSparseJointIndex;
                 result.failureSparseEntryIndex = static_cast<std::int32_t>(entryIndex);
@@ -1532,7 +1512,7 @@ bool resolvePoseFrameView(
     // signed-s16 xyz to that joint's local translation record.
     for (std::size_t entryIndex = 0u; entryIndex < view.stream2Count; ++entryIndex) {
         const std::size_t entry = view.stream2Base + entryIndex * 8u;
-        const std::uint8_t jointIndex = core[entry + 6u];
+        const std::uint8_t jointIndex = bytes[entry + 6u];
         if (jointIndex >= cls.jointCount) {
             result.status = Rac1MobyPoseStatus::InvalidSparseJointIndex;
             result.failureSparseEntryIndex = static_cast<std::int32_t>(entryIndex);
@@ -1553,8 +1533,48 @@ bool resolvePoseFrameView(
     return true;
 }
 
-std::vector<std::array<float, 3>> localTranslationsForFrame(
+bool resolvePoseFrameView(
     std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    const Rac1MobySequenceLayout& layout,
+    std::uint8_t frameIndex,
+    bool exposePrimaryDiagnostics,
+    PoseFrameView& view,
+    Rac1MobyPoseResult& result) {
+    if (frameIndex >= layout.frameOffsets.size()) {
+        result.status = Rac1MobyPoseStatus::FrameIndexOutOfRange;
+        return false;
+    }
+
+    const std::size_t frameBase = layout.frameBaseOffset != 0u
+        ? static_cast<std::size_t>(layout.frameBaseOffset)
+        : static_cast<std::size_t>(cls.classOffset);
+    const std::size_t dataEnd = layout.dataEndOffset != 0u
+        ? static_cast<std::size_t>(layout.dataEndOffset)
+        : static_cast<std::size_t>(cls.classEndOffset);
+    std::size_t frameAbsolute = 0u;
+    if (!checkedAdd(frameBase, layout.frameOffsets[frameIndex], frameAbsolute) ||
+        dataEnd > core.size() || frameAbsolute >= dataEnd) {
+        result.status = Rac1MobyPoseStatus::FrameOutOfRange;
+        return false;
+    }
+
+    std::size_t packetLimit = dataEnd;
+    if (static_cast<std::size_t>(frameIndex) + 1u < layout.frameOffsets.size()) {
+        if (!checkedAdd(frameBase,
+                        layout.frameOffsets[static_cast<std::size_t>(frameIndex) + 1u],
+                        packetLimit) ||
+            packetLimit > dataEnd || packetLimit <= frameAbsolute) {
+            result.status = Rac1MobyPoseStatus::FrameOutOfRange;
+            return false;
+        }
+    }
+
+    return resolvePosePacketView(
+        core, frameAbsolute, packetLimit, cls, exposePrimaryDiagnostics, view, result);
+}
+
+std::vector<std::array<float, 3>> localTranslationsForFrame(
     const Rac1MobyAnimationClass& cls,
     const PoseFrameView& view) {
     std::vector<std::array<float, 3>> translations;
@@ -1569,55 +1589,37 @@ std::vector<std::array<float, 3>> localTranslationsForFrame(
     }
     for (std::size_t entryIndex = 0u; entryIndex < view.stream2Count; ++entryIndex) {
         const std::size_t entry = view.stream2Base + entryIndex * 8u;
-        const std::size_t jointIndex = core[entry + 6u];
+        const std::size_t jointIndex = view.bytes[entry + 6u];
         translations[jointIndex] = {
-            static_cast<float>(readI16(core, entry + 0u)),
-            static_cast<float>(readI16(core, entry + 2u)),
-            static_cast<float>(readI16(core, entry + 4u)),
+            static_cast<float>(readI16(view.bytes, entry + 0u)),
+            static_cast<float>(readI16(view.bytes, entry + 2u)),
+            static_cast<float>(readI16(view.bytes, entry + 4u)),
         };
     }
     return translations;
 }
 
-Rac1MobyPoseResult decodePoseInterpolatedImpl(
-    std::span<const std::uint8_t> core,
+const Rac1MobySequenceLayout* findPoseSequenceLayout(
     const Rac1MobyAnimationClass& cls,
-    std::uint8_t sequenceIndex,
-    std::uint8_t frameIndex,
-    std::uint8_t nextFrameIndex,
-    float alpha) {
-    Rac1MobyPoseResult result{};
-    result.pose.oClass = cls.oClass;
-    result.pose.sequenceIndex = sequenceIndex;
-    result.pose.frameIndex = frameIndex;
-    result.pose.nextFrameIndex = nextFrameIndex;
-    result.pose.interpolationAlpha = alpha;
-    result.pose.interpolated = frameIndex != nextFrameIndex && alpha > 0.0f && alpha < 1.0f;
-    result.pose.jointCount = cls.jointCount;
-
-    if (!std::isfinite(alpha) || alpha < 0.0f || alpha > 1.0f) {
-        result.status = Rac1MobyPoseStatus::InvalidInterpolationAlpha;
-        return result;
-    }
-
+    std::uint8_t sequenceIndex) {
     const auto layoutIt = std::find_if(
         cls.sequenceLayouts.begin(), cls.sequenceLayouts.end(),
         [sequenceIndex](const Rac1MobySequenceLayout& layout) {
             return layout.sequenceIndex == sequenceIndex;
         });
-    if (layoutIt == cls.sequenceLayouts.end()) {
-        result.status = Rac1MobyPoseStatus::SequenceNotFound;
-        return result;
-    }
-    const auto& layout = *layoutIt;
+    return layoutIt == cls.sequenceLayouts.end() ? nullptr : &*layoutIt;
+}
 
-    PoseFrameView current{};
-    PoseFrameView next{};
-    if (!resolvePoseFrameView(core, cls, layout, frameIndex, true, current, result) ||
-        !resolvePoseFrameView(core, cls, layout, nextFrameIndex, false, next, result)) {
-        return result;
-    }
-
+Rac1MobyPoseResult blendResolvedPoseViews(
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t sequenceIndex,
+    std::uint8_t frameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha,
+    const PoseFrameView& current,
+    const PoseFrameView& next,
+    Rac1MobyPoseResult result) {
     if (cls.commonTransformWords.size() != cls.jointCount) {
         result.status = Rac1MobyPoseStatus::InvalidCommonTransform;
         return result;
@@ -1634,8 +1636,8 @@ Rac1MobyPoseResult decodePoseInterpolatedImpl(
         }
     }
 
-    const auto translationsA = localTranslationsForFrame(core, cls, current);
-    const auto translationsB = localTranslationsForFrame(core, cls, next);
+    const auto translationsA = localTranslationsForFrame(cls, current);
+    const auto translationsB = localTranslationsForFrame(cls, next);
 
     result.pose.jointMatrices.reserve(cls.jointCount);
     constexpr float kInv32768 = 1.0f / 32768.0f;
@@ -1647,16 +1649,16 @@ Rac1MobyPoseResult decodePoseInterpolatedImpl(
         const std::size_t qa = current.quaternionBase + joint * 8u;
         const std::size_t qb = next.quaternionBase + joint * 8u;
         std::array<float, 4> a = {
-            static_cast<float>(readI16(core, qa + 0u)) * kInv32768,
-            static_cast<float>(readI16(core, qa + 2u)) * kInv32768,
-            static_cast<float>(readI16(core, qa + 4u)) * kInv32768,
-            static_cast<float>(readI16(core, qa + 6u)) * kInv32768,
+            static_cast<float>(readI16(current.bytes, qa + 0u)) * kInv32768,
+            static_cast<float>(readI16(current.bytes, qa + 2u)) * kInv32768,
+            static_cast<float>(readI16(current.bytes, qa + 4u)) * kInv32768,
+            static_cast<float>(readI16(current.bytes, qa + 6u)) * kInv32768,
         };
         std::array<float, 4> b = {
-            static_cast<float>(readI16(core, qb + 0u)) * kInv32768,
-            static_cast<float>(readI16(core, qb + 2u)) * kInv32768,
-            static_cast<float>(readI16(core, qb + 4u)) * kInv32768,
-            static_cast<float>(readI16(core, qb + 6u)) * kInv32768,
+            static_cast<float>(readI16(next.bytes, qb + 0u)) * kInv32768,
+            static_cast<float>(readI16(next.bytes, qb + 2u)) * kInv32768,
+            static_cast<float>(readI16(next.bytes, qb + 4u)) * kInv32768,
+            static_cast<float>(readI16(next.bytes, qb + 6u)) * kInv32768,
         };
 
         const float normA2 = a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3];
@@ -1695,11 +1697,6 @@ Rac1MobyPoseResult decodePoseInterpolatedImpl(
         z *= invNorm;
         w *= invNorm;
 
-        // Retail initializes both endpoint translations from common_trans,
-        // overwrites sparse-stream-2 joints independently, then interpolates
-        // the union of changed joints at 0x210d88..0x210da8. Computing this for
-        // every joint is numerically equivalent and avoids reproducing the
-        // scratchpad linked-list optimization.
         const float tx = translationsA[joint][0] * oneMinusAlpha +
             translationsB[joint][0] * alpha;
         const float ty = translationsA[joint][1] * oneMinusAlpha +
@@ -1756,8 +1753,151 @@ Rac1MobyPoseResult decodePoseInterpolatedImpl(
         result.pose.jointMatrices.push_back(std::move(global));
     }
 
+    result.pose.sequenceIndex = sequenceIndex;
+    result.pose.frameIndex = frameIndex;
+    result.pose.nextSequenceIndex = nextSequenceIndex;
+    result.pose.nextFrameIndex = nextFrameIndex;
+    result.pose.interpolationAlpha = alpha;
+    result.pose.interpolated =
+        (sequenceIndex != nextSequenceIndex || frameIndex != nextFrameIndex) &&
+        alpha > 0.0f && alpha < 1.0f;
+    result.pose.jointCount = cls.jointCount;
     result.status = Rac1MobyPoseStatus::Ok;
     return result;
+}
+
+Rac1MobyPoseResult decodePoseInterpolatedImpl(
+    std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t sequenceIndex,
+    std::uint8_t frameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha) {
+    Rac1MobyPoseResult result{};
+    result.pose.oClass = cls.oClass;
+    result.pose.sequenceIndex = sequenceIndex;
+    result.pose.frameIndex = frameIndex;
+    result.pose.nextSequenceIndex = nextSequenceIndex;
+    result.pose.nextFrameIndex = nextFrameIndex;
+    result.pose.interpolationAlpha = alpha;
+    result.pose.interpolated =
+        (sequenceIndex != nextSequenceIndex || frameIndex != nextFrameIndex) &&
+        alpha > 0.0f && alpha < 1.0f;
+    result.pose.jointCount = cls.jointCount;
+
+    if (!std::isfinite(alpha) || alpha < 0.0f || alpha > 1.0f) {
+        result.status = Rac1MobyPoseStatus::InvalidInterpolationAlpha;
+        return result;
+    }
+
+    const Rac1MobySequenceLayout* currentLayout =
+        findPoseSequenceLayout(cls, sequenceIndex);
+    const Rac1MobySequenceLayout* nextLayout =
+        findPoseSequenceLayout(cls, nextSequenceIndex);
+    if (currentLayout == nullptr || nextLayout == nullptr) {
+        result.status = Rac1MobyPoseStatus::SequenceNotFound;
+        return result;
+    }
+
+    PoseFrameView current{};
+    PoseFrameView next{};
+    if (!resolvePoseFrameView(
+            core, cls, *currentLayout, frameIndex, true, current, result) ||
+        !resolvePoseFrameView(
+            core, cls, *nextLayout, nextFrameIndex, false, next, result)) {
+        return result;
+    }
+
+    return blendResolvedPoseViews(
+        cls, sequenceIndex, frameIndex, nextSequenceIndex, nextFrameIndex,
+        alpha, current, next, std::move(result));
+}
+
+Rac1MobyPoseResult decodePoseInterpolatedFromPacketImpl(
+    std::span<const std::uint8_t> framePacketA,
+    std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t packetSequenceIndex,
+    std::uint8_t packetFrameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha) {
+    Rac1MobyPoseResult result{};
+    result.pose.oClass = cls.oClass;
+    result.pose.sequenceIndex = packetSequenceIndex;
+    result.pose.frameIndex = packetFrameIndex;
+    result.pose.nextSequenceIndex = nextSequenceIndex;
+    result.pose.nextFrameIndex = nextFrameIndex;
+    result.pose.interpolationAlpha = alpha;
+    result.pose.interpolated =
+        alpha > 0.0f && alpha < 1.0f;
+    result.pose.jointCount = cls.jointCount;
+
+    if (!std::isfinite(alpha) || alpha < 0.0f || alpha > 1.0f) {
+        result.status = Rac1MobyPoseStatus::InvalidInterpolationAlpha;
+        return result;
+    }
+
+    const Rac1MobySequenceLayout* nextLayout =
+        findPoseSequenceLayout(cls, nextSequenceIndex);
+    if (nextLayout == nullptr) {
+        result.status = Rac1MobyPoseStatus::SequenceNotFound;
+        return result;
+    }
+
+    PoseFrameView current{};
+    PoseFrameView next{};
+    if (!resolvePosePacketView(
+            framePacketA, 0u, framePacketA.size(), cls, true, current, result) ||
+        !resolvePoseFrameView(
+            core, cls, *nextLayout, nextFrameIndex, false, next, result)) {
+        return result;
+    }
+
+    return blendResolvedPoseViews(
+        cls, packetSequenceIndex, packetFrameIndex, nextSequenceIndex,
+        nextFrameIndex, alpha, current, next, std::move(result));
+}
+
+Rac1MobyPoseResult decodePoseInterpolatedFromPacketsImpl(
+    std::span<const std::uint8_t> framePacketA,
+    std::span<const std::uint8_t> framePacketB,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t packetSequenceIndex,
+    std::uint8_t packetFrameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha) {
+    Rac1MobyPoseResult result{};
+    result.pose.oClass = cls.oClass;
+    result.pose.sequenceIndex = packetSequenceIndex;
+    result.pose.frameIndex = packetFrameIndex;
+    result.pose.nextSequenceIndex = nextSequenceIndex;
+    result.pose.nextFrameIndex = nextFrameIndex;
+    result.pose.interpolationAlpha = alpha;
+    // Packet provenance, not host buffer identity, determines the endpoints.
+    // Retail blends the two supplied packet streams whenever alpha is interior.
+    result.pose.interpolated = alpha > 0.0f && alpha < 1.0f;
+    result.pose.jointCount = cls.jointCount;
+
+    if (!std::isfinite(alpha) || alpha < 0.0f || alpha > 1.0f) {
+        result.status = Rac1MobyPoseStatus::InvalidInterpolationAlpha;
+        return result;
+    }
+
+    PoseFrameView current{};
+    PoseFrameView next{};
+    if (!resolvePosePacketView(
+            framePacketA, 0u, framePacketA.size(), cls, true, current, result) ||
+        !resolvePosePacketView(
+            framePacketB, 0u, framePacketB.size(), cls, false, next, result)) {
+        return result;
+    }
+
+    return blendResolvedPoseViews(
+        cls, packetSequenceIndex, packetFrameIndex, nextSequenceIndex,
+        nextFrameIndex, alpha, current, next, std::move(result));
 }
 
 } // namespace
@@ -1768,7 +1908,7 @@ Rac1MobyPoseResult decodeRac1MobyPoseFrame(
     std::uint8_t sequenceIndex,
     std::uint8_t frameIndex) {
     return decodePoseInterpolatedImpl(
-        core, cls, sequenceIndex, frameIndex, frameIndex, 0.0f);
+        core, cls, sequenceIndex, frameIndex, sequenceIndex, frameIndex, 0.0f);
 }
 
 Rac1MobyPoseResult decodeRac1MobyPoseInterpolated(
@@ -1779,7 +1919,47 @@ Rac1MobyPoseResult decodeRac1MobyPoseInterpolated(
     std::uint8_t nextFrameIndex,
     float alpha) {
     return decodePoseInterpolatedImpl(
-        core, cls, sequenceIndex, frameIndex, nextFrameIndex, alpha);
+        core, cls, sequenceIndex, frameIndex, sequenceIndex, nextFrameIndex, alpha);
+}
+
+Rac1MobyPoseResult decodeRac1MobyPoseInterpolatedAcrossSequences(
+    std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t sequenceIndex,
+    std::uint8_t frameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha) {
+    return decodePoseInterpolatedImpl(
+        core, cls, sequenceIndex, frameIndex, nextSequenceIndex, nextFrameIndex, alpha);
+}
+
+Rac1MobyPoseResult decodeRac1MobyPoseInterpolatedFromPacket(
+    std::span<const std::uint8_t> framePacketA,
+    std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t packetSequenceIndex,
+    std::uint8_t packetFrameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha) {
+    return decodePoseInterpolatedFromPacketImpl(
+        framePacketA, core, cls, packetSequenceIndex, packetFrameIndex,
+        nextSequenceIndex, nextFrameIndex, alpha);
+}
+
+Rac1MobyPoseResult decodeRac1MobyPoseInterpolatedFromPackets(
+    std::span<const std::uint8_t> framePacketA,
+    std::span<const std::uint8_t> framePacketB,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t packetSequenceIndex,
+    std::uint8_t packetFrameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha) {
+    return decodePoseInterpolatedFromPacketsImpl(
+        framePacketA, framePacketB, cls, packetSequenceIndex, packetFrameIndex,
+        nextSequenceIndex, nextFrameIndex, alpha);
 }
 
 Rac1MobyPoseResult decodeRac1MobyDensePoseFrame(

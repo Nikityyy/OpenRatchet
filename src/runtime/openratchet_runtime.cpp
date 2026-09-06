@@ -2,11 +2,14 @@
 
 #include "game/native_replacements.h"
 #include "game/native_services.h"
+#include "game/rac1_live_animation.h"
 #include "game/rac1_live_state.h"
+#include "game/rac1_live_transform.h"
 #include "guest_overrides.h"
 #include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -115,6 +118,89 @@ void logLiveMobySnapshot(const game::Rac1LiveMobyPoolSnapshot& snapshot) {
               << '\n';
 }
 
+void logLiveRatchetAnimation(
+    const game::Rac1LiveRatchetAnimationResult& animation) {
+    std::cerr << "[OpenRatchet:live:ratchet-animation]"
+              << " source=guest-rdram"
+              << " ratchetCandidates=" << animation.ratchetCandidates;
+
+    // Keep permanent failure diagnostics at the semantic boundary. A partially
+    // resolved selection is still valuable evidence when a packet fails closed,
+    // and avoids reintroducing temporary probes for the next Retail edge case.
+    const auto& selection = animation.selection;
+    if (selection.mobyGuestAddress != 0u) {
+        std::cerr << " moby=0x" << std::hex << selection.mobyGuestAddress
+                  << " class=0x" << selection.classPointer << std::dec
+                  << " sequenceCount=" << static_cast<unsigned>(selection.sequenceCount)
+                  << " externalSequenceCount="
+                  << static_cast<unsigned>(selection.externalSequenceCount)
+                  << " runtimeLocalSequenceCount="
+                  << static_cast<unsigned>(selection.runtimeLocalSequenceCount)
+                  << " endpointA="
+                  << game::rac1LiveAnimationEndpointKindName(selection.endpointA.kind)
+                  << " sequenceA=" << static_cast<unsigned>(selection.endpointA.sequenceIndex)
+                  << " frameA=" << static_cast<unsigned>(selection.endpointA.frameIndex)
+                  << " sequencePointerA=0x" << std::hex
+                  << selection.endpointA.sequencePointer
+                  << " framePointerA=0x"
+                  << selection.endpointA.observedFramePointer
+                  << " resolvedFramePointerA=0x"
+                  << selection.endpointA.expectedFramePointer << std::dec
+                  << " packetBytesA=0x" << std::hex
+                  << selection.endpointA.packetBytes << std::dec
+                  << " endpointB="
+                  << game::rac1LiveAnimationEndpointKindName(selection.endpointB.kind)
+                  << " sequenceB=" << static_cast<unsigned>(selection.endpointB.sequenceIndex)
+                  << " frameB=" << static_cast<unsigned>(selection.endpointB.frameIndex)
+                  << " sequencePointerB=0x" << std::hex
+                  << selection.endpointB.sequencePointer
+                  << " framePointerB=0x"
+                  << selection.endpointB.observedFramePointer
+                  << " resolvedFramePointerB=0x"
+                  << selection.endpointB.expectedFramePointer << std::dec
+                  << " packetBytesB=0x" << std::hex
+                  << selection.endpointB.packetBytes << std::dec
+                  << " alpha=" << selection.interpolation;
+    }
+
+    std::cerr << " status="
+              << game::rac1LiveRatchetAnimationStatusName(animation.status)
+              << '\n';
+}
+
+void logLiveRatchetTransform(
+    const game::Rac1LiveRatchetTransformResult& transformResult) {
+    std::cerr << "[OpenRatchet:live:ratchet-transform]"
+              << " source=guest-rdram"
+              << " ratchetCandidates=" << transformResult.ratchetCandidates;
+
+    const auto& transform = transformResult.transform;
+    if (transform.mobyGuestAddress != 0u) {
+        const auto printVector = [](const std::array<float, 3>& value) {
+            std::cerr << '(' << value[0] << ',' << value[1] << ',' << value[2] << ')';
+        };
+
+        std::cerr << " moby=0x" << std::hex << transform.mobyGuestAddress << std::dec
+                  << " oClass=" << transform.oClass
+                  << " position=";
+        printVector(transform.position);
+        std::cerr << " rawScale=" << transform.rawModelScale
+                  << " worldScale=" << transform.worldModelScale
+                  << " rotationInput=";
+        printVector(transform.rotationInput);
+        std::cerr << " basisX=";
+        printVector(transform.basisX);
+        std::cerr << " basisY=";
+        printVector(transform.basisY);
+        std::cerr << " basisZ=";
+        printVector(transform.basisZ);
+    }
+
+    std::cerr << " status="
+              << game::rac1LiveRatchetTransformStatusName(transformResult.status)
+              << '\n';
+}
+
 } // namespace
 
 struct OpenRatchetRuntime::Impl {
@@ -122,37 +208,65 @@ struct OpenRatchetRuntime::Impl {
     PS2Runtime eeFallback;
     runtime::NativeReplacementRegistry replacements;
     std::optional<LiveMobySnapshotSignature> lastLiveMobySignature;
+    game::Rac1LiveRatchetAnimationResult liveRatchetAnimation;
+    std::optional<game::Rac1LiveRatchetAnimationStatus> lastLoggedAnimationStatus;
+    game::Rac1LiveRatchetTransformResult liveRatchetTransform;
+    std::optional<game::Rac1LiveRatchetTransformStatus> lastLoggedTransformStatus;
     std::uint64_t liveMobyPresentationCount = 0u;
     bool initialized = false;
 
     void inspectLiveMobyState(PS2Runtime& runtime) {
-        // Step 11.2 is observation-only. Sample immediately, then once per 60
-        // host presentation callbacks to avoid perturbing fallback execution.
+        // Steps 11.3/11.4 consume live animation and world-transform state on
+        // every coherent host/guest handoff. Only diagnostics are throttled;
+        // semantic bridge state never inherits the old Step-11.2 cadence.
         const std::uint64_t presentation = liveMobyPresentationCount++;
-        if (presentation != 0u && (presentation % 60u) != 0u) {
-            return;
-        }
+        const bool diagnosticTick =
+            presentation == 0u || (presentation % 60u) == 0u;
 
         game::Rac1LiveMobyPoolSnapshot snapshot;
+        game::Rac1LiveRatchetAnimationResult animation;
+        game::Rac1LiveRatchetTransformResult transform;
         {
             // The fallback game thread mutates RDRAM while it executes. Use the
-            // runtime's existing guest-execution handoff so the snapshot is a
-            // coherent read rather than a host/guest data race. Logging occurs
-            // after this scope so stderr I/O never holds the execution mutex.
+            // runtime's existing guest-execution handoff so both the pool and
+            // its live sequence/frame IDs and consumed endpoint packets come
+            // from one coherent read.
+            // Logging occurs after this scope so stderr I/O never holds the
+            // execution mutex.
             PS2Runtime::GuestExecutionScope guestExecution(&runtime);
             const std::span<const std::uint8_t> guestRdram(
                 runtime.memory().getRDRAM(),
                 static_cast<std::size_t>(PS2_RAM_SIZE));
             snapshot = game::inspectRac1LiveMobyPool(guestRdram);
+            animation = game::inspectRac1LiveRatchetAnimation(guestRdram, snapshot);
+            transform = game::inspectRac1LiveRatchetWorldTransform(snapshot);
         }
 
-        const LiveMobySnapshotSignature signature = liveMobySignature(snapshot);
-        if (lastLiveMobySignature && *lastLiveMobySignature == signature) {
-            return;
+        const bool animationStatusChanged =
+            !lastLoggedAnimationStatus ||
+            *lastLoggedAnimationStatus != animation.status;
+        liveRatchetAnimation = animation;
+        const bool transformStatusChanged =
+            !lastLoggedTransformStatus ||
+            *lastLoggedTransformStatus != transform.status;
+        liveRatchetTransform = transform;
+
+        if (diagnosticTick) {
+            const LiveMobySnapshotSignature signature = liveMobySignature(snapshot);
+            if (!lastLiveMobySignature || *lastLiveMobySignature != signature) {
+                lastLiveMobySignature = signature;
+                logLiveMobySnapshot(snapshot);
+            }
         }
 
-        lastLiveMobySignature = signature;
-        logLiveMobySnapshot(snapshot);
+        if (diagnosticTick || animationStatusChanged) {
+            lastLoggedAnimationStatus = animation.status;
+            logLiveRatchetAnimation(animation);
+        }
+        if (diagnosticTick || transformStatusChanged) {
+            lastLoggedTransformStatus = transform.status;
+            logLiveRatchetTransform(transform);
+        }
     }
 };
 

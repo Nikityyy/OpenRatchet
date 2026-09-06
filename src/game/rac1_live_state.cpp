@@ -93,6 +93,23 @@ Rac1LiveMobyPoolSnapshot inspectRac1LiveMobyPool(
             guestRdram, address + Rac1LiveMobyLayout::kOClassOffset));
         record.storedPoolIndex = readLe32(
             guestRdram, address + Rac1LiveMobyLayout::kPoolIndexOffset);
+
+        for (std::size_t axis = 0u; axis < 3u; ++axis) {
+            const std::uint32_t byteOffset = static_cast<std::uint32_t>(axis * sizeof(float));
+            record.worldTransform.position[axis] = readLeFloat(
+                guestRdram, address + Rac1LiveMobyLayout::kWorldPositionOffset + byteOffset);
+            record.worldTransform.rotationInput[axis] = readLeFloat(
+                guestRdram, address + Rac1LiveMobyLayout::kRotationInputOffset + byteOffset);
+            record.worldTransform.basisX[axis] = readLeFloat(
+                guestRdram, address + Rac1LiveMobyLayout::kRotationBasisXOffset + byteOffset);
+            record.worldTransform.basisY[axis] = readLeFloat(
+                guestRdram, address + Rac1LiveMobyLayout::kRotationBasisYOffset + byteOffset);
+            record.worldTransform.basisZ[axis] = readLeFloat(
+                guestRdram, address + Rac1LiveMobyLayout::kRotationBasisZOffset + byteOffset);
+        }
+        record.worldTransform.rawModelScale = readLeFloat(
+            guestRdram, address + Rac1LiveMobyLayout::kRawModelScaleOffset);
+
         record.animation.frameA =
             guestRdram[address + Rac1LiveMobyLayout::kFrameAOffset];
         record.animation.frameB =

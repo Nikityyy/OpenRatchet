@@ -39,7 +39,7 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 ---
 
-## Active Work: Phase 10 — Skeletal & Model Animation
+## Phase 10 — Skeletal & Model Animation
 
 ### Progress & Validated Steps
 
@@ -56,7 +56,7 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 
 ### Current Step: Step 12 — Ratchet Gameplay Animation Bank
 
-- **Retail correction (proved):** `moby +0x52 == 0xFF` is a generic animation-transition/cache-pose state, not a dedicated Ratchet sequence format. `FUN_00212f90` obtains one of 16 transition slots, asks `FUN_0020ede8` to evaluate the current pose into that slot, and `sub_0020C880` later resolves the cached frame at `0x1BABC0 + slot*0x800`. Do not use this state as the player-bank discriminator.
+- **Retail correction (proved):** `moby +0x52 == 0xFF` is a generic animation-transition/cache-pose state, not a dedicated Ratchet sequence format. `FUN_00212f90` obtains one of 16 transition slots, asks `FUN_0020ede8` to evaluate the current pose into that slot, and `sub_0020C880` later resolves the cached frame at `0x1AABC0 + slot*0x800`. Do not use this state as the player-bank discriminator.
 - **Retail location (proved):** LevelCoreHeader `+0x78` is `ratchetSequenceTableOffset`. On Level 0 it is `0x7850` into the separate core-index blob. The table contains exactly 134 strictly increasing absolute core pointers, matching `oClass 0`'s `sequenceCount = 134`. The older `+0x74 = 0x70A550` value is preserved as neutral `coreHeader74`; its semantic role is not assigned without a retail consumer proof. The old unverified `sceneViewSize` label for `+0x7c` is likewise retired in favour of neutral `coreHeader7c`.
 - **Codec contract (proved on supplied Level-0 data):** Ratchet's external sequence headers use the same pose/frame codec already implemented for ordinary mobys, with one addressing difference: the 134 sequence-table entries are core-absolute, and each sequence's frame pointers are sequence-relative. All 2,558 Ratchet frames satisfy the Step-11A sparse layout; all 25,569 stream-1 records take the retail inactive/skip branch (`stream1Active = 0`).
 - **Step 12A (`DONE`):** Native external-table decoder plus strict whole-bank pose/skinning gate. Windows Release/CTest/viewer acceptance confirms 134/134 sequences, 2,558/2,558 decoded poses and 2,558/2,558 native skin executions, with the mandatory 20-second runtime regression unchanged from baseline.
@@ -283,17 +283,92 @@ retail simulation before any native input or gameplay ownership is introduced.
   prevents repeated PCH invalidation and hundreds of needless `FUN_*` rebuilds.
   Local validation against a pristine pinned checkout proves: dirty-checkout
   rejection, patch application without modifying upstream, full OpenRatchet
-  link, 18/18 CTests, a no-op incremental rebuild, and the 20-second Retail gate
-  at `21/21` replacements with authentic `[OpenRatchet:live:moby] status=ok`.
-  The corresponding Windows build/viewer/runtime pass is the final checkpoint
-  gate before committing and starting Step 11.3.
+  link, 18/18 pre-11.3 CTests, a no-op incremental rebuild, and the 20-second
+  Retail gate at `21/21` replacements with authentic `[OpenRatchet:live:moby] ... status=ok`. Windows has now independently confirmed the prepared compatibility
+  source, a clean `third_party/PS2Recomp`, the fast content-aware incremental
+  rebuild, the Phase-10 viewer regression, `21/21` runtime replacements, and the
+  authentic live-Moby gate. Step 11.3 adds the nineteenth CTest on top of that
+  already-green checkpoint; the checkpoint dependency is no longer an open gate.
 
 ### Remaining Phase 11 Steps
 
-- **Step 11.3 (`TODO`, next after checkpoint commit):** Drive native Ratchet/Moby sequence, frame pair and
-  interpolation from live state instead of the viewer demo clock.
-- **Step 11.4 (`TODO`):** Prove and bridge live Moby/Ratchet world-transform
-  fields; no guessed axis/scale mapping.
+- **Step 11.3 (`DONE`):** Native Ratchet animation selection now comes from
+  coherent live Retail state instead of the viewer demo clock. Phase 10 proved
+  the immutable oClass-0 bank contains **134 external sequences** while its 134
+  original class-local `class+0x48` slots are zero. Generated `sub_00204790`
+  proves the complementary runtime rule: Retail increments `class+0x0C`, writes
+  the old count into `moby+0x52/+0x53`, installs a newly materialized sequence at
+  `class+0x48+oldCount*4`, and absolutizes that appended sequence's frame table.
+  The bridge therefore models Ratchet as a leading external-bank prefix plus any
+  runtime-local suffix, with the native Phase-10 bank as an independent oracle
+  for the external prefix. `sub_0020C880` remains the proved normal local
+  producer and proves the `sequenceA==0xFF` transition cache at the exact
+  `0x1AABC0 + frameA*0x800` base; `FUN_0020EDE8` remains the authoritative
+  materialized-pose consumer of `moby+0x68/+0x6C`, and other proved producers may
+  repoint those packets as explicit `direct-guest-packet` provenance. `moby+0x54`
+  is carried unchanged as Retail alpha; `moby+0x70` remains uninterpreted.
+
+  The Windows runtime also proved a legitimate pre-materialization construction
+  state rather than another pointer failure. Across timing samples the live class
+  advertised `sequenceCount=135`, `externalSequenceCount=134`,
+  `runtimeLocalSequenceCount=1`; the appended ID `134` was observed as A and as
+  either B `0` or B `134`, while both consumed endpoint pointers were still zero.
+  `FUN_0020C5F0` proves why the initial `sub_0020C880` call can be skipped for
+  Ratchet's zero first local slot, and `sub_00204790` itself does not write
+  `moby+0x68/+0x6C`. OpenRatchet therefore preserves the coherent two-zero case as
+  `endpoints-not-materialized` instead of inventing packets. This is an accepted
+  live-selection state, not a fabricated `status=ok`; once both pointers exist,
+  the native pose bridge decodes the exact observed Retail packets. One-sided
+  zero pointers, malformed packets, invalid local metadata and accounting
+  mismatches still fail closed.
+
+  Final Windows acceptance is green: Release links successfully from the prepared
+  PS2Recomp compatibility source, `third_party/PS2Recomp` remains clean, CTest is
+  **19/19**, the full Phase-10 viewer remains `status=ok`, the 20-second fallback
+  run stays alive with graphics activity and `runtime declared=21 installed=21
+  install_errors=0`, `[OpenRatchet:live:moby]` retains `ratchetCandidates=1`,
+  `unaccounted=0`, `status=ok`, and `[OpenRatchet:live:ratchet-animation]`
+  independently reports the proved 134+1 storage split with
+  `status=endpoints-not-materialized` at the sampled construction checkpoint.
+  Targeted GCC/Clang `-Werror` regressions additionally cover materialized
+  external/local/transition/direct packet-to-packet poses, the exact 135-entry
+  mixed-storage shape, one-sided-zero hard failures and malformed packets. The
+  current sampled PC / unrelated deferred SIF state is not used as a Step-11.3
+  blocker oracle. Rendering ownership remains Step 11.6.
+- **Step 11.4 (`DONE`):** The live Moby/Ratchet world-transform boundary
+  is now retail-derived without an inferred Euler order or host axis remap.
+  `FUN_0020D868` consumes `moby+0x10` as the xyz world-position vector in its
+  spatial-distance path, while `FUN_0021E230` independently writes spawn xyz to
+  `+0x10/+0x14/+0x18`. `FUN_0020C5F0` initializes `moby+0x2C` from
+  `class+0x24`; `FUN_0020CCA8` and `sub_0020CD48` consume that live scale with
+  the literal `0x3A800000 = 1/1024`.
+
+  Rotation is bridged from Retail's own materialized basis rather than by
+  guessing the VU0 Euler convention. `FUN_0020DEF8` feeds the vector at
+  `moby+0x40` to VU0 microprogram `0xD18`, stores `vf20/vf21/vf22` to
+  `+0xC0/+0xD0/+0xE0`, and then forms world xyz explicitly as
+  `basisX*x + basisY*y + basisZ*z + position`. Its local coordinates are
+  multiplied by raw `moby+0x2C` while position is multiplied by 1024, proving
+  the native world-space bridge
+  `position + basis * (rawSkinnedPosition * mobyScale/1024)`. The 0x100-byte
+  Moby is zeroed by `FUN_0020C5F0`; therefore an exactly all-zero basis block is
+  preserved as `basis-not-materialized` rather than synthesized from `+0x40`.
+
+  `src/game/rac1_live_transform.*` now validates the unique traversed Ratchet,
+  candidate accounting, finite transform inputs and materialization state on
+  every coherent runtime handoff. `rac1_live_transform_tests` counterfactually
+  pins the Retail basis-column order, exact 1/1024 scale conversion, zero-basis
+  construction state and hard failures for non-finite/accounting errors. Local
+  GCC/Clang `-Werror` validation is green, including every one of the 20
+  CTest-equivalent targets available in the audit snapshot plus the complete
+  `openratchet_runtime.cpp` translation unit. Windows acceptance is also green:
+  Release build/link succeeds without PS2Recomp churn, **20/20 CTests pass**,
+  the Phase-10 viewer remains regression-free, `third_party/PS2Recomp` stays
+  clean, runtime replacements remain `21/21` with `install_errors=0`, and the
+  20-second Retail run reaches the authentic `basis-not-materialized`
+  construction state with one Ratchet and `unaccounted=0`. This sampled zero
+  basis is evidence of pre-materialization, not a blocker oracle and not a
+  reason to synthesize host orientation. Step 11.5 is the next active step.
 - **Step 11.5 (`TODO`):** Independently prove and bridge the retail gameplay
   camera/view state.
 - **Step 11.6 (`TODO`):** Continuously update native rendered Moby instances

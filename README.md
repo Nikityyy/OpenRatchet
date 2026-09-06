@@ -137,23 +137,78 @@ Phase 11 is now in progress. Its first boundary is intentionally read-only:
 contract before the native renderer consumes any live state. The generated EE
 code proves a 0x4000-byte arena whose base is stored at `0x15FF18`, 0x100-byte
 records, a 64-slot hard capacity, and the signed `moby+0x20` traversal state
-where exactly `-1` terminates the retail walk. The same contract exposes only
+where exactly `-1` terminates the retail walk. The same contract originally exposed only
 proved identity/animation fields (`class +0x24`, `oClass +0xA6`, frame pair
 `+0x50/+0x51`, sequence pair `+0x52/+0x53`, interpolation `+0x54`, frame
-pointers `+0x68/+0x6C`). Runtime attachment, world transforms, and camera
-ownership remain separate later Phase-11 gates rather than being inferred.
+pointers `+0x68/+0x6C`). Step 11.4 now adds independently proved raw live
+world-transform fields while camera ownership remains a separate gate.
 Step 11.2 attaches that decoder to the actual fallback runtime rather than to
-captured or level-file data. `OpenRatchetRuntime` samples
+captured or level-file data. `OpenRatchetRuntime` reads
 `PS2Runtime::memory().getRDRAM()` under `PS2Runtime::GuestExecutionScope`, so
-live reads occur at a coherent guest-function boundary and do not race the EE
-fallback thread. The current PS2Runtime presentation callback is only a
-transitional sampling clock: it does not select animation, modify simulation,
-or transfer renderer ownership. Runtime logs are source-labelled as
-`[OpenRatchet:live:moby]`; before retail creates the arena,
-`status=pool-not-initialized` is expected, while an initialized pool must pass
-the proved last-slot/sentinel/accounting contract. Windows acceptance of Step
-11.2 confirms exactly that pre-pool state without changing the Phase-10 viewer
-or the established runtime baseline.
+live snapshots occur at a coherent host/guest handoff and do not race the EE
+fallback thread. Retail now creates the arena itself and Windows acceptance
+reaches `[OpenRatchet:live:moby] ... unaccounted=0 status=ok`; the exact record
+and terminator counts remain timing-dependent.
+
+Step 11.3 is complete above that proved pool boundary. Live Ratchet animation
+selection is refreshed from coherent Retail RDRAM on every host/guest handoff;
+only diagnostics are throttled. Phase 10 proved the immutable 134-sequence
+Ratchet bank while every original class-local `+0x48` pointer is zero, and
+generated `sub_00204790` proves that Retail may append a new class-local sequence
+at the old sequence-count slot. The bridge therefore models a 134-entry external
+prefix followed by any runtime-local suffix and validates that external prefix
+against the native Phase-10 bank.
+
+The final Windows runtime gate proved the exact mixed-storage shape:
+`sequenceCount=135`, `externalSequenceCount=134`,
+`runtimeLocalSequenceCount=1`. Timing samples observed sequence A `134` and
+sequence B as either `0` or `134` while both consumed `moby+0x68/+0x6C` pointers
+remained zero. That is a proved pre-materialization construction state, not a
+pointer error: `FUN_0020C5F0` can skip the normal `sub_0020C880` resolver when
+Ratchet's first local sequence slot is zero, and `sub_00204790` updates the
+sequence metadata without writing the consumed endpoint pointers. OpenRatchet
+therefore reports `endpoints-not-materialized` and never synthesizes packets from
+IDs. When both packets exist, `FUN_0020EDE8` remains authoritative and the native
+codec consumes exactly the observed Retail packets; runtime-local, corrected
+`0x1AABC0 + frameA*0x800` transition-cache, external and proved direct-repoint
+paths are validated separately. `+0x54` is the unchanged Retail blend alpha and
+`+0x70` remains uninterpreted.
+
+Windows acceptance is green for Step 11.3: Release links from the prepared
+PS2Recomp compatibility source, the pinned third-party checkout remains clean,
+CTest is 19/19, the Phase-10 viewer remains fully `status=ok`, and the 20-second
+runtime remains alive with graphics activity, `21/21` runtime replacements,
+authentic `[OpenRatchet:live:moby] ... unaccounted=0 status=ok`, and the live
+Ratchet animation bridge reporting the proved 134+1 storage split. Direct
+GCC/Clang regressions cover the materialized packet-to-packet pose path plus the
+exact pre-materialization state. The standalone viewer deliberately keeps its
+Phase-10 `clock=viewer-demo`; rendered live-state ownership is Step 11.6, not
+Step 11.3.
+
+Step 11.4 is complete: the live world-transform contract is bridged without an
+axis/scale heuristic. Retail `FUN_0020D868` consumes `moby+0x10` as xyz world
+position, and `FUN_0020C5F0` initializes `moby+0x2C` from `class+0x24`;
+`FUN_0020CCA8` plus `sub_0020CD48` prove the exact `1/1024` conversion used for
+that live raw scale. Orientation is not reconstructed with a host Euler guess:
+`FUN_0020DEF8` feeds `moby+0x40` into VU0 and stores the resulting basis columns
+at `+0xC0/+0xD0/+0xE0`, then itself evaluates
+`basisX*x + basisY*y + basisZ*z + position`. The native bridge therefore uses
+those Retail-cached columns directly and transforms a Phase-10 raw skinned point
+as `position + basis * (rawPoint * mobyScale/1024)`. An exactly zero cached basis
+is retained as `basis-not-materialized`, because Retail zeroes the complete Moby
+before that basis producer runs. Runtime transform state is sampled coherently
+alongside the Step-11.3 animation state and exposed under
+`[OpenRatchet:live:ratchet-transform]`; no native renderer ownership moves until
+Step 11.6. The Step-11.4 code is locally green across the 20 CTest-equivalent
+targets available in the audit snapshot plus GCC/Clang `-Werror` compilation of
+the runtime translation unit. Windows acceptance is green as well: **20/20**
+CTests pass, the Phase-10 viewer remains unchanged, `third_party/PS2Recomp`
+stays clean, runtime replacements remain `21/21` with `install_errors=0`, and
+the 20-second live run reports one authentic Ratchet with `unaccounted=0` plus
+`[OpenRatchet:live:ratchet-transform] ... status=basis-not-materialized`. That
+zero-basis snapshot is the proved Retail pre-materialization state, not a host
+rotation fallback or a startup blocker. Step 11.5 camera bridging is next.
+
 
 Phase 11 has now promoted the controller and save bootstrap above SIF instead
 of extending the temporary RPC-response table. Retail WAD2/0 descriptor 17
@@ -213,8 +268,10 @@ boundary instead of adding FILEIO RPC synthesis: syscall `0x80`
 is not a Sony DTL-T10000 development TOOL. Local full-link/CTest validation is
 18/18; the Retail-extract run installs 17/17 runtime replacements, executes the
 native `IsT10K` probe, emits no FILEIO `0x80000001` bind, and advances past
-`0x11BA40`. The Moby pool is still observation-only and must become
-`[OpenRatchet:live:moby] ... status=ok` authentically before Step 11.3 begins.
+`0x11BA40`. At that intermediate checkpoint the Moby pool was still
+observation-only; the later Phase-11.2 cleanup now reaches
+`[OpenRatchet:live:moby] ... unaccounted=0 status=ok` authentically, which is the
+proved boundary on which Step 11.3 builds.
 
 Phase 11.2 is now structurally complete. The remaining startup work was resolved
 at high-level native boundaries rather than by extending packet emulation: the

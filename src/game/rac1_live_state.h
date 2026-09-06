@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -22,6 +23,26 @@ struct Rac1LiveMobyLayout final {
     // the retail walk; other negative values are skipped; >=0 records enter
     // the live-Moby spatial/update path.
     static constexpr std::uint32_t kTraversalStateOffset = 0x20u;
+
+    // FUN_0020d868 loads the xyz vector at +0x10 and subtracts the current
+    // world-space reference before its spatial-distance tests. FUN_0021e230
+    // independently writes Moby spawn coordinates to +0x10/+0x14/+0x18.
+    static constexpr std::uint32_t kWorldPositionOffset = 0x10u;
+
+    // FUN_0020c5f0 initializes +0x2c from class+0x24. FUN_0020cca8 and
+    // sub_0020CD48 consume it with the literal 1/1024 factor; FUN_0020def8
+    // consumes the raw value directly before producing 1024-scaled world data.
+    static constexpr std::uint32_t kRawModelScaleOffset = 0x2cu;
+
+    // FUN_0020def8 feeds +0x40 into VU0 microprogram 0xD18 and stores the
+    // resulting three rotation-basis vectors at +0xc0/+0xd0/+0xe0. The same
+    // function then uses those vectors as the x/y/z basis columns. +0x40 is
+    // retained as proved Retail rotation input/provenance; the native bridge
+    // consumes the materialized Retail basis instead of guessing Euler order.
+    static constexpr std::uint32_t kRotationInputOffset = 0x40u;
+    static constexpr std::uint32_t kRotationBasisXOffset = 0xc0u;
+    static constexpr std::uint32_t kRotationBasisYOffset = 0xd0u;
+    static constexpr std::uint32_t kRotationBasisZOffset = 0xe0u;
 
     // FUN_0020c5f0 writes the resolved class pointer and original oClass here.
     static constexpr std::uint32_t kClassPointerOffset = 0x24u;
@@ -49,6 +70,15 @@ enum class Rac1LiveMobyPoolStatus : std::uint8_t {
     MissingTraversalTerminator,
 };
 
+struct Rac1LiveMobyWorldTransformState {
+    std::array<float, 3> position{};
+    float rawModelScale = 0.0f;
+    std::array<float, 3> rotationInput{};
+    std::array<float, 3> basisX{};
+    std::array<float, 3> basisY{};
+    std::array<float, 3> basisZ{};
+};
+
 struct Rac1LiveMobyAnimationState {
     std::uint8_t frameA = 0u;
     std::uint8_t frameB = 0u;
@@ -69,6 +99,7 @@ struct Rac1LiveMobyRecord {
     std::uint32_t classPointer = 0u;
     std::int16_t oClass = 0;
     std::uint32_t storedPoolIndex = 0u;
+    Rac1LiveMobyWorldTransformState worldTransform;
     Rac1LiveMobyAnimationState animation;
 };
 
@@ -84,9 +115,10 @@ struct Rac1LiveMobyPoolSnapshot {
     std::vector<Rac1LiveMobyRecord> records;
 };
 
-// Decode only the fields whose layout/use is proved by retail generated code.
-// Camera ownership and world-transform interpretation intentionally remain out
-// of this contract until their independent retail consumers are established.
+// Decode only fields whose layout/use is proved by retail generated code.
+// Step 11.4 adds the raw live world-transform inputs and Retail-cached rotation
+// basis; semantic validation/conversion remains in rac1_live_transform.*. Camera
+// ownership remains outside this contract until its independent Step-11.5 proof.
 [[nodiscard]] Rac1LiveMobyPoolSnapshot inspectRac1LiveMobyPool(
     std::span<const std::uint8_t> guestRdram);
 

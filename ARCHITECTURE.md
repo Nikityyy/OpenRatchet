@@ -328,8 +328,10 @@ ownership.
 
 `game::inspectRac1LiveMobyPool` is deliberately runtime-agnostic: it accepts a
 read-only guest-RDRAM byte span and decodes only retail-proved R&C1 Moby-pool
-fields. The decoder owns no PS2Runtime object, no renderer, and no guessed
-camera/world-transform interpretation.
+fields. The decoder owns no PS2Runtime object or renderer. Step 11.4 extends the
+raw contract with the proved live world-position (`+0x10`), raw model scale
+(`+0x2C`), Retail rotation input (`+0x40`) and cached basis columns
+(`+0xC0/+0xD0/+0xE0`); camera interpretation remains outside this boundary.
 
 During Phase 11, `OpenRatchetRuntime` is the owner of the temporary attachment
 to the still-running EE fallback. It obtains the actual 32 MiB RDRAM pointer
@@ -338,16 +340,101 @@ through `PS2Runtime::memory().getRDRAM()` and snapshots it under
 function-boundary handoff, so host reads do not race guest writes. Snapshot
 formatting/logging is done only after releasing the execution scope.
 
-PS2Runtime's host-presentation callback is used temporarily as a low-frequency
-sampling clock while the fallback runtime still owns the executable loop. This
+PS2Runtime's host-presentation callback is used temporarily as the host/guest
+handoff clock while the fallback runtime still owns the executable loop. This
 is not a new rendering dependency and does not make the callback part of R&C1
-game semantics. It exists solely to observe the live guest state until the
-native application loop takes over later phases. Phase 11.2 keeps the live-state bridge itself read-only: it never fabricates
-RDRAM pool globals or drives animation, transforms, or camera state. After the
-proved platform/transport prerequisites above were lifted to their native
-boundaries, Retail itself reaches `sub_001E9B10`, publishes `0x15FF18` and
-`0x15FF20`, and the decoder reports `[OpenRatchet:live:moby] ... status=ok` with
-`unaccounted=0`. Phase 11.3 therefore starts from authentic live records.
+game semantics. Phase 11.3 refreshes the semantic live-animation selection on
+every coherent callback; only stderr diagnostics are throttled. The callback
+exists solely to observe live guest state until the native application loop
+takes over later phases. Phase 11.2 keeps the pool bridge read-only: it never
+fabricates RDRAM pool globals, transforms, or camera state. After the proved
+platform/transport prerequisites above were lifted to their native boundaries,
+Retail itself reaches `sub_001E9B10`, publishes `0x15FF18` and `0x15FF20`, and
+the decoder reports `[OpenRatchet:live:moby] ... status=ok` with
+`unaccounted=0`.
+
+Completed Phase 11.3 adds a separate runtime-agnostic animation contract above that pool.
+`game::inspectRac1LiveRatchetAnimation` requires exactly one traversed
+`oClass==0` record and preserves Ratchet's two proved sequence-storage domains.
+Phase 10 established that the immutable player bank contains 134 external
+sequences while all 134 class-local `class+0x48` entries are zero.
+`sub_00204790` proves that Retail can extend that class at runtime: it increments
+`class+0x0c`, assigns the old count to the live sequence IDs, writes the new
+sequence pointer at `class+0x48+oldCount*4`, and converts that appended sequence's
+frame entries to absolute pointers. The live class table is therefore interpreted
+as a leading zero external-bank prefix followed by a runtime-local suffix; the
+native external bank provides an independent count/frame oracle for that prefix.
+
+`sub_0020C880` remains one producer for runtime-local endpoints and proves the
+`sequenceA==0xFF` transition cache at
+`0x1AABC0 + frameA*0x800` (`0x1B0000 + sign_extend(0xABC0)`). It is not a
+universal Ratchet resolver. `FUN_0020C5F0` skips the initial call to
+`sub_0020C880` when the first class-local sequence pointer is zero, and
+`sub_00204790` appends sequence metadata without writing `moby+0x68/+0x6c`.
+Thus a coherent live record may already expose valid sequence/frame identity
+while both consumed endpoint pointers are still zero. OpenRatchet records that
+exactly as `endpoints-not-materialized`; it is not fabricated into `status=ok`
+and no native-bank fallback is synthesized. Windows Step-11.3 acceptance proved
+this state directly with `sequenceCount=135`, an external prefix of 134 and one
+runtime-local appended sequence. Timing samples observed the appended ID 134 on
+A and on B as either external ID 0 or appended ID 134 while both endpoint
+pointers remained zero. The bridge treats those as coherent identity-only
+construction states rather than pointer failures.
+
+Once both pointers are materialized, `FUN_0020EDE8` is the stronger consumer
+oracle: it loads `moby+0x68/+0x6C` directly and blends those two packets. Other
+proved producers (`FUN_00224B70`, `FUN_00224D28`, `FUN_00224E18`) may repoint
+materialized packets, so local/cache pointer mismatches remain explicit
+`direct-guest-packet` provenance only after the observed Phase-10 packet extent
+is fully bounded in guest RDRAM. One-sided zero pointers, malformed packets and
+invalid local metadata still fail closed. `game::decodeRac1LiveRatchetPose`
+validates the immutable external-prefix contract against the Phase-10 Ratchet
+bank, then decodes the two materialized packets Retail actually supplied instead
+of reconstructing a different pose from IDs. `moby+0x54` is carried unchanged as
+the Retail blend alpha; `moby+0x70` remains raw. Release/19-CTest/viewer and
+20-second Windows runtime acceptance are green for this contract; materialized
+packet-to-packet paths are covered by direct GCC/Clang regressions even though
+the sampled fallback checkpoint is still pre-materialization. Camera, input and
+continuous rendered-instance ownership remain later gates.
+
+Step 11.4 establishes the world-transform bridge directly from Retail consumers,
+without reusing the Phase-9 static-instance layout or guessing a live Euler
+order. `FUN_0020D868` loads `moby+0x10` as an xyz world-position vector for
+spatial subtraction, and `FUN_0021E230` independently writes spawn xyz to those
+three floats. `FUN_0020C5F0` initializes the float at `moby+0x2C` from the
+class's raw model scale at `class+0x24`; both `FUN_0020CCA8` and
+`sub_0020CD48` multiply the live value by the literal float `1/1024`.
+
+For orientation, `FUN_0020DEF8` is the authoritative transform consumer. Unless
+its proved cached-basis flag requests reuse, it loads the vector at `moby+0x40`,
+runs VU0 microprogram `0xD18`, and stores `vf20`, `vf21`, `vf22` at
+`moby+0xC0`, `+0xD0`, `+0xE0`. It then uses those three vectors explicitly as
+columns (`vf20*x + vf21*y + vf22*z`) after multiplying local xyz by raw
+`moby+0x2C`, multiplies world position by 1024, and adds it. Dividing that
+Retail output domain by 1024 gives the native Phase-9/10 formula exactly:
+`world = position + basis * (rawSkinnedPosition * mobyScale/1024)`. OpenRatchet
+therefore consumes the Retail-cached basis itself; it never needs to infer the
+VU0 Euler order or introduce an axis conversion. Because `FUN_0020C5F0` zeroes
+the entire 0x100-byte Moby before initialization and `FUN_0020DEF8` is the proved
+writer of the three cached vectors, an exactly all-zero basis remains an explicit
+`basis-not-materialized` state rather than a host-generated rotation.
+
+`game::inspectRac1LiveRatchetWorldTransform` validates exactly one traversed
+Ratchet and the pool's independent candidate count, then exposes the coherent
+Retail position/scale/rotation-input/basis snapshot.
+`game::transformRac1LiveMobyRawPositionToWorld` is a direct host transcription of
+the formula above for Phase-10 raw skinned positions. Runtime refresh happens in
+the same `GuestExecutionScope` handoff as live pool/animation state; only
+`[OpenRatchet:live:ratchet-transform]` diagnostics are throttled. Step 11.4 is
+Windows-accepted: Release build/link is green, 20/20 CTests pass, the Phase-10
+viewer is regression-free, `third_party/PS2Recomp` remains clean, runtime
+replacements remain 21/21 with zero install errors, and the 20-second live run
+observes the authentic all-zero cached basis as `basis-not-materialized` while
+Moby accounting remains exact. That sampled construction state is preserved as
+evidence rather than promoted into a startup blocker or replaced with a host
+rotation. Step 11.4 does not transfer renderer ownership; that remains Step 11.6.
+Step 11.5 is the next active ownership boundary and must independently prove the
+retail gameplay camera/view state.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

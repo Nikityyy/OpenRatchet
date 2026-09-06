@@ -122,6 +122,8 @@ Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLine
 Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF(?::RPC)?\].*(injected completion|deferred data-bearing CALL|disposition=)' $TailLines
 Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenRatchet:platform\]' $TailLines
 Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
+Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
+Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines
 Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
 Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
 Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines

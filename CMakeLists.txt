@@ -84,6 +84,8 @@ add_executable(openratchet
     src/game/native_audio_bootstrap.cpp
     src/game/native_replacements.cpp
     src/game/rac1_live_state.cpp
+    src/game/rac1_live_animation.cpp
+    src/game/rac1_live_transform.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
     src/sif_startup_responses.cpp
@@ -131,6 +133,21 @@ if(BUILD_TESTING)
         src/game/rac1_live_state.cpp)
     target_include_directories(rac1_live_state_tests PRIVATE src)
     add_test(NAME rac1_live_state COMMAND rac1_live_state_tests)
+
+    add_executable(rac1_live_animation_tests
+        tests/rac1_live_animation_tests.cpp
+        src/game/rac1_live_state.cpp
+        src/game/rac1_live_animation.cpp
+        src/assets/rac1_moby_animation.cpp)
+    target_include_directories(rac1_live_animation_tests PRIVATE src)
+    add_test(NAME rac1_live_animation COMMAND rac1_live_animation_tests)
+
+    add_executable(rac1_live_transform_tests
+        tests/rac1_live_transform_tests.cpp
+        src/game/rac1_live_state.cpp
+        src/game/rac1_live_transform.cpp)
+    target_include_directories(rac1_live_transform_tests PRIVATE src)
+    add_test(NAME rac1_live_transform COMMAND rac1_live_transform_tests)
 
     add_executable(native_platform_bootstrap_tests
         tests/native_platform_bootstrap_tests.cpp

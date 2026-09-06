@@ -1,5 +1,6 @@
 #include "game/rac1_live_state.h"
 
+#include <array>
 #include <bit>
 #include <cassert>
 #include <cmath>
@@ -55,6 +56,22 @@ void testRetailTraversalAndAnimationLayout() {
     writeLe32(ram, slot(0) + L::kClassPointerOffset, 0x00123400u);
     writeLe16(ram, slot(0) + L::kOClassOffset, 530u);
     writeLe32(ram, slot(0) + L::kPoolIndexOffset, 0u);
+    writeFloat(ram, slot(0) + L::kWorldPositionOffset + 0u, 12.5f);
+    writeFloat(ram, slot(0) + L::kWorldPositionOffset + 4u, -3.25f);
+    writeFloat(ram, slot(0) + L::kWorldPositionOffset + 8u, 44.0f);
+    writeFloat(ram, slot(0) + L::kRawModelScaleOffset, 1536.0f);
+    writeFloat(ram, slot(0) + L::kRotationInputOffset + 0u, 0.125f);
+    writeFloat(ram, slot(0) + L::kRotationInputOffset + 4u, -0.25f);
+    writeFloat(ram, slot(0) + L::kRotationInputOffset + 8u, 3.1415927f);
+    writeFloat(ram, slot(0) + L::kRotationBasisXOffset + 0u, 0.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisXOffset + 4u, 1.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisXOffset + 8u, 0.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisYOffset + 0u, -1.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisYOffset + 4u, 0.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisYOffset + 8u, 0.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisZOffset + 0u, 0.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisZOffset + 4u, 0.0f);
+    writeFloat(ram, slot(0) + L::kRotationBasisZOffset + 8u, 1.0f);
     ram.at(slot(0) + L::kFrameAOffset) = 8u;
     ram.at(slot(0) + L::kFrameBOffset) = 9u;
     ram.at(slot(0) + L::kSequenceAOffset) = 1u;
@@ -104,6 +121,16 @@ void testRetailTraversalAndAnimationLayout() {
     assert(moby.classPointer == 0x00123400u);
     assert(moby.oClass == 530);
     assert(moby.storedPoolIndex == 0u);
+    assert(std::abs(moby.worldTransform.position[0] - 12.5f) < 1.0e-7f);
+    assert(std::abs(moby.worldTransform.position[1] + 3.25f) < 1.0e-7f);
+    assert(std::abs(moby.worldTransform.position[2] - 44.0f) < 1.0e-7f);
+    assert(std::abs(moby.worldTransform.rawModelScale - 1536.0f) < 1.0e-7f);
+    assert(std::abs(moby.worldTransform.rotationInput[0] - 0.125f) < 1.0e-7f);
+    assert(std::abs(moby.worldTransform.rotationInput[1] + 0.25f) < 1.0e-7f);
+    assert(std::abs(moby.worldTransform.rotationInput[2] - 3.1415927f) < 1.0e-6f);
+    assert((moby.worldTransform.basisX == std::array<float, 3>{0.0f, 1.0f, 0.0f}));
+    assert((moby.worldTransform.basisY == std::array<float, 3>{-1.0f, 0.0f, 0.0f}));
+    assert((moby.worldTransform.basisZ == std::array<float, 3>{0.0f, 0.0f, 1.0f}));
     assert(moby.animation.frameA == 8u);
     assert(moby.animation.frameB == 9u);
     assert(moby.animation.sequenceA == 1u);

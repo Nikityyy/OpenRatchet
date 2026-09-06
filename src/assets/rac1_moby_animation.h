@@ -328,6 +328,7 @@ struct Rac1MobyPoseFrame {
     std::int32_t oClass = 0;
     std::uint8_t sequenceIndex = 0u;
     std::uint8_t frameIndex = 0u;
+    std::uint8_t nextSequenceIndex = 0u;
     std::uint8_t nextFrameIndex = 0u;
     std::uint8_t jointCount = 0u;
     std::uint16_t payloadQwordCount = 0u;
@@ -576,6 +577,49 @@ Rac1MobyPoseResult decodeRac1MobyPoseInterpolated(
     const Rac1MobyAnimationClass& cls,
     std::uint8_t sequenceIndex,
     std::uint8_t frameIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha);
+
+// Phase 11.3: Retail may blend between frames belonging to different sequence
+// IDs. Both endpoints use the already-validated native sequence layouts; only
+// the endpoint identity differs from the Phase-10 same-sequence helper.
+Rac1MobyPoseResult decodeRac1MobyPoseInterpolatedAcrossSequences(
+    std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t sequenceIndex,
+    std::uint8_t frameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha);
+
+// Phase 11.3 transition state: when Retail sets sequence A to 0xff, endpoint A
+// is an already-materialized frame packet from the 16-slot transition cache.
+// The packet uses the same 0x10-byte header + dense/sparse payload codec proved
+// in Phase 10. Endpoint B remains an ordinary native sequence/frame. The span
+// may contain the entire 0x800-byte cache slot; the packet header bounds the
+// bytes actually consumed.
+Rac1MobyPoseResult decodeRac1MobyPoseInterpolatedFromPacket(
+    std::span<const std::uint8_t> framePacketA,
+    std::span<const std::uint8_t> core,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t packetSequenceIndex,
+    std::uint8_t packetFrameIndex,
+    std::uint8_t nextSequenceIndex,
+    std::uint8_t nextFrameIndex,
+    float alpha);
+
+// Phase 11.3 direct live-state path: Retail FUN_0020EDE8 consumes moby+0x68
+// and +0x6c as frame-packet pointers directly. Some proved Retail producers
+// repoint both fields independently of the sequence tables, so native live
+// decoding needs the same packet-to-packet operation without inventing a
+// sequence-table fallback.
+Rac1MobyPoseResult decodeRac1MobyPoseInterpolatedFromPackets(
+    std::span<const std::uint8_t> framePacketA,
+    std::span<const std::uint8_t> framePacketB,
+    const Rac1MobyAnimationClass& cls,
+    std::uint8_t packetSequenceIndex,
+    std::uint8_t packetFrameIndex,
+    std::uint8_t nextSequenceIndex,
     std::uint8_t nextFrameIndex,
     float alpha);
 
