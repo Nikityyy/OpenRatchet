@@ -11,7 +11,7 @@ struct VerifiedCallBehavior {
     uint32_t requestSize;
     bool requireRequestWords;
     uint32_t requestWord0;
-    std::array<uint32_t, 4> payloadWords;
+    std::array<uint32_t, kSifRpcCapturedPayloadWordCount> payloadWords;
     bool requireAllZeroRequest = false;
     bool zeroFillResponse = false;
 };
@@ -21,7 +21,7 @@ struct VerifiedCallBehavior {
 // 0x121304; startup service calls at EE 0x1213f8, 0x120be4, and 0x12167c.
 // Native IOP execution should eventually replace this table by supplying the
 // responses.
-constexpr std::array<VerifiedCallBehavior, 10> kVerifiedCallBehaviors{{
+constexpr std::array<VerifiedCallBehavior, 8> kVerifiedCallBehaviors{{
     {0x80000592u, 0x00u, 0x10u, 0u, false, 0u, {1u, 0x21du, 0x21du, 0u}},
     {0x8000059au, 0x00u, 0x04u, 0u, false, 0u, {2u, 0u, 0u, 0u}},
     {0x80000593u, 0x22u, 0x04u, 0u, false, 0u, {1u, 0u, 0u, 0u}},
@@ -31,9 +31,6 @@ constexpr std::array<VerifiedCallBehavior, 10> kVerifiedCallBehaviors{{
     // the callback clears client 0x132490 only after this descriptor. Native
     // preserves the service/function/length shape but owns its request words.
     {0x80000595u, 0x01u, 0u, 0x18u, false, 0u, {0u, 0u, 0u, 0u}},
-    // PCSX2 callback capture: service 0x80000400 function 1 sends 0x30
-    // zeroed bytes and returns a four-byte zero result to client 0x159a00.
-    {0x80000400u, 0x01u, 0x04u, 0x30u, true, 0u, {0u, 0u, 0u, 0u}},
     // PCSX2 startup capture: client 0x158400, function 0xff, receive 0x158200
     // (4 bytes). The IOP also leaves three service-private words beyond the
     // declared four-byte SIF transfer; the caller consumes only this first word.
@@ -41,12 +38,6 @@ constexpr std::array<VerifiedCallBehavior, 10> kVerifiedCallBehaviors{{
     // PCSX2 startup capture at EE 0x11cd2c: a 0x200-byte request transported
     // to the bound remote buffer begins with 0x53300 and returns {0x19, 0}.
     {0x80000006u, 0x06u, 0x08u, 0x200u, true, 0x53300u, {0x19u, 0u, 0u, 0u}},
-    // One reset boot captured the complete version query at EE 0x1244f0:
-    // service 0x80000900 function 0x80000963 sends 0x400 zero bytes and
-    // receives 0x0202 followed by 0x3fc zero bytes. Generated 0x124600 then
-    // requires the packed major version (bits 8..15) to equal 2.
-    {0x80000900u, 0x80000963u, 0x400u, 0x400u, false, 0u,
-     {0x00000202u, 0u, 0u, 0u}, true, true},
 }};
 
 // Generated FUN_0011c8c8 and FUN_0011c938 are the EE wrappers for the
@@ -56,6 +47,7 @@ constexpr std::array<VerifiedCallBehavior, 10> kVerifiedCallBehaviors{{
 // base only after its matching free. Replace this conservative model when
 // native IOP/Heap_lib execution owns the service.
 constexpr uint32_t kVerifiedIopHeapBase = 0x00053300u;
+
 }  // namespace
 
 const char* sifRpcCallDispositionName(SifRpcCallDisposition disposition) {
@@ -103,8 +95,9 @@ void SifRpcTransport::recordBinding(uint32_t clientAddress, uint32_t serviceId) 
 void SifRpcTransport::recordOutboundPayload(
     uint32_t remoteAddress,
     uint32_t size,
-    const std::array<uint32_t, 4>& payloadWords,
-    bool payloadAllZero) {
+    const std::array<uint32_t, kSifRpcCapturedPayloadWordCount>& payloadWords,
+    bool payloadAllZero,
+    bool payloadTailAfterCapturedWordsAllZero) {
     if (remoteAddress == 0u || size == 0u) {
         return;
     }
@@ -112,7 +105,8 @@ void SifRpcTransport::recordOutboundPayload(
     OutboundPayload* freePayload = nullptr;
     for (OutboundPayload& payload : outboundPayloads_) {
         if (payload.remoteAddress == remoteAddress) {
-            payload = {remoteAddress, size, payloadWords, payloadAllZero};
+            payload = {remoteAddress, size, payloadWords, payloadAllZero,
+                       payloadTailAfterCapturedWordsAllZero};
             return;
         }
         if (freePayload == nullptr && payload.remoteAddress == 0u) {
@@ -120,7 +114,8 @@ void SifRpcTransport::recordOutboundPayload(
         }
     }
     if (freePayload != nullptr) {
-        *freePayload = {remoteAddress, size, payloadWords, payloadAllZero};
+        *freePayload = {remoteAddress, size, payloadWords, payloadAllZero,
+                        payloadTailAfterCapturedWordsAllZero};
     }
 }
 
@@ -158,12 +153,15 @@ SifRpcCallResponse SifRpcTransport::resolveCall(uint32_t clientAddress,
                 response.requestPayloadSize = payload.size;
                 response.requestPayloadWords = payload.payloadWords;
                 response.requestPayloadAllZero = payload.allBytesZero;
+                response.requestPayloadTailAfterCapturedWordsAllZero =
+                    payload.tailAfterCapturedWordsAllZero;
                 break;
             }
         }
     }
 
     response.disposition = SifRpcCallDisposition::UnsupportedShape;
+
     if (response.serviceId == 0x80000003u && (function == 1u || function == 2u)) {
         if (receiveSize != 4u) {
             return response;

@@ -2,12 +2,17 @@
 
 #include "game/native_replacements.h"
 #include "game/native_services.h"
+#include "game/rac1_live_state.h"
 #include "guest_overrides.h"
 #include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <optional>
+#include <span>
 
 #if defined(_M_X64) || defined(__SSE__)
 #include <immintrin.h>
@@ -48,13 +53,107 @@ void installStage(PS2Runtime& fallback,
               << " install_errors=" << summary.failed << '\n';
 }
 
+struct LiveMobySnapshotSignature {
+    game::Rac1LiveMobyPoolStatus status =
+        game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
+    std::uint32_t poolBase = 0u;
+    std::uint32_t poolLastSlot = 0u;
+    std::size_t terminatorSlot = 0u;
+    std::size_t slotsBeforeTerminator = 0u;
+    std::size_t traversedMobyCount = 0u;
+    std::size_t skippedNegativeStateCount = 0u;
+    std::size_t ratchetCandidateCount = 0u;
+
+    bool operator==(const LiveMobySnapshotSignature&) const = default;
+};
+
+LiveMobySnapshotSignature liveMobySignature(
+    const game::Rac1LiveMobyPoolSnapshot& snapshot) {
+    return {
+        snapshot.status,
+        snapshot.poolBase,
+        snapshot.poolLastSlot,
+        snapshot.terminatorSlot,
+        snapshot.slotsBeforeTerminator,
+        snapshot.traversedMobyCount,
+        snapshot.skippedNegativeStateCount,
+        snapshot.ratchetCandidateCount,
+    };
+}
+
+void logLiveMobySnapshot(const game::Rac1LiveMobyPoolSnapshot& snapshot) {
+    using Layout = game::Rac1LiveMobyLayout;
+
+    std::cerr << "[OpenRatchet:live:moby]"
+              << " source=guest-rdram"
+              << " capacity=" << Layout::kCapacity;
+
+    if (snapshot.status != game::Rac1LiveMobyPoolStatus::PoolNotInitialized) {
+        std::cerr << " pool=0x" << std::hex << snapshot.poolBase
+                  << " last=0x" << snapshot.poolLastSlot << std::dec;
+    }
+
+    if (snapshot.status == game::Rac1LiveMobyPoolStatus::Ok) {
+        const std::size_t accounted =
+            snapshot.traversedMobyCount + snapshot.skippedNegativeStateCount;
+        const std::size_t unaccounted =
+            snapshot.slotsBeforeTerminator >= accounted
+                ? snapshot.slotsBeforeTerminator - accounted
+                : accounted - snapshot.slotsBeforeTerminator;
+
+        std::cerr << " terminatorSlot=" << snapshot.terminatorSlot
+                  << " slotsBeforeTerminator=" << snapshot.slotsBeforeTerminator
+                  << " traversed=" << snapshot.traversedMobyCount
+                  << " skipped=" << snapshot.skippedNegativeStateCount
+                  << " ratchetCandidates=" << snapshot.ratchetCandidateCount
+                  << " records=" << snapshot.records.size()
+                  << " accounted=" << accounted
+                  << " unaccounted=" << unaccounted;
+    }
+
+    std::cerr << " status=" << game::rac1LiveMobyPoolStatusName(snapshot.status)
+              << '\n';
+}
+
 } // namespace
 
 struct OpenRatchetRuntime::Impl {
     platform::NativeVfs vfs;
     PS2Runtime eeFallback;
     runtime::NativeReplacementRegistry replacements;
+    std::optional<LiveMobySnapshotSignature> lastLiveMobySignature;
+    std::uint64_t liveMobyPresentationCount = 0u;
     bool initialized = false;
+
+    void inspectLiveMobyState(PS2Runtime& runtime) {
+        // Step 11.2 is observation-only. Sample immediately, then once per 60
+        // host presentation callbacks to avoid perturbing fallback execution.
+        const std::uint64_t presentation = liveMobyPresentationCount++;
+        if (presentation != 0u && (presentation % 60u) != 0u) {
+            return;
+        }
+
+        game::Rac1LiveMobyPoolSnapshot snapshot;
+        {
+            // The fallback game thread mutates RDRAM while it executes. Use the
+            // runtime's existing guest-execution handoff so the snapshot is a
+            // coherent read rather than a host/guest data race. Logging occurs
+            // after this scope so stderr I/O never holds the execution mutex.
+            PS2Runtime::GuestExecutionScope guestExecution(&runtime);
+            const std::span<const std::uint8_t> guestRdram(
+                runtime.memory().getRDRAM(),
+                static_cast<std::size_t>(PS2_RAM_SIZE));
+            snapshot = game::inspectRac1LiveMobyPool(guestRdram);
+        }
+
+        const LiveMobySnapshotSignature signature = liveMobySignature(snapshot);
+        if (lastLiveMobySignature && *lastLiveMobySignature == signature) {
+            return;
+        }
+
+        lastLiveMobySignature = signature;
+        logLiveMobySnapshot(snapshot);
+    }
 };
 
 OpenRatchetRuntime::OpenRatchetRuntime()
@@ -89,6 +188,19 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
     installStage(impl_->eeFallback,
                  impl_->replacements,
                  runtime::NativeReplacementStage::Bootstrap);
+
+    // PS2Runtime currently exposes its host presentation loop through this
+    // callback boundary. OpenRatchet uses it only as a temporary read-only
+    // sampling clock while PS2Runtime remains the EE fallback executor. The
+    // no-op init/shutdown callbacks are required by PS2Runtime to enable draw
+    // callbacks; no debug UI is created here.
+    impl_->eeFallback.setDebugUiCallbacks(
+        [](PS2Runtime&, void*) {},
+        [](PS2Runtime& runtime, void* userData) {
+            static_cast<Impl*>(userData)->inspectLiveMobyState(runtime);
+        },
+        [](PS2Runtime&, void*) {},
+        impl_.get());
 
     if (!impl_->eeFallback.initialize("OpenRatchet")) {
         std::cerr << "PS2 fallback runtime initialization failed\n";

@@ -295,7 +295,8 @@ void installGuestGraphicsBridge(PS2Runtime& runtime) {
 void guest_118b20(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     constexpr uint32_t kDescriptorSize = 0x10u;
     constexpr uint32_t kMaximumDescriptors = 32u;
-    constexpr uint32_t kCapturedPayloadBytes = 16u;
+    constexpr uint32_t kCapturedPayloadBytes =
+        static_cast<uint32_t>(kSifRpcCapturedPayloadWordCount * sizeof(uint32_t));
 
     const uint32_t descriptorList = GPR_U32(ctx, 4);
     const uint32_t descriptorCount = GPR_U32(ctx, 5);
@@ -313,17 +314,27 @@ void guest_118b20(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 !isRangeWithin(source, std::min(size, kCapturedPayloadBytes), kGuestMemorySize)) {
                 continue;
             }
-            std::array<uint32_t, 4> payloadWords{};
+            std::array<uint32_t, kSifRpcCapturedPayloadWordCount> payloadWords{};
             for (uint32_t offset = 0u; offset + sizeof(uint32_t) <= size &&
                  offset < kCapturedPayloadBytes; offset += sizeof(uint32_t)) {
                 payloadWords[offset / sizeof(uint32_t)] = READ32(source + offset);
             }
-            bool payloadAllZero = isRangeWithin(source, size, kGuestMemorySize);
-            for (uint32_t offset = 0u; payloadAllZero && offset < size; ++offset) {
-                payloadAllZero = READ8(source + offset) == 0u;
+            const bool fullPayloadInRange = isRangeWithin(source, size, kGuestMemorySize);
+            bool payloadAllZero = fullPayloadInRange;
+            bool payloadTailAfterCapturedWordsAllZero = fullPayloadInRange;
+            if (fullPayloadInRange) {
+                for (uint32_t offset = 0u; offset < size; ++offset) {
+                    if (READ8(source + offset) != 0u) {
+                        payloadAllZero = false;
+                        if (offset >= kCapturedPayloadBytes) {
+                            payloadTailAfterCapturedWordsAllZero = false;
+                        }
+                    }
+                }
             }
             g_sifRpcTransport.recordOutboundPayload(
-                destination, size, payloadWords, payloadAllZero);
+                destination, size, payloadWords, payloadAllZero,
+                payloadTailAfterCapturedWordsAllZero);
         }
     }
 
@@ -409,6 +420,7 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 clientAddress, requestCommand, receiveBuffer, receiveSize,
                 remoteSendBuffer, sendSize);
 
+
             const bool canCompleteCall = canCompleteSifRpcCallWithoutPayload(
                 receiveBuffer, receiveSize, callResponse.completed);
 
@@ -437,10 +449,20 @@ void guest_11a948(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                           << " requestPayloadSize=0x" << callResponse.requestPayloadSize
                           << " requestPayloadAllZero="
                           << (callResponse.requestPayloadAllZero ? 1u : 0u)
+                          << " requestPayloadTailZero="
+                          << (callResponse.requestPayloadTailAfterCapturedWordsAllZero ? 1u : 0u)
                           << " requestWords=0x" << callResponse.requestPayloadWords[0]
                           << ",0x" << callResponse.requestPayloadWords[1]
                           << ",0x" << callResponse.requestPayloadWords[2]
                           << ",0x" << callResponse.requestPayloadWords[3]
+                          << " requestWords4_7=0x" << callResponse.requestPayloadWords[4]
+                          << ",0x" << callResponse.requestPayloadWords[5]
+                          << ",0x" << callResponse.requestPayloadWords[6]
+                          << ",0x" << callResponse.requestPayloadWords[7]
+                          << " requestWords8_11=0x" << callResponse.requestPayloadWords[8]
+                          << ",0x" << callResponse.requestPayloadWords[9]
+                          << ",0x" << callResponse.requestPayloadWords[10]
+                          << ",0x" << callResponse.requestPayloadWords[11]
                           << " receive=0x" << receiveBuffer
                           << " receiveSize=0x" << receiveSize
                           << " status=0x" << packetStatus

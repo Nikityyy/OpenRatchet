@@ -120,6 +120,8 @@ Write-RecentMatches 'Recent GS/GIF packets and registers' $stdoutLines '\[gs:(gi
 Write-RecentMatches 'Recent frame uploads' $stdoutLines '\[frame:upload\]' $TailLines
 Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLines
 Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF(?::RPC)?\].*(injected completion|deferred data-bearing CALL|disposition=)' $TailLines
+Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenRatchet:platform\]' $TailLines
+Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
 Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
 Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
 Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines

@@ -59,17 +59,12 @@ int main() {
                                        std::numeric_limits<size_t>::max()),
                 "maximum offset with zero size succeeds in a larger host buffer");
 
-    constexpr std::array<ResponseCase, 10> kMappedResponses{{
+    constexpr std::array<ResponseCase, 5> kMappedResponses{{
         {0x80000592u, 0x3f570u, 0x3fb20u},
         {0x8000059au, 0x3f648u, 0x3fc50u},
         {0x80000593u, 0x410f0u, 0x417c0u},
         {0x80000595u, 0x41060u, 0x41bd0u},
         {0x80000006u, 0x220d0u, 0u},
-        {0x80000900u, 0x60f38u, 0u},
-        {0x8000091bu, 0x61338u, 0u},
-        {0x80000400u, 0x5ad00u, 0u},
-        {0x00123456u, 0x56500u, 0u},
-        {0x00123457u, 0xd6e30u, 0u},
     }};
 
     ratchet::SifStartupResponseResolver resolver;
@@ -81,6 +76,14 @@ int main() {
         const auto unknown = resolver.resolve(command);
         test.expect(!unknown.completed && unknown.result0 == 0u && unknown.result1 == 0u,
                     "unknown command remains incomplete with zero results");
+    }
+
+    for (uint32_t command : {0x80000900u, 0x8000091bu, 0x80000400u,
+                             0x00123456u, 0x00123457u}) {
+        const auto platformOwned = resolver.resolve(command);
+        test.expect(!platformOwned.completed && platformOwned.result0 == 0u &&
+                        platformOwned.result1 == 0u,
+                    "native-owned controller/save/audio service is absent from legacy SIF startup mappings");
     }
 
     const auto firstCommand3 = resolver.resolve(0x80000003u);

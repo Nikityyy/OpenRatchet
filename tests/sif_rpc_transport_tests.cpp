@@ -171,19 +171,6 @@ int main() {
     test.expect(!transport.resolveCall(0x132490u, 0x01u, 0u, 0u, 0x41bd0u, 0x14u).completed,
                 "zero-receive service call rejects a mismatched outbound length");
 
-    transport.recordBinding(0x159a00u, 0x80000400u);
-    transport.recordOutboundPayload(0x5ad00u, 0x30u, {0u, 0u, 0u, 0u});
-    call = transport.resolveCall(0x159a00u, 0x01u, 0x15afc0u, 0x04u,
-                                 0x5ad00u, 0x30u);
-    test.expect(call.completed && call.serviceId == 0x80000400u &&
-                    call.payloadSize == 0x04u && call.payloadWords[0] == 0u &&
-                    call.requestPayloadAvailable && call.requestPayloadSize == 0x30u,
-                "captured service 0x80000400 function 1 returns its zero result");
-    transport.recordOutboundPayload(0x5ad00u, 0x30u, {1u, 0u, 0u, 0u});
-    test.expect(!transport.resolveCall(0x159a00u, 0x01u, 0x15afc0u, 0x04u,
-                                      0x5ad00u, 0x30u).completed,
-                "service 0x80000400 function 1 rejects an uncaptured request word");
-
     transport.recordBinding(0x158400u, 0x80000006u);
     call = transport.resolveCall(0x158400u, 0xffu, 0x158200u, 0x4u);
     test.expect(call.completed && call.serviceId == 0x80000006u &&
@@ -256,31 +243,28 @@ int main() {
                 "IOP heap service reuses the verified base after the matching free");
 
     transport.recordBinding(0x15b008u, 0x80000900u);
-    transport.recordOutboundPayload(0x60f38u, 0x400u,
-                                    {0x80000963u, 0x11223344u, 0x55667788u, 0x99aabbccu});
+    transport.recordOutboundPayload(0x60f38u, 0x400u, {0u, 0u, 0u, 0u}, true, true);
     call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
                                  0x60f38u, 0x400u);
-    test.expect(!call.completed && call.serviceId == 0x80000900u &&
-                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch &&
-                    call.requestPayloadAvailable && call.requestPayloadSize == 0x400u &&
-                    call.requestPayloadWords[0] == 0x80000963u &&
-                    call.requestPayloadWords[3] == 0x99aabbccu,
-                "service version query rejects a captured nonzero request");
-    transport.recordOutboundPayload(0x60f38u, 0x400u, {0u, 0u, 0u, 0u}, true);
-    call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
-                                 0x60f38u, 0x400u);
-    test.expect(call.completed && call.payloadSize == 0x400u &&
-                    call.payloadWords[0] == 0x202u && call.zeroFillPayload &&
-                    call.requestPayloadAvailable && call.requestPayloadAllZero &&
-                    call.disposition == ratchet::SifRpcCallDisposition::Completed,
-                "service 0x80000900 version query matches the full zero request");
-    transport.recordOutboundPayload(0x60f38u, 0x400u, {0u, 0u, 0u, 0u}, false);
-    call = transport.resolveCall(0x15b008u, 0x80000963u, 0x15b080u, 0x400u,
-                                 0x60f38u, 0x400u);
-    test.expect(!call.completed && call.requestPayloadAvailable &&
-                    !call.requestPayloadAllZero &&
-                    call.disposition == ratchet::SifRpcCallDisposition::RequestPayloadMismatch,
-                "service version query rejects a request not proven entirely zero");
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape,
+                "DBCMAN is no longer synthesized by legacy SIF transport");
+
+    transport.recordBinding(0x159a00u, 0x80000400u);
+    transport.recordOutboundPayload(0x5ad00u, 0x30u, {0u, 0u, 0u, 0u}, true, true);
+    call = transport.resolveCall(0x159a00u, 0xfeu, 0x15afc0u, 0x0cu,
+                                 0x5ad00u, 0x30u);
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape,
+                "MCSERV is no longer synthesized by legacy SIF transport");
+
+    transport.recordBinding(0x15ebc0u, 0x00123456u);
+    transport.recordOutboundPayload(0x56500u, 0x4u, {0x137b00u, 0u, 0u, 0u}, true, true);
+    call = transport.resolveCall(0x15ebc0u, 0u, 0x133100u, 0x0cu,
+                                 0x56500u, 0x4u);
+    test.expect(!call.completed &&
+                    call.disposition == ratchet::SifRpcCallDisposition::UnsupportedShape,
+                "989snd is no longer synthesized by legacy SIF transport");
 
     transport.reset();
     test.expect(!transport.resolveCall(0x159968u, 0u, 0x1324c0u, 0x10u).completed,

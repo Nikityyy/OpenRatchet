@@ -26,6 +26,22 @@ Use `-FetchTools` to clone supported external repositories into `third_party/`.
 Ghidra is intentionally not downloaded automatically because the extension must
 match the installed Ghidra version.
 
+`third_party/PS2Recomp` is an immutable pinned dependency, not a place for
+OpenRatchet-specific edits. The required revision is recorded in
+`patches/ps2recomp-base-revision.txt`. During native configuration OpenRatchet
+verifies that checkout is both at the pinned revision and completely clean, then
+archives committed `HEAD` into `build/native/_openratchet/PS2Recomp` and applies
+the repository-owned compatibility patch there. The source checkout therefore
+stays byte-for-byte upstream-clean; build-local patched files are disposable
+artifacts under the ignored `build/` tree.
+
+`tools/build-native.ps1` also tracks SHA-256 content for dirty build inputs. A
+patch-extracted source whose timestamp is older than an existing object is
+touched once when its content first changes, but unchanged dirty files are not
+touched again on every validation run. This preserves safe ZIP-based patching
+without repeatedly invalidating the PCH and rebuilding hundreds of generated
+`FUN_*` translation units.
+
 ## Current native boundary
 
 `src/runtime/openratchet_runtime.*` is the top-level host owner. Address-based
@@ -116,7 +132,116 @@ the Phase-11 game-state bridge rather than guessed by the viewer. Phase 10 is
 complete: Windows acceptance validates all ordinary Level-0 skeletal frames and
 all 2,558 Ratchet frames through the native pose/skinning pipeline, plus a
 visibly continuous Ratchet loop using the retail final-to-first frame rule.
-Phase 11 is therefore the next development boundary.
+Phase 11 is now in progress. Its first boundary is intentionally read-only:
+`src/game/rac1_live_state.*` codifies the generated retail live-Moby arena
+contract before the native renderer consumes any live state. The generated EE
+code proves a 0x4000-byte arena whose base is stored at `0x15FF18`, 0x100-byte
+records, a 64-slot hard capacity, and the signed `moby+0x20` traversal state
+where exactly `-1` terminates the retail walk. The same contract exposes only
+proved identity/animation fields (`class +0x24`, `oClass +0xA6`, frame pair
+`+0x50/+0x51`, sequence pair `+0x52/+0x53`, interpolation `+0x54`, frame
+pointers `+0x68/+0x6C`). Runtime attachment, world transforms, and camera
+ownership remain separate later Phase-11 gates rather than being inferred.
+Step 11.2 attaches that decoder to the actual fallback runtime rather than to
+captured or level-file data. `OpenRatchetRuntime` samples
+`PS2Runtime::memory().getRDRAM()` under `PS2Runtime::GuestExecutionScope`, so
+live reads occur at a coherent guest-function boundary and do not race the EE
+fallback thread. The current PS2Runtime presentation callback is only a
+transitional sampling clock: it does not select animation, modify simulation,
+or transfer renderer ownership. Runtime logs are source-labelled as
+`[OpenRatchet:live:moby]`; before retail creates the arena,
+`status=pool-not-initialized` is expected, while an initialized pool must pass
+the proved last-slot/sentinel/accounting contract. Windows acceptance of Step
+11.2 confirms exactly that pre-pool state without changing the Phase-10 viewer
+or the established runtime baseline.
+
+Phase 11 has now promoted the controller and save bootstrap above SIF instead
+of extending the temporary RPC-response table. Retail WAD2/0 descriptor 17
+(`PsIIdbcman  2500`) remains the oracle that proved the DBC success state, but
+the runtime no longer needs to bind or service `0x80000900`/`0x8000091B` during
+startup. A native replacement for `sub_00124510` reproduces exactly the proved
+0xC0 bytes of successful EE-visible DBC state at `0x15B480..0x15B53F`; the
+surrounding original game code remains intact. `FUN_00124718` is replaced only
+at the platform transaction boundary and supplies the retail first-free link
+slot to the original `sub_00124A88` state initialization.
+
+The next observed blocker, service `0x80000400` function `0xFE`, is the PS2
+memory-card initialization path. Rather than adding MCSERV packets, Phase 11
+owns the game wrapper `FUN_0020AC58`: its successful path merely allows startup
+to continue, while real card enumeration/save/load remains deliberately deferred
+to the Phase-19 native save backend. DBCMAN/MCSERV startup rows are therefore
+removed from the legacy SIF resolver. Diagnostics expose these migrations under
+`[OpenRatchet:platform]` so a runtime regression can prove that startup uses the
+native HLE boundary instead of hidden packet synthesis.
+
+Windows acceptance of that platform-bootstrap step is now complete: 16/16 tests
+pass, the Phase-10 native viewer remains unchanged, and runtime startup reaches
+the next custom bind pair `0x00123456/0x00123457`. Static inspection identifies
+that pair as Sony 989snd: `FUN_0012DA28` contains the original
+`/usr/local/989snd/ee/989snd.c` source path and performs both binds. OpenRatchet
+therefore promotes audio in the same way instead of adding another RPC case.
+
+The Phase-11 audio boundary owns the game startup wrapper `sub_0022C8D0` and
+reproduces only its direct game-visible initialization state (plus the direct
+manager state from `FUN_00215390`). All 989snd/SPU/IOP audio work is deferred to
+Phase 18 NativeAudio. The `0x00123456/0x00123457` startup bind rows are removed
+from legacy SIF, and negative tests make that ownership permanent. Windows
+acceptance for that bootstrap is complete. After the next 11.2E storage boundary,
+the suite is 18/18 and the runtime reports 15/15 replacements with no install
+errors.
+
+The observed `pc=0x216858` was traced past that bootstrap instead of being
+answered with another RPC packet. It is the wait loop inside retail
+`sub_00216828`, a synchronous game-facing sector loader implemented on PS2 via
+989snd. The startup call is exact: `sub_001E9338` asks it to read TOC entry
+`wads[0]` (`start=1506`, `length=9`) into guest `0x1AABC0`; the helper's return
+value is `sectorCount << 11`, proving the 2048-byte-sector contract. The
+extracted WAD0 is exactly 18,432 bytes. Phase 11.2E therefore lifts
+`0x216828` to the existing `NativeVfs::readSectors` boundary. Windows verifies
+the exact `0x5E2/0x9 -> 0x1AABC0` transfer with `status=ok`; the old blocker is
+gone. This bypasses only the PS2-specific 989snd transport, preserves the
+original callers and downstream level/game initialization, does not fabricate
+the Moby pool, and has no hidden 989snd/SIF fallback for unresolved ranges.
+
+The next Windows blocker, `pc=0x11BA40`, was then resolved as Sony FILEIO
+initialization retrying a BIND to service `0x80000001`. Retail reaches FILEIO
+here only to read `rom0:ROMVER` for two platform-identification/capability
+queries: `libgraph::checkModelVersion` (`0x121A18`) and `libscf::IsT10K`
+(`0x12D200`). OpenRatchet now answers those questions at their native semantic
+boundary instead of adding FILEIO RPC synthesis: syscall `0x80`
+`_GetGsDxDyOffset` is unavailable in the fallback host, and the retail PC port
+is not a Sony DTL-T10000 development TOOL. Local full-link/CTest validation is
+18/18; the Retail-extract run installs 17/17 runtime replacements, executes the
+native `IsT10K` probe, emits no FILEIO `0x80000001` bind, and advances past
+`0x11BA40`. The Moby pool is still observation-only and must become
+`[OpenRatchet:live:moby] ... status=ok` authentically before Step 11.3 begins.
+
+Phase 11.2 is now structurally complete. The remaining startup work was resolved
+at high-level native boundaries rather than by extending packet emulation: the
+game memory-card preflight selects its existing non-blocking result until Phase
+19, the complete MPEG/movie wrapper is deferred to Phase 17, and the level
+sound-bank wrapper is deferred to Phase 18. The asynchronous game-sector helper
+`FUN_00216788` (`0x216788`) now shares the same `NativeVfs::readSectors` ownership
+as synchronous wrapper `0x216828`; the decisive Level-0 request is exactly
+`wads2[69]` (`0x38F6`, `0x834` sectors, `0x41A000` bytes).
+
+A separate PS2Recomp runtime defect was fixed at its owning runtime boundary:
+synchronous DMAC handlers previously used a synthetic top-of-RDRAM stack that
+exactly overlapped Ratchet's declared 0x4000-byte main-thread stack. They now
+inherit the interrupted guest SP while retaining isolated registers, with a
+dedicated SIF-DMA regression that fails before and passes after the correction.
+OpenRatchet carries that correction as a repository-owned compatibility patch
+applied only to a build-local archive of the pinned, clean PS2Recomp checkout;
+`third_party/PS2Recomp` itself remains untouched. With the corruption removed,
+Retail itself reaches `sub_001E9B10`, publishes the authentic Moby arena globals
+`0x15FF18/0x15FF20`, and `[OpenRatchet:live:moby]` reaches `status=ok` with
+`unaccounted=0`. No Moby pool or pool globals are synthesized. Step 11.3 can now
+drive native animation selection from those live Retail records.
+
+AI-assisted repository work follows [`AI_WORKFLOW.md`](AI_WORKFLOW.md): maximize
+verified progress per change, prefer shared root causes over serial symptom fixes,
+and stop startup archaeology as soon as the current semantic milestone gate is
+reached.
 
 ## Current prerequisites
 

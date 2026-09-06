@@ -22,9 +22,22 @@ set(RATCHET_BOOT_ELF "${CMAKE_CURRENT_SOURCE_DIR}/build/extracted/PS2_MAIN.ELF" 
 
 if(NOT PS2RECOMP_SOURCE_DIR OR NOT EXISTS "${PS2RECOMP_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
-        "PS2RECOMP_SOURCE_DIR must point at a PS2Recomp checkout. "
+        "PS2RECOMP_SOURCE_DIR must point at the pristine pinned PS2Recomp checkout. "
         "Run tools/bootstrap.ps1 or pass -DPS2RECOMP_SOURCE_DIR=...")
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/PreparePs2Recomp.cmake")
+set(OPENRATCHET_PS2RECOMP_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/ps2recomp-synchronous-dmac-interrupt-stack.patch")
+set(OPENRATCHET_PS2RECOMP_REVISION
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/ps2recomp-base-revision.txt")
+set(OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR
+    "${CMAKE_BINARY_DIR}/_openratchet/PS2Recomp")
+openratchet_prepare_ps2recomp(
+    "${PS2RECOMP_SOURCE_DIR}"
+    "${OPENRATCHET_PS2RECOMP_PATCH}"
+    "${OPENRATCHET_PS2RECOMP_REVISION}"
+    "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}")
 
 if(NOT EXISTS "${RATCHET_GENERATED_DIR}")
     message(FATAL_ERROR
@@ -40,7 +53,7 @@ set(PS2X_ENABLE_FFMPEG OFF CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_RUNTIME_LOGS ON CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_AGRESSIVE_LOGS ON CACHE BOOL "" FORCE)
 set(PS2X_DEFAULT_BOOT_ELF "${RATCHET_BOOT_ELF}" CACHE STRING "" FORCE)
-add_subdirectory("${PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp" EXCLUDE_FROM_ALL)
+add_subdirectory("${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp" EXCLUDE_FROM_ALL)
 
 file(GLOB_RECURSE RATCHET_GENERATED_SOURCES CONFIGURE_DEPENDS
     "${RATCHET_GENERATED_DIR}/*.cpp")
@@ -67,7 +80,10 @@ add_executable(openratchet
     src/game/native_services.cpp
     src/game/native_io.cpp
     src/game/native_assets.cpp
+    src/game/native_platform_bootstrap.cpp
+    src/game/native_audio_bootstrap.cpp
     src/game/native_replacements.cpp
+    src/game/rac1_live_state.cpp
     src/guest_overrides.cpp
     src/sif_rpc_transport.cpp
     src/sif_startup_responses.cpp
@@ -76,14 +92,14 @@ add_executable(openratchet
 target_include_directories(openratchet PRIVATE
     src
     "${RATCHET_GENERATED_DIR}"
-    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
-    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel")
+    "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include"
+    "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel")
 target_precompile_headers(openratchet PRIVATE
-    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h"
+    "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h"
     "${RATCHET_GENERATED_DIR}/ps2_recompiled_functions.h"
     "${RATCHET_GENERATED_DIR}/ps2_recompiled_stubs.h"
-    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_syscalls.h"
-    "${PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_stubs.h")
+    "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include/ps2_syscalls.h"
+    "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include/ps2_stubs.h")
 target_link_libraries(openratchet PRIVATE ps2_runtime)
 target_compile_definitions(openratchet PRIVATE
     RATCHET_BOOT_ELF="${RATCHET_BOOT_ELF}")
@@ -110,11 +126,49 @@ if(BUILD_TESTING)
     target_include_directories(native_replacements_tests PRIVATE src)
     add_test(NAME native_replacements COMMAND native_replacements_tests)
 
+    add_executable(rac1_live_state_tests
+        tests/rac1_live_state_tests.cpp
+        src/game/rac1_live_state.cpp)
+    target_include_directories(rac1_live_state_tests PRIVATE src)
+    add_test(NAME rac1_live_state COMMAND rac1_live_state_tests)
+
+    add_executable(native_platform_bootstrap_tests
+        tests/native_platform_bootstrap_tests.cpp
+        src/game/native_platform_bootstrap.cpp)
+    target_include_directories(native_platform_bootstrap_tests PRIVATE
+        src
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xIOP/include")
+    add_test(NAME native_platform_bootstrap COMMAND native_platform_bootstrap_tests)
+
+    add_executable(native_audio_bootstrap_tests
+        tests/native_audio_bootstrap_tests.cpp
+        src/game/native_audio_bootstrap.cpp)
+    target_include_directories(native_audio_bootstrap_tests PRIVATE
+        src
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xIOP/include")
+    add_test(NAME native_audio_bootstrap COMMAND native_audio_bootstrap_tests)
+
     add_executable(native_vfs_tests
         tests/native_vfs_tests.cpp
         src/platform/native_vfs.cpp)
     target_include_directories(native_vfs_tests PRIVATE src)
     add_test(NAME native_vfs COMMAND native_vfs_tests)
+
+    add_executable(native_io_tests
+        tests/native_io_tests.cpp
+        src/game/native_io.cpp
+        src/game/native_services.cpp
+        src/platform/native_vfs.cpp)
+    target_include_directories(native_io_tests PRIVATE
+        src
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xIOP/include")
+    add_test(NAME native_io COMMAND native_io_tests)
 
     add_executable(rac1_level_tests
         tests/rac1_level_tests.cpp

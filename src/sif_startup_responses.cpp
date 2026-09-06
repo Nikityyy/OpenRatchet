@@ -10,17 +10,12 @@ struct ResponseMapping {
     uint32_t result1;
 };
 
-constexpr std::array<ResponseMapping, 10> kStartupResponseMappings{{
+constexpr std::array<ResponseMapping, 5> kStartupResponseMappings{{
     {0x80000592u, 0x3f570u, 0x3fb20u},
     {0x8000059au, 0x3f648u, 0x3fc50u},
     {0x80000593u, 0x410f0u, 0x417c0u},
     {0x80000595u, 0x41060u, 0x41bd0u},
     {0x80000006u, 0x220d0u, 0u},
-    {0x80000900u, 0x60f38u, 0u},
-    {0x8000091bu, 0x61338u, 0u},
-    {0x80000400u, 0x5ad00u, 0u},
-    {0x00123456u, 0x56500u, 0u},
-    {0x00123457u, 0xd6e30u, 0u},
 }};
 }  // namespace
 

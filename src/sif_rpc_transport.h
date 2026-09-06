@@ -1,9 +1,12 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace ratchet {
+
+inline constexpr std::size_t kSifRpcCapturedPayloadWordCount = 12u;
 
 enum class SifRpcCallDisposition {
     Completed,
@@ -34,12 +37,13 @@ struct SifRpcCallResponse {
     bool completed = false;
     uint32_t serviceId = 0u;
     uint32_t payloadSize = 0u;
-    std::array<uint32_t, 4> payloadWords{};
+    std::array<uint32_t, kSifRpcCapturedPayloadWordCount> payloadWords{};
     SifRpcCallDisposition disposition = SifRpcCallDisposition::UnboundClient;
     bool requestPayloadAvailable = false;
     uint32_t requestPayloadSize = 0u;
-    std::array<uint32_t, 4> requestPayloadWords{};
+    std::array<uint32_t, kSifRpcCapturedPayloadWordCount> requestPayloadWords{};
     bool requestPayloadAllZero = false;
+    bool requestPayloadTailAfterCapturedWordsAllZero = false;
     bool zeroFillPayload = false;
 };
 
@@ -51,8 +55,9 @@ public:
     void recordBinding(uint32_t clientAddress, uint32_t serviceId);
     void recordOutboundPayload(uint32_t remoteAddress,
                                uint32_t size,
-                               const std::array<uint32_t, 4>& payloadWords,
-                               bool payloadAllZero = false);
+                               const std::array<uint32_t, kSifRpcCapturedPayloadWordCount>& payloadWords,
+                               bool payloadAllZero = false,
+                               bool payloadTailAfterCapturedWordsAllZero = false);
     SifRpcCallResponse resolveCall(uint32_t clientAddress,
                                   uint32_t function,
                                   uint32_t receiveBuffer,
@@ -70,8 +75,9 @@ private:
     struct OutboundPayload {
         uint32_t remoteAddress = 0u;
         uint32_t size = 0u;
-        std::array<uint32_t, 4> payloadWords{};
+        std::array<uint32_t, kSifRpcCapturedPayloadWordCount> payloadWords{};
         bool allBytesZero = false;
+        bool tailAfterCapturedWordsAllZero = false;
     };
 
     std::array<Binding, 16> bindings_{};

@@ -2,6 +2,13 @@
 
 OpenRatchet is a native PC port, not a title-specific PS2 emulator.
 
+## AI engineering workflow
+
+AI agents working on this repository must also follow [`AI_WORKFLOW.md`](AI_WORKFLOW.md).
+That document governs investigation strategy and patch scope; it does not override
+this architecture or `MILESTONES.md`. In particular, prefer root-cause fixes and
+high-level native boundaries over serial transport/symptom patches.
+
 ## Ownership rule
 
 The native OpenRatchet host owns the application. PS2Recomp is a fallback
@@ -84,16 +91,146 @@ This boundary is intentionally above CDVD/SIF hardware. New known resources
 should be added to the VFS/resource layer rather than implemented as synthetic
 CDVD responses or sector-specific guest overrides.
 
+Phase 11 extends the same ownership rule to both game-facing sector-loader
+boundaries built on Sony 989snd: `FUN_00216788` (`0x216788`) starts an
+asynchronous load and `sub_00216828` (`0x216828`) wraps that helper in a
+synchronous wait. Both expose the same `(destination, sourceSector, sectorCount)`
+contract and the helper's successful result is `sectorCount << 11`. The first
+startup request is `wads[0]` (`0x5E2`, 9 sectors) into `0x1AABC0`; the later
+level-init request is exactly TOC `wads2[69]` (`0x38F6`, `0x834` sectors) into
+`0x01654000`, matching the extracted `0x41A000`-byte file byte-for-byte.
+OpenRatchet therefore owns both `0x216788` and `0x216828` through the existing
+`NativeVfs::readSectors` boundary rather than implementing 989snd transport.
+Complete indexed ranges are copied atomically and return the same
+`sectorCount * 0x800` byte count; unresolved ranges return retail failure `0`
+without partial guest-memory mutation or hidden 989snd/SIF fallback. The
+transport-private 989snd manager state at `0x1516D0` is deliberately untouched.
+
+The boot WAD is also an authoritative forensic source for game-shipped IOP
+modules when a PS2-facing API boundary must be characterized. WAD2/0 descriptor
+17 contains this build's `PsIIdbcman  2500` IOP ELF. Static analysis of that
+module proved the successful DBC initialization work snapshot and first-free
+16-slot link allocator. Phase 11 uses those facts to move the boundary *above*
+SIF: DBC startup is now native HLE, not a permanent implementation of service
+`0x80000900`. The IOP module remains an oracle, not shipping architecture.
+
 ## Temporary legacy layer
 
 `src/guest_overrides.cpp` is retained only to preserve the current verified
 boot while native subsystems are introduced. It still contains known technical
 debt: SIF response synthesis, address-specific control-flow repair, callback
-bridges, and graphics diagnostics. The WAD decompressor's scratchpad/SPR-DMAC
-bridge has been deleted; host WAD file I/O and decompression no longer belong
-in this compatibility layer. New platform features must not be added there
-unless required solely to keep the verified fallback baseline alive during a
-bounded migration.
+bridges, and graphics diagnostics. New platform services must not be added to
+that table one RPC at a time. Once a service is identified as controller/input,
+save, audio, video, filesystem, or another host-owned subsystem, migration must
+move upward to the narrowest proved EE/game API boundary and remove the
+corresponding synthetic SIF rows.
+
+Phase 11 applies that rule to DBCMAN and MCSERV. Their startup bind/response rows
+have been removed from `sif_startup_responses` / `sif_rpc_transport`; future
+calls to those services therefore cannot be silently fabricated. The WAD
+decompressor's scratchpad/SPR-DMAC bridge was already deleted, and host WAD file
+I/O/decompression likewise no longer belongs in this compatibility layer.
+
+## Native platform-bootstrap boundary
+
+`game::declareNativePlatformBootstrapReplacements` owns the Phase-11 bootstrap
+handoff for platform APIs that should never become full IOP emulation:
+
+- `sub_00124510` (`0x124510`) is the retail DBC initialization wrapper. Static
+  EE + retail DBCMAN analysis proves that its successful game-visible state is
+  the initial 0x80-byte zero work snapshot at `0x15B480` followed by the
+  16-word EE state table at `0x15B500..0x15B53F`. The native replacement writes
+  exactly this contiguous 0xC0-byte zero state, resets the native 16-slot link
+  allocator, returns the retail success value `1`, and performs no SIF bind or
+  RPC.
+- `FUN_00124718` (`0x124718`) is only the synchronous DBC link-allocation RPC
+  wrapper. The surrounding generated `sub_00124A88` continues to perform all
+  original EE-side descriptor/link-object initialization. The native boundary
+  therefore replaces only the platform transaction and returns the retail
+  first-free slot from a 16-entry allocator.
+- `FUN_0020AC58` (`0x20AC58`) is the game's memory-card startup wrapper. Its
+  successful path has no game-side state effect beyond allowing startup to
+  continue, and its caller ignores the result. Phase 11 bypasses that PS2
+  memory-card initialization explicitly; actual save/load semantics remain a
+  Phase-19 `NativeSave` responsibility rather than growing an MCSERV emulator.
+- `sub_00209168` (`0x209168`) is the later game-level memory-card preflight.
+  Retail issues libmc `sceMcGetInfo`, `sceMcSync` and `sceMcGetDir` for the
+  Ratchet save directory; its own result `0` is the existing non-blocking path,
+  while warning states eventually wait for a new controller-button edge. Since
+  persistent saves remain Phase 19, Phase 11 selects that proved retail `0`
+  outcome at the wrapper boundary without fabricating card data or pad input.
+- `FUN_0023A3B8` (`0x23A3B8`) is the complete synchronous movie/MPEG wrapper
+  (including `sceMpegInit`/teardown). Movie playback belongs to Phase 17, so
+  Phase 11 takes the wrapper's proved completed result `0` with no guest-memory
+  side effects, MPEG state, input consumption or SIF fallback.
+- `libgraph::checkModelVersion` (`0x121A18`) is not a general filesystem
+  request: Retail opens `rom0:ROMVER` only to decide whether kernel syscall
+  `0x80` (`_GetGsDxDyOffset`) exists. The bundled fallback runtime does not
+  implement syscall `0x80`, so the native host-capability probe returns false
+  and preserves libgraph's own older-kernel fallback without inventing a BIOS
+  image or FILEIO service.
+- `libscf::IsT10K` (`0x12D200`) likewise opens `rom0:ROMVER` only through
+  `GetRomName` to test whether byte four is `T`, the Sony DTL-T10000 development
+  TOOL profile. OpenRatchet runs the retail-game host profile, so the native
+  platform probe returns false. This bypasses a platform-identification file
+  read at its semantic API boundary instead of implementing FILEIO service
+  `0x80000001` through SIF.
+
+This is intentionally different from accepting arbitrary SIF calls. If later
+gameplay reaches a real controller read or save/load operation before its native
+subsystem exists, that becomes the ownership boundary for Phase 12 or Phase 19;
+it is not answered by another captured packet row.
+
+## Native audio-bootstrap boundary
+
+The same ownership rule applies to Sony 989snd. Generated `FUN_0012DA28` is not
+a game protocol: it is the bundled EE 989snd library, proven by its embedded
+`/usr/local/989snd/ee/989snd.c` source path and its binds to the custom
+`0x00123456` / `0x00123457` RPC services. OpenRatchet therefore does not add
+those services to the legacy SIF transport.
+
+Phase 11 owns the game-level startup wrapper `sub_0022C8D0` (`0x22C8D0`) through
+`game::declareNativeAudioBootstrapReplacements`. The native replacement
+reproduces the direct EE/game-visible state mutations performed by that wrapper
+and by its game-side manager initializer `FUN_00215390`, including the existing
+configuration-derived mixer fields. The later level-init wrapper `sub_0022D708`
+is also owned at this same boundary: retail synchronizes CD then enters
+`snd_BankLoadByLoc`; Phase 11 selects its existing no-bank result `0` while
+actual bank loading/streaming remains Phase 18. Calls into 989snd, SPU state, IOP
+sound banks and sound output are deliberately absent. This lets original game
+initialization proceed without turning the temporary SIF compatibility layer
+into an audio emulator.
+
+The legacy bind rows for `0x00123456` and `0x00123457` are removed. Tests assert
+that both startup bind synthesis and direct RPC synthesis remain unsupported, so
+a future audio dependency must be handled at the native audio API boundary rather
+than reintroduced as packet-specific behavior.
+
+## PS2Recomp synchronous-DMAC interrupt-stack boundary
+
+Phase-11 startup exposed a runtime defect below the game: Ratchet configures its
+main-thread stack as `[0x01FFC000, 0x02000000)`, while PS2Recomp's synthetic
+`reserveAsyncCallbackStack(0x4000)` selected exactly that same top-of-RDRAM
+range for synchronous DMAC handlers. A legitimate `_SifCmdIntHandler` frame
+therefore overwrote the interrupted game's saved return address. This is a
+PS2Recomp/runtime defect and is **not** hidden with a Ratchet HLE. Synchronous
+DMAC completions raised from guest execution must inherit the interrupted guest
+SP while retaining an isolated register context; genuinely asynchronous paths
+keep their existing managed-stack behavior when no interrupted context exists.
+The SIF-DMA regression carried with the fix fails before the correction and
+passes after it, verifying that the handler frame lies below the interrupted SP
+without corrupting the caller frame.
+
+OpenRatchet does not modify the pinned checkout under `third_party/PS2Recomp` to
+carry that correction. `patches/ps2recomp-synchronous-dmac-interrupt-stack.patch`
+is an upstream-ready compatibility patch against the exact revision recorded in
+`patches/ps2recomp-base-revision.txt`. CMake requires that checkout to be clean,
+archives its committed `HEAD` into `build/native/_openratchet/PS2Recomp`, applies
+the patch only to that disposable build-local copy, and builds `ps2_runtime`
+there. A revision drift, dirty checkout, or failed patch context is a hard
+configuration error. This keeps third-party source state immutable and makes the
+temporary runtime correction explicit, reproducible and removable when upstream
+contains an equivalent fix.
 
 ## Native compressed-asset boundary
 
@@ -186,6 +323,31 @@ the architectural boundary is feeding these renderers from the running
 recompiled game's camera and object state. Exact lighting, LOD, CLAMP, fog and
 transparency refinements can be layered on without changing native asset
 ownership.
+
+## Live simulation-state bridge boundary
+
+`game::inspectRac1LiveMobyPool` is deliberately runtime-agnostic: it accepts a
+read-only guest-RDRAM byte span and decodes only retail-proved R&C1 Moby-pool
+fields. The decoder owns no PS2Runtime object, no renderer, and no guessed
+camera/world-transform interpretation.
+
+During Phase 11, `OpenRatchetRuntime` is the owner of the temporary attachment
+to the still-running EE fallback. It obtains the actual 32 MiB RDRAM pointer
+through `PS2Runtime::memory().getRDRAM()` and snapshots it under
+`PS2Runtime::GuestExecutionScope`. That scope uses PS2Runtime's existing
+function-boundary handoff, so host reads do not race guest writes. Snapshot
+formatting/logging is done only after releasing the execution scope.
+
+PS2Runtime's host-presentation callback is used temporarily as a low-frequency
+sampling clock while the fallback runtime still owns the executable loop. This
+is not a new rendering dependency and does not make the callback part of R&C1
+game semantics. It exists solely to observe the live guest state until the
+native application loop takes over later phases. Phase 11.2 keeps the live-state bridge itself read-only: it never fabricates
+RDRAM pool globals or drives animation, transforms, or camera state. After the
+proved platform/transport prerequisites above were lifted to their native
+boundaries, Retail itself reaches `sub_001E9B10`, publishes `0x15FF18` and
+`0x15FF20`, and the decoder reports `[OpenRatchet:live:moby] ... status=ok` with
+`unaccounted=0`. Phase 11.3 therefore starts from authentic live records.
 
 Wrench/noclip are reverse-engineering references only; OpenRatchet's parsers are
 independent implementations of the retail structures.

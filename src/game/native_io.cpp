@@ -25,6 +25,10 @@ PS2Runtime::RecompiledFunction g_discTocFallback = nullptr;
 std::uint32_t g_nativeReadDiagnostics = 0u;
 std::uint32_t g_fallbackReadDiagnostics = 0u;
 std::uint32_t g_nativeTocDiagnostics = 0u;
+std::uint32_t g_gameSectorWrapperDiagnostics = 0u;
+std::uint32_t g_gameSectorWrapperFailureDiagnostics = 0u;
+std::uint32_t g_gameSectorStartDiagnostics = 0u;
+std::uint32_t g_gameSectorStartFailureDiagnostics = 0u;
 
 void returnToGuestCaller(R5900Context* ctx, std::uint32_t result) {
     SET_GPR_U32(ctx, 2, result);
@@ -99,6 +103,82 @@ bool tryLegacyBootAlias(std::uint8_t* rdram,
               << std::hex << destination << " bytes=0x" << bytesRead << std::dec << '\n';
     returnToGuestCaller(ctx, static_cast<std::uint32_t>(bytesRead));
     return true;
+}
+
+void nativeGameSectorReadImpl(std::uint8_t* rdram,
+                              R5900Context* ctx,
+                              std::uint32_t address,
+                              const char* component,
+                              std::uint32_t& successDiagnostics,
+                              std::uint32_t& failureDiagnostics) {
+    // Both FUN_00216788 and sub_00216828 expose the same game-facing argument
+    // order: (destination, source sector, sector count).  Retail routes the
+    // former through 989snd's asynchronous CD transport and the latter starts
+    // that helper then pumps it to completion.  NativeVfs already owns the
+    // underlying extracted sectors, so OpenRatchet completes either operation
+    // atomically at this game boundary.  Crucially, the private 989snd manager
+    // at 0x1516D0 remains untouched; a following retail wait therefore observes
+    // the transport as idle instead of depending on synthetic PS2 state.
+    const std::uint32_t destination = GPR_U32(ctx, 4);
+    const std::uint32_t sourceSector = GPR_U32(ctx, 5);
+    const std::uint32_t sectorCount = GPR_U32(ctx, 6);
+
+    const NativeGameServices& services = nativeGameServices();
+    if (services.vfs != nullptr && services.vfs->ready() &&
+        tryNativeIndexedRead(rdram,
+                             ctx,
+                             *services.vfs,
+                             sourceSector,
+                             sectorCount,
+                             destination)) {
+        ++successDiagnostics;
+        if (successDiagnostics <= 12u) {
+            std::cerr << "[OpenRatchet:VFS] " << component
+                      << " address=0x" << std::hex << address
+                      << " backend=native-vfs"
+                      << " source=0x" << sourceSector
+                      << " sectors=0x" << sectorCount
+                      << " destination=0x" << destination
+                      << " bytes=0x"
+                      << (sectorCount * platform::NativeVfs::kSectorBytes)
+                      << std::dec << " status=ok\n";
+        }
+        return;
+    }
+
+    ++failureDiagnostics;
+    if (failureDiagnostics <= 8u) {
+        std::cerr << "[OpenRatchet:VFS] " << component
+                  << " address=0x" << std::hex << address
+                  << " backend=native-vfs"
+                  << " source=0x" << sourceSector
+                  << " sectors=0x" << sectorCount
+                  << " destination=0x" << destination
+                  << std::dec << " status=unresolved\n";
+    }
+    returnToGuestCaller(ctx, 0u);
+}
+
+void nativeGameSectorReadStart(std::uint8_t* rdram,
+                               R5900Context* ctx,
+                               PS2Runtime*) {
+    nativeGameSectorReadImpl(rdram,
+                             ctx,
+                             0x216788u,
+                             "game sector start",
+                             g_gameSectorStartDiagnostics,
+                             g_gameSectorStartFailureDiagnostics);
+}
+
+void nativeGameSectorRead(std::uint8_t* rdram,
+                          R5900Context* ctx,
+                          PS2Runtime*) {
+    nativeGameSectorReadImpl(rdram,
+                             ctx,
+                             0x216828u,
+                             "game sector wrapper",
+                             g_gameSectorWrapperDiagnostics,
+                             g_gameSectorWrapperFailureDiagnostics);
 }
 
 void nativeSectorRead(std::uint8_t* rdram,
@@ -192,6 +272,16 @@ void nativeLoadDiscToc(std::uint8_t* rdram,
 } // namespace
 
 void declareNativeIoReplacements(runtime::NativeReplacementRegistry& registry) {
+    registry.add(0x216788u,
+                 "native.io.game-sector-read-start",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeGameSectorReadStart);
+
+    registry.add(0x216828u,
+                 "native.io.game-sector-read",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeGameSectorRead);
+
     registry.add(0x12f208u,
                  "native.io.read-sectors",
                  runtime::NativeReplacementStage::Runtime,

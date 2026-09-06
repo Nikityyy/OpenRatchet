@@ -17,6 +17,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $buildJobs = if ($Jobs -gt 0) { $Jobs } else { [Environment]::ProcessorCount }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$ps2RecompRevisionFile = Join-Path $root 'patches\ps2recomp-base-revision.txt'
+if (-not (Test-Path -LiteralPath $ps2RecompRevisionFile)) { throw "Missing PS2Recomp revision pin '$ps2RecompRevisionFile'." }
+$ps2RecompRevision = (Get-Content -Raw -LiteralPath $ps2RecompRevisionFile).Trim()
+if (-not $ps2RecompRevision) { throw "PS2Recomp revision pin is empty: '$ps2RecompRevisionFile'." }
 if (-not $Iso) { $Iso = Join-Path $root 'games\Ratchet & Clank (USA) (En,Fr,De,Es,It).iso' }
 if (-not $PS2RecompDir) { $PS2RecompDir = Join-Path $root 'third_party\PS2Recomp' }
 if (-not $TocParserDir) { $TocParserDir = Join-Path $root 'third_party\rac-dvd-toc-parser' }
@@ -40,12 +44,36 @@ function Fetch-Repo([string]$Url, [string]$Path) {
     if (-not (Test-Path -LiteralPath (Split-Path $Path -Parent))) { New-Item -ItemType Directory (Split-Path $Path -Parent) | Out-Null }
     if (-not (Test-Path -LiteralPath $Path)) { git clone --depth 1 $Url $Path }
 }
+function Assert-CleanPinnedPs2Recomp([string]$Path) {
+    Require-Command git
+    if (-not (Test-Path -LiteralPath (Join-Path $Path 'CMakeLists.txt'))) {
+        throw "PS2Recomp checkout not found at '$Path'. Use -FetchTools or supply -PS2RecompDir."
+    }
+    $head = (& git -C $Path rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Could not read PS2Recomp revision from '$Path'." }
+    if ($head -ne $ps2RecompRevision) {
+        throw "Unsupported PS2Recomp revision '$head'. Expected pinned revision '$ps2RecompRevision'."
+    }
+    $status = @(& git -C $Path status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect PS2Recomp status in '$Path'." }
+    if ($status.Count -gt 0) {
+        throw "third_party/PS2Recomp must remain clean. Restore local changes before building/recompiling. OpenRatchet applies its compatibility patch only to build/native/_openratchet/PS2Recomp.`n$($status -join [Environment]::NewLine)"
+    }
+}
 
 if ($FetchTools) {
     Require-Command git
     Fetch-Repo 'https://github.com/maikelwever/rac-dvd-toc-parser.git' $TocParserDir
     Fetch-Repo 'https://github.com/stiantoften/wadutil.git' $WadutilDir
     Fetch-Repo 'https://github.com/ran-j/PS2Recomp.git' $PS2RecompDir
+    & git -C $PS2RecompDir fetch origin $ps2RecompRevision --depth 1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to fetch pinned PS2Recomp revision '$ps2RecompRevision'." }
+    & git -C $PS2RecompDir checkout --detach $ps2RecompRevision
+    if ($LASTEXITCODE -ne 0) { throw "Failed to checkout pinned PS2Recomp revision '$ps2RecompRevision'." }
+}
+
+if ($Stage -in @('Recompile', 'Build', 'All')) {
+    Assert-CleanPinnedPs2Recomp $PS2RecompDir
 }
 
 if (-not (Test-Path -LiteralPath $ghidraRun) -or -not (Test-Path -LiteralPath $analyzeHeadless)) {

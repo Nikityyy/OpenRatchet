@@ -2,7 +2,7 @@
 param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
     [string]$Configuration = 'Release',
-    [ValidateSet('ALL_BUILD', 'openratchet', 'native_replacements_tests', 'native_vfs_tests', 'rac1_level_tests', 'rac1_collision_tests', 'rac1_moby_tests', 'native_level_inspector', 'native_level_viewer', 'wad_decompressor_tests', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
+    [ValidateSet('ALL_BUILD', 'openratchet', 'native_replacements_tests', 'native_vfs_tests', 'native_io_tests', 'rac1_level_tests', 'rac1_collision_tests', 'rac1_moby_tests', 'native_level_inspector', 'native_level_viewer', 'wad_decompressor_tests', 'sif_startup_responses_tests', 'sif_rpc_transport_tests')]
     [string]$Target = 'ALL_BUILD',
     # Use only when generated project metadata has changed and MSBuild's
     # incremental tracking has not picked up a newly added source file.
@@ -46,13 +46,15 @@ foreach ($expected in @(
 
 # Patch ZIPs deliberately contain only changed files. Archive extraction can
 # preserve an older LastWriteTime than an object file already present under
-# build/native. Both CMake and MSBuild are timestamp-driven, so that can cause a
-# successful-looking build to silently reuse a binary from the previous phase.
+# build/native. CMake/MSBuild are timestamp-driven, so a newly extracted source
+# can otherwise be silently older than a stale object from the previous phase.
 #
-# Git is the authoritative phase boundary: after each accepted phase is
-# committed, applying the next patch leaves exactly its changed/new files dirty.
-# Touch build-relevant dirty files before configuring so incremental MSBuild
-# cannot mistake patched source for an older input.
+# Do NOT touch every Git-dirty file on every build: long-running phases keep the
+# same files dirty across many validation cycles, and repeatedly touching a
+# public header invalidates the OpenRatchet PCH and recompiles hundreds of
+# generated Retail translation units. Instead, remember the SHA-256 of each
+# dirty build input. A file is touched only when its content differs from the
+# last content this build tree has seen.
 $git = Get-Command git.exe -ErrorAction SilentlyContinue
 if (-not $git) {
     $git = Get-Command git -ErrorAction SilentlyContinue
@@ -72,7 +74,7 @@ if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed while determining untracke
 $buildInputExtensions = @(
     '.c', '.cc', '.cpp', '.cxx',
     '.h', '.hh', '.hpp', '.hxx', '.inl',
-    '.cmake', '.toml', '.json', '.csv'
+    '.cmake', '.toml', '.json', '.csv', '.patch', '.txt'
 )
 $dirtyBuildInputs = @()
 foreach ($relativePath in ($dirtyRelativePaths | Sort-Object -Unique)) {
@@ -83,17 +85,58 @@ foreach ($relativePath in ($dirtyRelativePaths | Sort-Object -Unique)) {
     $leaf = Split-Path -Leaf $candidate
     $extension = [IO.Path]::GetExtension($candidate).ToLowerInvariant()
     if ($leaf -eq 'CMakeLists.txt' -or $buildInputExtensions -contains $extension) {
-        $dirtyBuildInputs += $candidate
+        $dirtyBuildInputs += [PSCustomObject]@{
+            RelativePath = ($relativePath -replace '\\', '/')
+            FullPath = $candidate
+        }
     }
 }
 
-if ($dirtyBuildInputs.Count -gt 0) {
-    $touchTime = [DateTime]::UtcNow
-    foreach ($inputPath in $dirtyBuildInputs) {
-        (Get-Item -LiteralPath $inputPath).LastWriteTimeUtc = $touchTime
+$hashStatePath = Join-Path $buildDir '.openratchet-build-input-hashes.json'
+$hashState = @{}
+if (Test-Path -LiteralPath $hashStatePath) {
+    try {
+        $decoded = Get-Content -Raw -LiteralPath $hashStatePath | ConvertFrom-Json
+        if ($decoded) {
+            foreach ($property in $decoded.PSObject.Properties) {
+                $hashState[$property.Name] = [string]$property.Value
+            }
+        }
+    } catch {
+        Write-Warning "Ignoring unreadable build-input hash state '$hashStatePath': $($_.Exception.Message)"
+        $hashState = @{}
     }
-    Write-Host "Refreshed timestamps for $($dirtyBuildInputs.Count) dirty build input(s)."
 }
+
+$changedDirtyInputs = @()
+foreach ($input in $dirtyBuildInputs) {
+    $currentHash = (Get-FileHash -LiteralPath $input.FullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $previousHash = $hashState[$input.RelativePath]
+    if ($previousHash -ne $currentHash) {
+        $changedDirtyInputs += $input
+        $hashState[$input.RelativePath] = $currentHash
+    }
+}
+
+if ($changedDirtyInputs.Count -gt 0) {
+    $touchTime = [DateTime]::UtcNow
+    foreach ($input in $changedDirtyInputs) {
+        (Get-Item -LiteralPath $input.FullPath).LastWriteTimeUtc = $touchTime
+    }
+    Write-Host "Refreshed timestamps for $($changedDirtyInputs.Count) content-changed dirty build input(s)."
+} elseif ($dirtyBuildInputs.Count -gt 0) {
+    Write-Host "Dirty build inputs unchanged by content; timestamps left intact."
+}
+
+# Persist atomically. Keep historical hashes: if a committed file later becomes
+# dirty with exactly the already-built content, no artificial rebuild is needed.
+$hashStateParent = Split-Path -Parent $hashStatePath
+if (-not (Test-Path -LiteralPath $hashStateParent)) {
+    New-Item -ItemType Directory -Path $hashStateParent -Force | Out-Null
+}
+$stateTempPath = "$hashStatePath.tmp"
+$hashState | ConvertTo-Json -Compress | Set-Content -LiteralPath $stateTempPath -NoNewline -Encoding UTF8
+Move-Item -LiteralPath $stateTempPath -Destination $hashStatePath -Force
 
 # Always invoke configure explicitly. This is intentionally cheap compared with
 # compiling the generated game and guarantees that CMake reads the current

@@ -1,0 +1,221 @@
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index dda11c1..9c5f74e 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -415,7 +415,7 @@ public:
+ 
+     void dispatchLoop(uint8_t *rdram, R5900Context *ctx);
+ 
+-    void drainCompletedDmacHandlers(uint8_t *rdram);
++    void drainCompletedDmacHandlers(uint8_t *rdram, const R5900Context *interruptedCtx = nullptr);
+ 
+     bool shouldPreemptGuestExecution();
+     void yieldGuestExecutionAfterWake();
+diff --git a/ps2xRuntime/include/ps2_syscalls.h b/ps2xRuntime/include/ps2_syscalls.h
+index e23795b..3af8ace 100644
+--- a/ps2xRuntime/include/ps2_syscalls.h
++++ b/ps2xRuntime/include/ps2_syscalls.h
+@@ -28,7 +28,7 @@ namespace ps2_syscalls
+     void DisableDmacHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+ 
+     bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-    void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause);
++    void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause, const R5900Context *interruptedCtx = nullptr);
+     void initializeGuestKernelState(uint8_t *rdram);
+     void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t encodedSyscallId);
+     void notifyRuntimeStop();
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+index 52fa84a..425586c 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+@@ -1433,7 +1433,7 @@ namespace
+ 
+         for (const uint32_t completedCause : completedCauses)
+         {
+-            ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, completedCause);
++            ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, completedCause, ctx);
+         }
+ 
+         return 0;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+index b48633b..fcb323d 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -760,7 +760,7 @@ namespace ps2_stubs
+             return;
+         }
+ 
+-        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 5u);
++        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 5u, ctx);
+ 
+         setReturnS32(ctx, static_cast<int32_t>(allocateSifDmaTransferId()));
+     }
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+index f7f1cf9..3c2f960 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+@@ -218,7 +218,7 @@ namespace ps2_syscalls
+         }
+     }
+ 
+-    void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause)
++    void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause, const R5900Context *interruptedCtx)
+     {
+         if (!rdram || !runtime)
+         {
+@@ -266,7 +266,7 @@ namespace ps2_syscalls
+             {
+                 R5900Context irqCtx{};
+                 SET_GPR_U32(&irqCtx, 28, info.gp);
+-                SET_GPR_U32(&irqCtx, 29, getAsyncHandlerStackTop(runtime));
++                SET_GPR_U32(&irqCtx, 29, interruptedCtx ? getRegU32(interruptedCtx, 29) : getAsyncHandlerStackTop(runtime));
+                 SET_GPR_U32(&irqCtx, 31, 0u);
+                 SET_GPR_U32(&irqCtx, 4, cause);
+                 SET_GPR_U32(&irqCtx, 5, info.arg);
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.h b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.h
+index eb9ba5f..f787457 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.h
+@@ -26,7 +26,7 @@ namespace ps2_syscalls
+         extern VSyncFlagRegistration g_vsync_registration;
+     }
+ 
+-    void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause);
++    void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause, const R5900Context *interruptedCtx);
+     void EnsureVSyncWorkerRunning(uint8_t *rdram, PS2Runtime *runtime);
+     uint64_t GetCurrentVSyncTick();
+     void stopInterruptWorker();
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index b79e386..6e84d84 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1398,11 +1398,11 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
+     raiseCop0Exception(ctx, EXCEPTION_BREAKPOINT);
+ }
+ 
+-void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
++void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram, const R5900Context *interruptedCtx)
+ {
+     for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
+     {
+-        ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
++        ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause, interruptedCtx);
+     }
+ }
+ 
+@@ -2268,7 +2268,7 @@ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
+     try
+     {
+         m_memory.write32(vaddr, value);
+-        drainCompletedDmacHandlers(rdram);
++        drainCompletedDmacHandlers(rdram, ctx);
+     }
+     catch (const std::exception &)
+     {
+@@ -2325,17 +2325,17 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+     ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
+     if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
+     {
+-        drainCompletedDmacHandlers(rdram);
++        drainCompletedDmacHandlers(rdram, ctx);
+         return;
+     }
+     if (m_memory.tryProcessNativeGifPackedChain(m_gs, tadr, chcr))
+     {
+-        drainCompletedDmacHandlers(rdram);
++        drainCompletedDmacHandlers(rdram, ctx);
+         return;
+     }
+     m_memory.writeIORegister(GIF_CHCR, chcr);
+     m_memory.processPendingTransfers();
+-    drainCompletedDmacHandlers(rdram);
++    drainCompletedDmacHandlers(rdram, ctx);
+ }
+ 
+ void PS2Runtime::requestStop()
+diff --git a/ps2xTest/src/ps2_sif_dma_tests.cpp b/ps2xTest/src/ps2_sif_dma_tests.cpp
+index 8520545..9d2ce4a 100644
+--- a/ps2xTest/src/ps2_sif_dma_tests.cpp
++++ b/ps2xTest/src/ps2_sif_dma_tests.cpp
+@@ -112,6 +112,7 @@ namespace
+     uint32_t g_dmacHandlerValue = 0u;
+     uint32_t g_dmacHandlerLastCause = 0u;
+     uint32_t g_dmacHandlerLastArg = 0u;
++    uint32_t g_dmacHandlerObservedSp = 0u;
+ 
+     void testDmacHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+@@ -124,6 +125,16 @@ namespace
+         }
+         ctx->pc = 0u;
+     }
++
++    void testDmacInterruptStackHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        (void)runtime;
++        constexpr uint32_t kSyntheticHandlerFrameSize = 0x90u;
++        g_dmacHandlerObservedSp = ::getRegU32(ctx, 29);
++        const uint32_t frameSp = g_dmacHandlerObservedSp - kSyntheticHandlerFrameSize;
++        writeGuestU32(rdram, frameSp, 0xD1AC5A5Au);
++        ctx->pc = 0u;
++    }
+ }
+ 
+ void register_ps2_sif_dma_tests()
+@@ -255,6 +266,56 @@ void register_ps2_sif_dma_tests()
+             t.Equals(g_dmacHandlerLastArg, kHandlerArg, "DMAC handler should receive registered argument");
+         });
+ 
++        tc.Run("sceSifSetDma executes synchronous DMAC handlers below the interrupted guest stack", [](TestCase &t)
++        {
++            TestEnv env;
++
++            constexpr uint32_t kDescAddr = 0x00020700u;
++            constexpr uint32_t kSrcAddr = 0x00020800u;
++            constexpr uint32_t kDstAddr = 0x00020900u;
++            constexpr uint32_t kHandlerAddr = 0x00100100u;
++            constexpr uint32_t kInterruptedSp = 0x01FFFF70u;
++            constexpr uint32_t kSavedCallerWord = 0x01FFFF60u;
++            constexpr uint32_t kSavedCallerSentinel = 0x1E9688u;
++
++            g_dmacHandlerObservedSp = 0u;
++            env.runtime.registerFunction(kHandlerAddr, &testDmacInterruptStackHandler);
++
++            setRegU32(env.ctx, 4, 5u);
++            setRegU32(env.ctx, 5, kHandlerAddr);
++            setRegU32(env.ctx, 6, 0u);
++            setRegU32(env.ctx, 7, 0u);
++            ps2_syscalls::AddDmacHandler(env.rdram.data(), &env.ctx, &env.runtime);
++            t.IsTrue(getRegS32(env.ctx, 2) > 0, "AddDmacHandler should register the stack-regression handler");
++
++            setRegU32(env.ctx, 4, 5u);
++            ps2_syscalls::EnableDmac(env.rdram.data(), &env.ctx, &env.runtime);
++            t.Equals(getRegS32(env.ctx, 2), 0, "EnableDmac should succeed for the stack-regression handler");
++
++            writeGuestU32(env.rdram.data(), kSavedCallerWord, kSavedCallerSentinel);
++            std::array<uint8_t, 16> payload{};
++            const Ps2SifDmaTransfer desc{
++                kSrcAddr,
++                kDstAddr,
++                static_cast<int32_t>(payload.size()),
++                0};
++            std::memcpy(env.rdram.data() + kSrcAddr, payload.data(), payload.size());
++            std::memcpy(env.rdram.data() + kDescAddr, &desc, sizeof(desc));
++
++            setRegU32(env.ctx, 29, kInterruptedSp);
++            setRegU32(env.ctx, 4, kDescAddr);
++            setRegU32(env.ctx, 5, 1u);
++            ps2_stubs::sceSifSetDma(env.rdram.data(), &env.ctx, &env.runtime);
++
++            t.IsTrue(getRegS32(env.ctx, 2) > 0, "sceSifSetDma should complete the transfer");
++            t.Equals(g_dmacHandlerObservedSp, kInterruptedSp,
++                     "synchronous DMAC handler should inherit the interrupted guest SP");
++            t.Equals(readGuestU32(env.rdram.data(), kSavedCallerWord), kSavedCallerSentinel,
++                     "DMAC handler frame must not overwrite the interrupted caller frame");
++            t.Equals(readGuestU32(env.rdram.data(), kInterruptedSp - 0x90u), 0xD1AC5A5Au,
++                     "DMAC handler should place its private frame below the interrupted SP");
++        });
++
+         tc.Run("sceSifSetDma acknowledges DTX work-buffer transfers by advancing the EE footer ticket", [](TestCase &t)
+         {
+             TestEnv env;
