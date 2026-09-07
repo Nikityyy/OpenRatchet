@@ -7,6 +7,7 @@
 #include "game/rac1_live_state.h"
 #include "game/rac1_live_sky.h"
 #include "game/rac1_live_transform.h"
+#include "game/rac1_native_input.h"
 #include "guest_overrides.h"
 #include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
@@ -15,6 +16,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -42,6 +44,128 @@ void configureHostFloatingPoint() {
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
     _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
 #endif
+}
+
+
+float nativeInputAxisWithDeadzone(float value) {
+    constexpr float kDeadzone = 0.15f;
+    if (value > -kDeadzone && value < kDeadzone) return 0.0f;
+    return value;
+}
+
+float nativeKeyboardAxis(bool negative, bool positive) {
+    if (negative == positive) return 0.0f;
+    return negative ? -1.0f : 1.0f;
+}
+
+game::Rac1NativeInputSample sampleNativeHostInput() {
+    game::Rac1NativeInputSample sample;
+    if (!IsWindowFocused()) return sample;
+
+    auto press = [&sample](game::Rac1PadButton button, bool down) {
+        if (down) sample.pressedButtons |= game::rac1PadButtonMask(button);
+    };
+
+    sample.leftX = nativeKeyboardAxis(IsKeyDown(KEY_A), IsKeyDown(KEY_D));
+    sample.leftY = nativeKeyboardAxis(IsKeyDown(KEY_W), IsKeyDown(KEY_S));
+    sample.rightX = nativeKeyboardAxis(IsKeyDown(KEY_LEFT), IsKeyDown(KEY_RIGHT));
+    sample.rightY = nativeKeyboardAxis(IsKeyDown(KEY_UP), IsKeyDown(KEY_DOWN));
+
+    press(game::Rac1PadButton::Cross, IsKeyDown(KEY_SPACE));
+    press(game::Rac1PadButton::Circle, IsKeyDown(KEY_E));
+    press(game::Rac1PadButton::Square, IsKeyDown(KEY_F));
+    press(game::Rac1PadButton::Triangle, IsKeyDown(KEY_R));
+    press(game::Rac1PadButton::L1, IsKeyDown(KEY_LEFT_SHIFT));
+    press(game::Rac1PadButton::R1, IsKeyDown(KEY_RIGHT_SHIFT));
+    press(game::Rac1PadButton::L2, IsKeyDown(KEY_Z));
+    press(game::Rac1PadButton::R2, IsKeyDown(KEY_C));
+    press(game::Rac1PadButton::Start, IsKeyDown(KEY_ENTER));
+    press(game::Rac1PadButton::Select, IsKeyDown(KEY_BACKSPACE));
+
+    if (!IsGamepadAvailable(0)) return sample;
+
+    const float gamepadLeftX = nativeInputAxisWithDeadzone(
+        GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X));
+    const float gamepadLeftY = nativeInputAxisWithDeadzone(
+        GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y));
+    const float gamepadRightX = nativeInputAxisWithDeadzone(
+        GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_X));
+    const float gamepadRightY = nativeInputAxisWithDeadzone(
+        GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_Y));
+    if (sample.leftX == 0.0f) sample.leftX = gamepadLeftX;
+    if (sample.leftY == 0.0f) sample.leftY = gamepadLeftY;
+    if (sample.rightX == 0.0f) sample.rightX = gamepadRightX;
+    if (sample.rightY == 0.0f) sample.rightY = gamepadRightY;
+
+    press(game::Rac1PadButton::Up,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_FACE_UP));
+    press(game::Rac1PadButton::Right,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT));
+    press(game::Rac1PadButton::Down,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN));
+    press(game::Rac1PadButton::Left,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT));
+    press(game::Rac1PadButton::Cross,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN));
+    press(game::Rac1PadButton::Circle,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT));
+    press(game::Rac1PadButton::Square,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_FACE_LEFT));
+    press(game::Rac1PadButton::Triangle,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_FACE_UP));
+    press(game::Rac1PadButton::L1,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_TRIGGER_1));
+    press(game::Rac1PadButton::R1,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_TRIGGER_1));
+    press(game::Rac1PadButton::L2,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_TRIGGER_2));
+    press(game::Rac1PadButton::R2,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_TRIGGER_2));
+    press(game::Rac1PadButton::Select,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_MIDDLE_LEFT));
+    press(game::Rac1PadButton::Start,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_MIDDLE_RIGHT));
+    press(game::Rac1PadButton::L3,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_THUMB));
+    press(game::Rac1PadButton::R3,
+          IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_THUMB));
+    return sample;
+}
+
+bool sameParsedInputSnapshot(const game::Rac1RetailParsedInputSnapshot& lhs,
+                             const game::Rac1RetailParsedInputSnapshot& rhs) noexcept {
+    const auto sameFloatBits = [](float a, float b) noexcept {
+        return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b);
+    };
+    return lhs.status == rhs.status &&
+           lhs.currentButtons == rhs.currentButtons &&
+           lhs.pressedEdges == rhs.pressedEdges &&
+           lhs.releasedEdges == rhs.releasedEdges &&
+           sameFloatBits(lhs.rightX, rhs.rightX) &&
+           sameFloatBits(lhs.rightY, rhs.rightY) &&
+           sameFloatBits(lhs.leftX, rhs.leftX) &&
+           sameFloatBits(lhs.leftY, rhs.leftY);
+}
+
+void logLiveParsedInput(const game::Rac1RetailParsedInputSnapshot& parsed) {
+    using Layout = game::Rac1RetailParsedInputLayout;
+
+    std::cerr << "[OpenRatchet:input] component=parsed-live"
+              << " source=guest-rdram"
+              << " parser=retail-FUN_00217328"
+              << " state=0x" << std::hex << Layout::kControllerStateAddress << std::dec;
+    if (parsed.ok()) {
+        std::cerr << " buttons=0x" << std::hex << parsed.currentButtons
+                  << " pressedEdges=0x" << parsed.pressedEdges
+                  << " releasedEdges=0x" << parsed.releasedEdges << std::dec
+                  << " rx=" << parsed.rightX
+                  << " ry=" << parsed.rightY
+                  << " lx=" << parsed.leftX
+                  << " ly=" << parsed.leftY
+                  << " ownership=retail-read-only";
+    }
+    std::cerr << " status=" << game::rac1RetailParsedInputStatusName(parsed.status)
+              << '\n';
 }
 
 const char* stageName(runtime::NativeReplacementStage stage) {
@@ -335,6 +459,7 @@ struct OpenRatchetRuntime::Impl {
     std::optional<int> rendererAttemptedRuntimeWad2;
     std::optional<NativeRenderAccountingSignature> lastRenderAccounting;
     std::optional<LiveMobySnapshotSignature> lastLiveMobySignature;
+    std::optional<game::Rac1RetailParsedInputSnapshot> lastLoggedParsedInput;
     game::Rac1LiveRatchetAnimationResult liveRatchetAnimation;
     std::optional<game::Rac1LiveRatchetAnimationStatus> lastLoggedAnimationStatus;
     game::Rac1LiveRatchetTransformResult liveRatchetTransform;
@@ -398,6 +523,7 @@ struct OpenRatchetRuntime::Impl {
         game::Rac1LiveRatchetTransformResult transform;
         game::Rac1LiveCameraResult camera;
         game::Rac1LiveSkyResult sky;
+        game::Rac1RetailParsedInputSnapshot parsedInput;
         render::Rac1RuntimeLiveRatchetFrame ratchetFrame;
         {
             // The fallback game thread mutates RDRAM while it executes. Use the
@@ -416,11 +542,15 @@ struct OpenRatchetRuntime::Impl {
             transform = game::inspectRac1LiveRatchetWorldTransform(snapshot);
             camera = game::inspectRac1LiveCamera(guestRdram);
             sky = game::inspectRac1LiveSky(guestRdram);
+            parsedInput = game::inspectRac1RetailParsedInput(guestRdram);
             ratchetFrame = nativeRenderer.prepareLiveRatchetFrame(
                 guestRdram, animation, transform);
         }
 
         liveRatchetFrame = std::move(ratchetFrame);
+        const bool parsedInputChanged =
+            !lastLoggedParsedInput ||
+            !sameParsedInputSnapshot(*lastLoggedParsedInput, parsedInput);
         const bool animationStatusChanged =
             !lastLoggedAnimationStatus ||
             *lastLoggedAnimationStatus != animation.status;
@@ -445,6 +575,11 @@ struct OpenRatchetRuntime::Impl {
                 snapshot.slotsBeforeTerminator >= accounted
                     ? snapshot.slotsBeforeTerminator - accounted
                     : accounted - snapshot.slotsBeforeTerminator;
+        }
+
+        if (diagnosticTick || parsedInputChanged) {
+            lastLoggedParsedInput = parsedInput;
+            logLiveParsedInput(parsedInput);
         }
 
         if (diagnosticTick) {
@@ -492,6 +627,7 @@ struct OpenRatchetRuntime::Impl {
         liveMobyClassRegistry = {};
         liveSky = {};
         lastLoggedSkyStatus.reset();
+        lastLoggedParsedInput.reset();
         liveMobyRecordCount = 0u;
         liveMobyPoolUnaccounted = 0u;
         liveMobyPoolStatus = game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
@@ -563,10 +699,17 @@ struct OpenRatchetRuntime::Impl {
     void drawNativeWorldWithRetailCamera(bool skyMaterialized) {
         if (!nativeRenderer.ready() || !liveCamera.ok()) return;
 
-        // FUN_0022BF94 uses vclipw.xyz against +/-w, matching OpenGL clip
-        // semantics exactly. Feed its four proved qword columns directly to
-        // rlgl; no Camera3D, FOV, target/up or axis conversion is reconstructed.
-        const auto clip = render::rac1RetailClipMatrixColumnMajor(liveCamera.camera);
+        // FUN_001F2260 materializes the Retail clip columns without camera-world
+        // translation, while FUN_001F7D30 proves the corresponding world-space
+        // convention is point.xyz -= state+0x140 before camera multiplication.
+        // Native terrain/static/Ratchet vertices are absolute Retail world
+        // coordinates, so compose exactly that T(-cameraPosition). FUN_0022BF94
+        // then proves Retail's post-divide path maps NDC Y into the GS screen
+        // coordinate system (Y down), while rlgl/OpenGL window Y is up. The
+        // bridge therefore performs the single proved clip-Y convention change;
+        // no Camera3D, FOV, target/up or guessed camera axis is reconstructed.
+        const auto clip =
+            render::rac1RetailWorldToOpenGlClipMatrixColumnMajor(liveCamera.camera);
         rlDrawRenderBatchActive();
         rlMatrixMode(RL_PROJECTION);
         rlPushMatrix();
@@ -575,6 +718,13 @@ struct OpenRatchetRuntime::Impl {
         rlMatrixMode(RL_MODELVIEW);
         rlPushMatrix();
         rlLoadIdentity();
+
+        // The native Level-0 meshes are reconstructed from Retail PS2 strip
+        // topology and intentionally rendered two-sided, exactly like the
+        // standalone native level viewer. Do not inherit PS2Runtime/raylib
+        // backface-culling state here: alternating strip winding otherwise
+        // drops valid faces and exposes the black clear as triangular holes.
+        rlDisableBackfaceCulling();
 
         if (skyMaterialized) {
             // Retail draws sky shells before ordinary world geometry, each with
@@ -591,6 +741,7 @@ struct OpenRatchetRuntime::Impl {
         rlDrawRenderBatchActive();
 
         rlDisableDepthTest();
+        rlEnableBackfaceCulling();
         rlPopMatrix();
         rlMatrixMode(RL_PROJECTION);
         rlPopMatrix();
@@ -769,6 +920,7 @@ struct OpenRatchetRuntime::Impl {
     }
 
     void presentNativeFrame(PS2Runtime& runtime) {
+        game::publishRac1NativeInputSample(sampleNativeHostInput());
         inspectLiveMobyState(runtime);
 
         // PS2Runtime queued its compatibility DrawTexturePro before this callback.

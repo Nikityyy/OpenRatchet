@@ -4,6 +4,8 @@
 #include "game/native_audio_bootstrap.h"
 #include "game/native_io.h"
 #include "game/native_platform_bootstrap.h"
+#include "game/rac1_native_input.h"
+#include "game/rac1_native_stash.h"
 #include "guest_overrides.h"
 
 namespace ratchet::game {
@@ -15,6 +17,8 @@ void declareNativeReplacements(runtime::NativeReplacementRegistry& registry) {
     declareNativeIoReplacements(registry);
     declareNativeAssetReplacements(registry);
     declareNativePlatformBootstrapReplacements(registry);
+    declareRac1NativeStashReplacements(registry);
+    declareRac1NativeInputReplacements(registry);
     declareNativeAudioBootstrapReplacements(registry);
     declareLegacyGuestCompatibilityReplacements(registry);
 }

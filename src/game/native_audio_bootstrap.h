@@ -19,6 +19,19 @@ struct Rac1NativeAudioBootstrapContract {
     // through the embedded source path /usr/local/989snd/ee/989snd.c.
     static constexpr std::uint32_t kGameAudioBootstrapFunction = 0x0022c8d0u;
     static constexpr std::uint32_t kLevelSoundBankLoadFunction = 0x0022d708u;
+
+    // sub_0012E1A8 is a zero-payload 989snd command wrapper. Generated Retail
+    // code proves command id 8 and routes it through the same 0x123456 client
+    // that Phase 18 replaces. Its higher semantic name is not yet proved, so
+    // keep the contract named by the observed command rather than guessing.
+    static constexpr std::uint32_t k989SndCommand8Function = 0x0012e1a8u;
+
+    // FUN_0012E6E0 is the shared EE-side 989snd command submission boundary.
+    // Retail passes command id in a0, payload byte count in a1, payload pointer
+    // in a2 and an auxiliary submission value in a3. Its queue/buffer/RPC
+    // mutations are private to the Phase-18-deferred 989snd backend; command-
+    // specific game semantics are intentionally not inferred here.
+    static constexpr std::uint32_t k989SndCommandSubmitFunction = 0x0012e6e0u;
     static constexpr std::uint32_t k989SndCommandService = 0x00123456u;
     static constexpr std::uint32_t k989SndLoaderService = 0x00123457u;
 
@@ -46,8 +59,10 @@ struct Rac1NativeAudioBootstrapContract {
 [[nodiscard]] bool applyRac1NativeAudioBootstrapState(
     std::span<std::uint8_t> guestMemory);
 
-// Installs the game-level Phase-11 audio boundaries. Actual audio playback,
-// bank loading and streaming remain explicit Phase-18 NativeAudio work.
+// Installs the native audio boundaries needed before Phase 18, including the
+// shared 989snd EE command-submission boundary. Actual playback, bank loading
+// and streaming remain explicit Phase-18 NativeAudio work; no 989snd queue,
+// SIF/IOP state or synthetic RPC completion is created.
 void declareNativeAudioBootstrapReplacements(
     runtime::NativeReplacementRegistry& registry);
 

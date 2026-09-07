@@ -294,6 +294,38 @@ std::array<float, 16> rac1RetailClipMatrixColumnMajor(
     };
 }
 
+std::array<float, 16> rac1RetailWorldToClipMatrixColumnMajor(
+    const game::Rac1LiveCameraState& camera) noexcept {
+    auto matrix = rac1RetailClipMatrixColumnMajor(camera);
+
+    // M * T(-C) leaves M's basis columns unchanged. Its translation column is
+    // M * (-Cx, -Cy, -Cz, 1), exactly matching Retail's world-minus-camera
+    // convention before camera-matrix multiplication.
+    for (std::size_t row = 0u; row < 4u; ++row) {
+        matrix[12u + row] =
+            camera.clipW[row] -
+            camera.clipX[row] * camera.worldPosition[0] -
+            camera.clipY[row] * camera.worldPosition[1] -
+            camera.clipZ[row] * camera.worldPosition[2];
+    }
+    return matrix;
+}
+
+std::array<float, 16> rac1RetailWorldToOpenGlClipMatrixColumnMajor(
+    const game::Rac1LiveCameraState& camera) noexcept {
+    auto matrix = rac1RetailWorldToClipMatrixColumnMajor(camera);
+
+    // Retail's clip test is already the canonical +/-W volume (FUN_0022BF94
+    // vclipw.xyz), so X/Z/W need no host convention change. After divide,
+    // Retail maps NDC Y to GS screen Y, which increases downward; OpenGL window
+    // Y increases upward. Negating the clip-space Y row before the OpenGL
+    // viewport makes the final top-origin raster position identical.
+    for (std::size_t column = 0u; column < 4u; ++column) {
+        matrix[column * 4u + 1u] = -matrix[column * 4u + 1u];
+    }
+    return matrix;
+}
+
 std::array<float, 4> transformColumnMajor(
     const std::array<float, 16>& matrix,
     const std::array<float, 4>& point) noexcept {

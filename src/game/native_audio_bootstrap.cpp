@@ -17,6 +17,8 @@ using Contract = Rac1NativeAudioBootstrapContract;
 
 bool g_audioBootstrapLogged = false;
 bool g_levelSoundBankLogged = false;
+bool g_989SndCommand8Logged = false;
+bool g_989SndCommandSubmitLogged = false;
 
 std::uint32_t readLe32(std::span<const std::uint8_t> memory,
                        std::uint32_t address) {
@@ -49,6 +51,52 @@ std::uint32_t signedDivideByTen(std::uint32_t rawValue) {
 
 void returnToGuestCaller(R5900Context* ctx) {
     ctx->pc = getRegU32(ctx, 31);
+}
+
+void nativeDeferred989SndCommandSubmit(std::uint8_t*,
+                                        R5900Context* ctx,
+                                        PS2Runtime*) {
+    if (!g_989SndCommandSubmitLogged) {
+        g_989SndCommandSubmitLogged = true;
+        std::cerr << "[OpenRatchet:platform] audio-bootstrap component=989snd-command-submit"
+                  << " source=native-hle command=" << getRegU32(ctx, 4)
+                  << " payloadBytes=" << getRegU32(ctx, 5)
+                  << " policy=deferred-to-phase18"
+                  << " queueBypass=1 sifBypass=1 status=ok\n";
+    }
+
+    // FUN_0012E6E0 only queues a command into the private 989snd EE transport
+    // and pumps that queue through RPC function 0x4D. Phase 18 already owns
+    // the omitted backend, so do not create queue/client/response state here.
+    // The generated function has no explicit game-level return contract: its
+    // final v0 is incidental pump state, and reviewed game callers discard or
+    // overwrite it. Preserve the incoming v0 and every guest register/memory
+    // byte, changing only PC to return through the original RA.
+    returnToGuestCaller(ctx);
+}
+
+void nativeDeferred989SndCommand8(std::uint8_t*,
+                                    R5900Context* ctx,
+                                    PS2Runtime*) {
+    if (!g_989SndCommand8Logged) {
+        g_989SndCommand8Logged = true;
+        std::cerr << "[OpenRatchet:platform] audio-bootstrap component=989snd-command8"
+                  << " source=native-hle command=8 payloadBytes=0"
+                  << " policy=deferred-to-phase18 retailResult=0"
+                  << " sifBypass=1 status=ok\n";
+    }
+
+    // sub_0012E1A8 is a zero-argument wrapper around 989snd command 8.
+    // Generated Retail proves that it invokes FUN_0012E6E0 with command=8
+    // and all payload arguments zero. The SifCallRpc implementation at
+    // sub_0011B1C8 returns 0 after a successful submission. At startup,
+    // sub_001E9488 calls this wrapper immediately after sub_0022D708; the
+    // level-bank result has already been copied into s0 in the delay slot,
+    // and command 8's v0 is overwritten before any use. Since Phase 18 owns
+    // native audio, select that exact successful submission result without
+    // fabricating a 989snd client, IOP state, response buffer, or busy flag.
+    SET_GPR_U32(ctx, 2, 0u);
+    returnToGuestCaller(ctx);
 }
 
 void nativeLevelSoundBankLoad(std::uint8_t*,
@@ -177,6 +225,14 @@ void declareNativeAudioBootstrapReplacements(
                  "native.platform.level-sound-bank-deferred",
                  runtime::NativeReplacementStage::Runtime,
                  nativeLevelSoundBankLoad);
+    registry.add(Contract::k989SndCommand8Function,
+                 "native.platform.989snd-command8-deferred",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeDeferred989SndCommand8);
+    registry.add(Contract::k989SndCommandSubmitFunction,
+                 "native.platform.989snd-command-submit-deferred",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeDeferred989SndCommandSubmit);
 }
 
 } // namespace ratchet::game

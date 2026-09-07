@@ -158,9 +158,27 @@ struct Rac1LiveRatchetRenderIdentity {
 [[nodiscard]] const char* rac1LiveRatchetRenderIdentityStatusName(
     Rac1LiveRatchetRenderIdentityStatus status) noexcept;
 
-// OpenGL/rlgl column-major form of Retail's already-materialized clip transform.
-// FUN_0022BF94 proves that the four qwords are columns: X*x + Y*y + Z*z + W*w.
+// Column-major storage form of Retail's already-materialized camera-relative
+// clip transform. FUN_0022BF94 proves that the four qwords are columns:
+// X*x + Y*y + Z*z + W*w. FUN_001F2260 proves that camera world position is
+// not baked into those four columns. This preserves Retail clip semantics; it
+// does not yet convert the post-divide GS screen-Y convention to OpenGL.
 [[nodiscard]] std::array<float, 16> rac1RetailClipMatrixColumnMajor(
+    const game::Rac1LiveCameraState& camera) noexcept;
+
+// Full absolute-world -> clip transform for native geometry. Retail camera users
+// such as FUN_001F7D30 first subtract state+0x140 from world xyz before applying
+// a camera matrix built from the same rotation block. Algebraically this is the
+// materialized clip matrix multiplied by T(-cameraWorldPosition).
+[[nodiscard]] std::array<float, 16> rac1RetailWorldToClipMatrixColumnMajor(
+    const game::Rac1LiveCameraState& camera) noexcept;
+
+// Absolute-world -> OpenGL clip transform used by the native runtime. Retail
+// FUN_0022BF94 performs perspective divide and then maps NDC Y through the GS
+// screen transform, whose visible Y axis increases downward. OpenGL's viewport
+// window Y increases upward. X and the canonical +/-W clip/depth convention are
+// already compatible, so the exact host bridge is diag(1,-1,1,1) * Mretail.
+[[nodiscard]] std::array<float, 16> rac1RetailWorldToOpenGlClipMatrixColumnMajor(
     const game::Rac1LiveCameraState& camera) noexcept;
 
 [[nodiscard]] std::array<float, 4> transformColumnMajor(

@@ -18,7 +18,10 @@ has not yet received a native implementation.
    `PS2Recomp/ps2xRecomp/tools/ghidra/ExportPS2Functions.java`, and save the
    generated config as `build/game.toml`.
 3. Run `tools/bootstrap.ps1 -Stage Recompile`. The generated PS2Recomp C++ goes
-   into `generated/` and is treated as read-only fallback game logic.
+   into `generated/` and is treated as read-only fallback game logic. Recompile
+   uses the same repository-owned compatibility patch as the native build, but
+   applies it only to a deterministic copy under `build/tooling/_openratchet/`;
+   the pinned checkout itself remains untouched.
 4. Configure/build the native host with `tools/bootstrap.ps1 -Stage Build` or
    use the verified incremental helper `tools/build-native.cmd`.
 
@@ -28,11 +31,13 @@ match the installed Ghidra version.
 
 `third_party/PS2Recomp` is an immutable pinned dependency, not a place for
 OpenRatchet-specific edits. The required revision is recorded in
-`patches/ps2recomp-base-revision.txt`. During native configuration OpenRatchet
-verifies that checkout is both at the pinned revision and completely clean, then
-archives committed `HEAD` into `build/native/_openratchet/PS2Recomp` and applies
-the repository-owned compatibility patch there. The source checkout therefore
-stays byte-for-byte upstream-clean; build-local patched files are disposable
+`patches/ps2recomp-base-revision.txt`. Both native configuration and the static
+recompile stage verify that checkout is at the pinned revision and completely
+clean, archive committed `HEAD` into deterministic build-local copies, and apply
+the repository-owned compatibility patch only there. Native runtime builds use
+`build/native/_openratchet/PS2Recomp`; static regeneration uses
+`build/tooling/_openratchet/PS2Recomp`. The source checkout therefore stays
+byte-for-byte upstream-clean and all patched dependency sources remain disposable
 artifacts under the ignored `build/` tree.
 
 `tools/build-native.ps1` also tracks SHA-256 content for dirty build inputs. A
@@ -338,6 +343,135 @@ fully accounted (`liveMobyMapped=5`, `liveMobyUnaccounted=0`,
 remain deferred. `third_party/PS2Recomp` is clean. This same Windows run is the
 final Phase-11 regression gate, so **Phase 11 is complete**; Phase 12 is the next
 roadmap milestone.
+
+Phase 12 is now in progress with the first native controller boundary. Static
+Retail reconstruction identifies controller state `0x13C940`, per-frame update
+`sub_002170C8`, and `FUN_00217328` as the unchanged game-side raw-pad parser.
+OpenRatchet now replaces the four libdbc transactions beneath that state machine
+instead of synthesizing DBCMAN/SIF packets. Host keyboard/gamepad state becomes
+exactly a six-byte Retail report: active-low 16-bit buttons followed by
+right-X/right-Y/left-X/left-Y centered at `0x7F`. The original parser still owns
+button edges, deadzones, history and gameplay semantics; pressure bytes remain
+deferred because Retail only reads them for reports of at least `0x12` bytes.
+The first Windows gate validates the module itself (Release build, 24/24 tests,
+viewer regression, normal 20-second Level-0/runtime accounting), but it also
+proves that the four pad callbacks are not yet reachable: a focused 60-second run
+advances to tick 2520 with no `[OpenRatchet:input]` record. The upstream wait is
+`sub_00232D00` at `0x232D60`, a separate custom SID-`0x11` resource-stash RPC,
+not the visible 989snd client. Static producer/consumer proof shows that
+`0x232E40` stages real EE bytes into one of 64 slots in 16-byte units,
+`0x232F20` reads bounded slot ranges back, and `0x233038` queries the slot length.
+OpenRatchet now owns those four resource-facing stash functions with real host
+storage instead of fabricating SID-`0x11` SIF/IOP state. Windows confirms that
+boundary live: the old `0x232D60` wait disappears and two real stash slots fill.
+Retail then advances to `pc=0x1EB968` but still never reaches the native pad
+callbacks. The new wait is now proved to be the omitted Phase-18 audio follow-up,
+not an input or generic asset-I/O defect: `sub_0012E1A8` sends zero-payload 989snd
+command `8` through client `0x15EBC0`, and the later `FUN_0012DC80`/
+`FUN_0012DE70` poll checks that same client. Because the call occurs immediately
+after the already-deferred `sub_0022D708` level-bank boundary, the native audio
+module now owns `sub_0012E1A8` too and returns the exact successful RPC-submission
+result `0` without synthesizing 989snd/SIF/IOP state. Windows revalidation proves
+that boundary live: 25/25 CTests pass, the complete viewer regression remains
+`status=ok`, the command-8 HLE fires, the old `0x1EB968` wait disappears, and
+Retail reaches the native input layer far enough to execute `device-status` and
+`connection-transition` callbacks.
+
+That same run exposed a genuine recompiler defect at `0x22BE08`, not an input
+failure. The build-local PS2Recomp correction now records `PC+8` resumptions for
+all R5900 REGIMM branch-and-link variants. Windows static recompilation against
+the normalized active-checkout TOML succeeds with 1308 discovered functions,
+23,125 additional entrypoints and zero errors; the four concrete R&C1 resumptions
+`0x218364`, `0x21848C`, `0x218644` and `0x22BE08` are emitted, generated
+`sub_0022BBA0` contains the `0x22BE08` resume case/label, **26/26 CTests pass**,
+the viewer remains unchanged, runtime replacements stay `2/2` + `30/30`, and the
+former `No exact recompiled function for guest PC 0x22be08` failure disappears.
+
+Retail then advances to `sub_00235BE8` and repeatedly samples `pc=0x235F1C`.
+Its `ra=0x70000000` / `sp=0x70000070` values are intentional Retail scratchpad
+state. The real broken invariant is immediately upstream: the routine starts
+normal DMAC channel 9 (`TO_SPR`) and consumes staged records from `0x70002000`,
+while its caller later uses normal channel 8 (`FROM_SPR`) to return results from
+scratchpad `0x3600` to RDRAM `0x1E3200`. Pinned PS2Recomp stores/finishes those
+channel registers but moves no bytes for SPR channels 8/9. The build-local
+compatibility patch therefore adds only exact synchronous normal-mode RDRAM/SPR
+movement, 14-bit SADR wrapping and completion bookkeeping. A dedicated regression
+fails on pristine PS2Memory at the first TO_SPR byte comparison and passes on the
+patched source with GCC and Clang. The standalone regression links PS2Recomp's
+own `ps2xTest/src/test_function_table.cpp`, avoiding any game/generated runner
+table. Windows acceptance is now complete: **27/27 CTests pass**, the viewer
+regression remains unchanged, `pc=0x235F1C` disappears, and the native six-byte
+read reaches the unchanged Retail parser as `[OpenRatchet:input] component=read
+... reportBytes=6 ... parser=retail-FUN_00217328 ... status=ok`. That closes Step
+12.1 without any host-written controller/gameplay state.
+
+The next stable condition is `pc=0x1198B0` in `FUN_001197A8`, and it is another
+PS2Recomp runtime contract defect rather than an input HLE opportunity. Retail
+opens DECI2 protocol `0x210` with callback state `0x154A50` and registered handler
+`FUN_00119610` (`0x119610`), requests send event `3`, then polls event `4` until
+the handler clears `state+0x0C` at Retail instruction `0x119788`. Pinned
+PS2Recomp compiles `Deci2Call` out of Release builds unless a debug macro is set;
+even when enabled, request-send/poll return success without dispatching the
+registered handler. The build-local compatibility patch makes the existing DECI2
+syscall HLE active in Release and supplies only the proved registered-callback
+contract: event 3 dispatch on request-send, one pending completion, then event 4
+exactly once on poll. The callback receives the open-time `opt` in `a2`, inherits
+the interrupted guest SP and uses a zero RA sentinel. Retail itself remains the
+only writer of `state+0x0C`. A counterfactual DECI2 regression fails on pristine
+Release-style runtime and passes after the patch with GCC and Clang.
+
+Step 12.2 adds a direct read-only gate on `FUN_00217328` output rather than
+another parser. `rac1_native_input` observes controller state `0x13C940`: current
+buttons and press/release edges at `+0x1A0/+0x1A4/+0x1A8`, plus the parser's four
+right-X/right-Y/left-X/left-Y floats at `+0x100..+0x10C`. Runtime observation is
+performed under the existing guest-execution handoff and logged as
+`[OpenRatchet:input] component=parsed-live ... ownership=retail-read-only`.
+Unit tests verify exact extraction, axis order, truncated-memory failure and
+strict non-mutation. Windows now closes this gate with real non-neutral input:
+`pressed=0x4000` reaches the unchanged parser as `buttons=0x4000` and
+`pressedEdges=0x4000`, followed by `releasedEdges=0x4000`. No host-written parser
+output or DBC/SIF fallback is involved.
+
+The shared Sony 989snd submitter `FUN_0012E6E0` is also Windows-accepted at its
+Phase-18-deferred audio boundary. **28/28 CTests** pass, runtime replacements are
+**31/31**, `989snd-command-submit ... status=ok` is observed and the old
+`pc=0x12E820` freeze disappears while DMA/GIF/VIF and Ratchet animation continue
+advancing.
+
+The native presentation foundation is now Windows-accepted. Composing
+`Mclip * T(-cameraPosition)` makes real native Level-0 geometry visible in
+`openratchet.exe`, and the GS/OpenGL screen-space convention is handled by
+preserving Retail X/Z/W while negating only clip Y before viewport mapping.
+`FUN_001F2260` proves why the camera translation is required,
+`FUN_001F7D30` independently proves the absolute-world -> camera-relative input
+convention, and `FUN_0022BF94` is the oracle for the post-divide GS screen
+transform. Release builds, **28/28 CTests pass**, the standalone Level-0 viewer
+preserves every strict accounting invariant, and the mandatory 20-second native
+run remains alive with graphics activity and reaches `renderer=ok`, `camera=ok`,
+`rendered=1`, `status=ok`. The former black frame and pure vertical-inversion
+failures are therefore closed without introducing `Camera3D`, guessed FOV,
+target/up or a host-authored gameplay camera.
+
+The live runtime is not yet visually accepted: its frame still contains large
+stretched/crossing triangle corruption that is absent from `native_level_viewer`.
+The next Phase-12 checkpoint is therefore **viewer/runtime render-path parity**,
+not gameplay movement yet. The architectural rule is: different state acquisition
+and orchestration, but shared rendering semantics/backend for equivalent canonical
+inputs. Viewer/runtime differences remain intentional for state source, camera
+ownership, animation clock, visibility/lifecycle, streaming and debug UI. The same
+geometry/topology conversion, texture/material semantics, vertex/index data,
+world-transform math, cull/depth/blend state, batching and native draw submission
+must converge on shared behavior.
+
+Step 12.3B will add deterministic canonical-frame parity evidence: vertex/index
+counts and hashes, texture/material identity, transform hashes, primitive topology,
+render state and draw ordering. Divergent canonical CPU-side data points to scene
+materialization/preparation; matching canonical data with divergent pixels points
+to GPU upload/state, resource lifetime or draw submission. The unexplained runtime-
+only triangle corruption must be eliminated while keeping the viewer correct and
+keeping `openratchet.exe` driven by live Retail state. Only after this parity gate
+closes does Step 12.3C continue from the already-proved `FUN_00217328` parser into
+authentic gameplay consumers and prove Ratchet/camera response.
 
 
 Phase 11 has now promoted the controller and save bootstrap above SIF instead

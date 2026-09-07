@@ -121,6 +121,8 @@ Write-RecentMatches 'Recent frame uploads' $stdoutLines '\[frame:upload\]' $Tail
 Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLines
 Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF(?::RPC)?\].*(injected completion|deferred data-bearing CALL|disposition=)' $TailLines
 Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenRatchet:platform\]' $TailLines
+Write-RecentMatches 'Native resource stash' ($stdoutLines + $stderrLines) '\[OpenRatchet:stash\]' $TailLines
+Write-RecentMatches 'Native host input' ($stdoutLines + $stderrLines) '\[OpenRatchet:input\]' $TailLines
 Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
 Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
 Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines

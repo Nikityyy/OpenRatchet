@@ -16,6 +16,8 @@ struct Rac1LiveCameraLayout {
 
     // FUN_0022BF94 consumes these four qwords as
     // clipX*x + clipY*y + clipZ*z + clipW*w before vclipw/perspective divide.
+    // FUN_001F2260 builds them without folding in camera world position; the
+    // input domain is therefore camera-relative, not absolute world xyz.
     static constexpr std::uint32_t kClipXOffset = 0x0100u;
     static constexpr std::uint32_t kClipYOffset = 0x0110u;
     static constexpr std::uint32_t kClipZOffset = 0x0120u;
@@ -39,7 +41,8 @@ struct Rac1LiveCameraState {
     std::array<float, 3> orientationZ{};
 
     // Preserve the exact Retail qword order rather than converting it to a host
-    // graphics convention. FUN_0022BF94 proves the X/Y/Z/W combination below.
+    // graphics convention. FUN_0022BF94 proves the X/Y/Z/W combination below;
+    // camera world translation remains the independent +0x140 field above.
     std::array<float, 4> clipX{};
     std::array<float, 4> clipY{};
     std::array<float, 4> clipZ{};
@@ -66,8 +69,9 @@ struct Rac1LiveCameraResult {
 [[nodiscard]] Rac1LiveCameraResult
 inspectRac1LiveCamera(std::span<const std::uint8_t> guestRdram);
 
-// Exact vector combination used by FUN_0022BF94. No perspective divide or host
-// viewport convention is applied here.
+// Exact camera-relative vector combination used by FUN_0022BF94. No camera
+// world-position subtraction, perspective divide or host viewport convention is
+// applied here.
 [[nodiscard]] std::array<float, 4> transformRac1LiveCameraPointToClip(
     const Rac1LiveCameraState& camera,
     const std::array<float, 4>& point);

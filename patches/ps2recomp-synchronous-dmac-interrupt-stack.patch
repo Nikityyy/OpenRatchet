@@ -219,3 +219,360 @@ index 8520545..9d2ce4a 100644
          tc.Run("sceSifSetDma acknowledges DTX work-buffer transfers by advancing the EE footer ticket", [](TestCase &t)
          {
              TestEnv env;
+diff --git a/ps2xRecomp/src/lib/control_flow_analyzer.cpp b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+index a099f5c..8624665 100644
+--- a/ps2xRecomp/src/lib/control_flow_analyzer.cpp
++++ b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+@@ -152,6 +152,15 @@ namespace ps2recomp
+                 {
+                     queueExternalEntryTarget(target);
+                 }
++
++                const bool isRegimmLinkBranch =
++                    inst.opcode == OPCODE_REGIMM &&
++                    (inst.rt == REGIMM_BLTZAL || inst.rt == REGIMM_BGEZAL ||
++                     inst.rt == REGIMM_BLTZALL || inst.rt == REGIMM_BGEZALL);
++                if (isRegimmLinkBranch)
++                {
++                    queueResumeEntryTarget(inst.address + 8u);
++                }
+             }
+             else if (isStaticJump)
+             {
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index b1e8e0c..2fde2fe 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -117,7 +117,24 @@ static Instruction makeJal(uint32_t address, uint32_t target)
+     inst.raw = (OPCODE_JAL << 26) | inst.target;
+     return inst;
+ }
+-
++
++static Instruction makeRegimmLinkBranch(uint32_t address, uint8_t rt, int16_t offsetWords)
++{
++    Instruction inst{};
++    inst.address = address;
++    inst.opcode = OPCODE_REGIMM;
++    inst.rs = 8;
++    inst.rt = rt;
++    inst.immediate = static_cast<uint16_t>(offsetWords);
++    inst.simmediate = signExtend16(inst.immediate);
++    inst.isBranch = true;
++    inst.isCall = true;
++    inst.hasDelaySlot = true;
++    inst.raw = (OPCODE_REGIMM << 26) | (static_cast<uint32_t>(inst.rs) << 21) |
++               (static_cast<uint32_t>(rt) << 16) | inst.immediate;
++    return inst;
++}
++
+ static Instruction makeJalr(uint32_t address, uint8_t rs, uint8_t rd)
+ {
+     Instruction inst{};
+@@ -405,7 +422,45 @@ void register_code_generator_tests()
+         t.IsFalse(analysis.externalEntryPoints.contains(0x100Cu),
+                   "same-function JAL target should not become an external entry candidate");
+     });
+-
++
++    tc.Run("REGIMM branch-and-link return pcs are resumable", [](TestCase &t) {
++        Function func;
++        func.name = "regimm_link_call";
++        func.start = 0x2200;
++        func.end = 0x2220;
++        func.isRecompiled = true;
++        func.isStub = false;
++
++        const uint8_t linkVariants[] = {
++            REGIMM_BLTZAL, REGIMM_BGEZAL, REGIMM_BLTZALL, REGIMM_BGEZALL
++        };
++
++        for (const uint8_t variant : linkVariants)
++        {
++            std::vector<Instruction> instructions;
++            instructions.push_back(makeRegimmLinkBranch(0x2200, variant, 3)); // target 0x2210
++            instructions.push_back(makeNop(0x2204));
++            instructions.push_back(makeNop(0x2208));
++            instructions.push_back(makeNop(0x220C));
++            instructions.push_back(makeJr(0x2210, 31));
++            instructions.push_back(makeNop(0x2214));
++
++            CodeGenerator gen({}, {});
++            CodeGenerator::AnalysisResult analysis = gen.collectInternalBranchTargets(func, instructions);
++
++            t.IsTrue(analysis.entryPoints.contains(0x2210u),
++                     "REGIMM link target should remain an internal branch target");
++            t.IsTrue(analysis.resumeEntryPoints.contains(0x2208u),
++                     "REGIMM branch-and-link should mark PC+8 as resumable");
++            t.IsTrue(analysis.entryPoints.contains(0x2208u),
++                     "REGIMM branch-and-link return pc should emit an internal label");
++
++            std::string generated = gen.generateFunction(func, instructions, false);
++            t.IsTrue(generated.find("case 0x2208u: goto label_2208;") != std::string::npos,
++                     "owner wrapper should resume directly at the branch-and-link return pc");
++        }
++    });
++
+     tc.Run("control-flow analysis reports cross-function mid-function jumps as external entry candidates", [](TestCase &t) {
+         Function caller;
+         caller.name = "caller";
+
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 3d59328..bbe5b38 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1147,1 +1147,66 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
++            constexpr uint32_t kFromSprChannel = 0x1000D000u;
++            constexpr uint32_t kToSprChannel = 0x1000D400u;
++            const uint32_t mode = (value >> 2) & 0x3u;
++            if ((channelBase == kFromSprChannel || channelBase == kToSprChannel) && mode == 0u)
++            {
++                const uint64_t bytes64 = static_cast<uint64_t>(qwc) * 16ull;
++                if (bytes64 > PS2_RAM_SIZE)
++                {
++                    throw std::runtime_error("SPR normal DMA exceeds RDRAM capacity");
++                }
++
++                const uint32_t bytes = static_cast<uint32_t>(bytes64);
++                const uint32_t ramPhys = translateAddress(madr);
++                if (ramPhys > PS2_RAM_SIZE || bytes > (PS2_RAM_SIZE - ramPhys))
++                {
++                    throw std::runtime_error("SPR normal DMA RDRAM range is out of bounds");
++                }
++
++                constexpr uint32_t kScratchpadMask = PS2_SCRATCHPAD_SIZE - 1u;
++                const uint32_t sadrRegister = channelBase + 0x80u;
++                uint32_t scratchOffset = m_ioRegisters[sadrRegister] & kScratchpadMask;
++                uint32_t ramOffset = ramPhys;
++                uint32_t remaining = bytes;
++
++                if (channelBase == kFromSprChannel && bytes != 0u)
++                {
++                    markModified(ramPhys, bytes);
++                }
++
++                while (remaining != 0u)
++                {
++                    const uint32_t chunk = std::min(remaining, PS2_SCRATCHPAD_SIZE - scratchOffset);
++                    if (channelBase == kToSprChannel)
++                    {
++                        std::memcpy(m_scratchpad + scratchOffset, m_rdram + ramOffset, chunk);
++                    }
++                    else
++                    {
++                        std::memcpy(m_rdram + ramOffset, m_scratchpad + scratchOffset, chunk);
++                    }
++
++                    remaining -= chunk;
++                    ramOffset += chunk;
++                    scratchOffset = (scratchOffset + chunk) & kScratchpadMask;
++                }
++
++                m_ioRegisters[channelBase + 0x10u] = madr + bytes;
++                m_ioRegisters[channelBase + 0x20u] = 0u;
++                m_ioRegisters[sadrRegister] = scratchOffset;
++                m_ioRegisters[channelBase + 0x00u] = value & ~0x100u;
++
++                const uint32_t channelBit = channelBase == kFromSprChannel ? 8u : 9u;
++                uint32_t dstat = m_ioRegisters.count(0x1000E010u) ? m_ioRegisters[0x1000E010u] : 0u;
++                dstat |= (1u << channelBit);
++                const uint32_t status = dstat & 0x3FFu;
++                const uint32_t mask = (dstat >> 16u) & 0x3FFu;
++                if ((status & mask) != 0u)
++                    dstat |= (1u << 31u);
++                else
++                    dstat &= ~(1u << 31u);
++                m_ioRegisters[0x1000E010u] = dstat;
++                queueCompletedDmacCause(channelBit);
++                return true;
++            }
++
+             if ((channelBase == 0x1000A000u || channelBase == 0x10009000u || channelBase == 0x10008000u) &&
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
+index 039da2f..ca2aeb6 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
+@@ -13,2 +13,3 @@ namespace
+         bool locked = false;
++        bool sendPending = false;
+     };
+@@ -80,4 +81,7 @@ namespace
+     }
+-
+-    static int32_t allocateDeci2Socket(uint16_t protocol, uint32_t opt, uint32_t handler, uint32_t userArea)
++    // Sessions are process-local HLE state for the temporary EE fallback.
++    static int32_t allocateDeci2Socket(uint16_t protocol,
++                                       uint32_t opt,
++                                       uint32_t handler,
++                                       uint32_t userArea)
+     {
+@@ -97,3 +101,3 @@ namespace
+         session.locked = false;
+-
++        session.sendPending = false;
+         g_deci2Sessions[socket] = session;
+@@ -101,3 +105,14 @@ namespace
+     }
+-
++    // Copy under lock so guest callback execution never holds the session mutex.
++    static bool copyDeci2Session(int32_t socket, Deci2Session &session)
++    {
++        std::lock_guard<std::mutex> lock(g_deci2Mutex);
++        const auto sessionIt = g_deci2Sessions.find(socket);
++        if (sessionIt == g_deci2Sessions.end())
++        {
++            return false;
++        }
++        session = sessionIt->second;
++        return true;
++    }
+     static bool updateDeci2LockState(int32_t socket, bool locked)
+@@ -115,3 +130,14 @@ namespace
+     }
+-
++    // Completion is delivered at most once for each requested send.
++    static bool updateDeci2SendPending(int32_t socket, bool pending)
++    {
++        std::lock_guard<std::mutex> lock(g_deci2Mutex);
++        auto sessionIt = g_deci2Sessions.find(socket);
++        if (sessionIt == g_deci2Sessions.end())
++        {
++            return false;
++        }
++        sessionIt->second.sendPending = pending;
++        return true;
++    }
+     static bool closeDeci2Socket(int32_t socket)
+@@ -121,2 +147,65 @@ namespace
+     }
++
++    static bool dispatchDeci2Handler(uint8_t *rdram,
++                                     R5900Context *callerCtx,
++                                     PS2Runtime *runtime,
++                                     const Deci2Session &session,
++                                     uint32_t event)
++    {
++        if (!rdram || !callerCtx || !runtime || session.handler == 0u ||
++            !runtime->hasFunction(session.handler))
++        {
++            return false;
++        }
++
++        R5900Context callbackCtx = *callerCtx;
++        SET_GPR_U32(&callbackCtx, 4, event);
++        SET_GPR_U32(&callbackCtx, 5, 0u);
++        SET_GPR_U32(&callbackCtx, 6, session.opt);
++        SET_GPR_U32(&callbackCtx, 7, 0u);
++        // ReqSend/Poll invoke the registered DECI2 handler synchronously from
++        // the interrupted guest call. Preserve that guest stack so the callback
++        // grows below the caller frame instead of reserving another top-of-RDRAM
++        // async stack that can overlap a game's legitimate main-thread stack.
++        SET_GPR_U32(&callbackCtx, 31, 0u);
++        callbackCtx.pc = session.handler;
++
++        constexpr uint32_t kMaxCallbackSteps = 4096u;
++        uint32_t steps = 0u;
++        bool callbackValid = true;
++        bool reschedulePending = false;
++        uint64_t handoffBaseline = 0u;
++        {
++            PS2Runtime::GuestExecutionScope guestExecution(runtime);
++            PS2Runtime::DeferredGuestYieldScope deferYield(reschedulePending);
++
++            while (callbackCtx.pc != 0u && !runtime->isStopRequested() &&
++                   steps < kMaxCallbackSteps)
++            {
++                if (!runtime->hasFunction(callbackCtx.pc))
++                {
++                    callbackValid = false;
++                    break;
++                }
++
++                PS2Runtime::RecompiledFunction step = runtime->lookupFunction(callbackCtx.pc);
++                if (!step)
++                {
++                    callbackValid = false;
++                    break;
++                }
++
++                step(rdram, &callbackCtx, runtime);
++                ++steps;
++            }
++            handoffBaseline = runtime->guestExecutionHandoffEpochSnapshot();
++        }
++
++        if (reschedulePending && !runtime->isStopRequested())
++        {
++            runtime->waitForGuestExecutionHandoff(handoffBaseline);
++        }
++
++        return callbackValid && callbackCtx.pc == 0u;
++    }
+ }
+@@ -127,3 +216,2 @@ namespace ps2_syscalls
+     {
+-#if defined(_DEBUG) || defined(RUNTIME_DECI2CALL)
+         const int32_t code = static_cast<int32_t>(getRegU32(ctx, 4));
+@@ -153,7 +241,55 @@ namespace ps2_syscalls
+         }
+-        // WE dont need to do thouses
+-        case 3:  // sceDeci2ReqSend(socket, dest)
+-        case 4:  // sceDeci2Poll(socket)
++        case 3: // sceDeci2ReqSend(socket, dest)
++        {
++            const int32_t socket = static_cast<int32_t>(args[0]);
++            Deci2Session session;
++            if (!copyDeci2Session(socket, session))
++            {
++                setReturnS32(ctx, KE_ERROR);
++                return;
++            }
++
++            // R&C1's observed protocol 0x210 handler consumes event 3 by
++            // calling sceDeci2ExSend. Handler-less sessions retain the runtime's
++            // previous no-host-channel success behavior.
++            if ((session.handler != 0u &&
++                 !dispatchDeci2Handler(rdram, ctx, runtime, session, 3u)) ||
++                !updateDeci2SendPending(socket, true))
++            {
++                setReturnS32(ctx, KE_ERROR);
++                return;
++            }
++
++            setReturnS32(ctx, KE_OK);
++            return;
++        }
++        case 4: // sceDeci2Poll(socket)
++        {
++            const int32_t socket = static_cast<int32_t>(args[0]);
++            Deci2Session session;
++            if (!copyDeci2Session(socket, session))
++            {
++                setReturnS32(ctx, KE_ERROR);
++                return;
++            }
++
++            if (session.sendPending)
++            {
++                if ((session.handler != 0u &&
++                     !dispatchDeci2Handler(rdram, ctx, runtime, session, 4u)) ||
++                    !updateDeci2SendPending(socket, false))
++                {
++                    setReturnS32(ctx, KE_ERROR);
++                    return;
++                }
++            }
++
++            setReturnS32(ctx, KE_OK);
++            return;
++        }
+         case -7: // sceDeci2ExReqSend(socket, dest)
+         {
++            // The current Retail path does not call ExReqSend. Preserve the
++            // existing no-host-channel success behavior until its callback
++            // contract is observed independently.
+             setReturnS32(ctx, KE_OK);
+@@ -232,3 +368,2 @@ namespace ps2_syscalls
+         }
+-#endif
+     }

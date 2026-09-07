@@ -322,6 +322,62 @@ int main() {
                     matrix[4] == camera.clipY[0] && matrix[15] == camera.clipW[3],
                 "matrix storage is literal X/Y/Z/W column order for rlgl/OpenGL");
 
+    // FUN_001F2260 never folds camera state+0x140 into the materialized clip
+    // columns. FUN_001F7D30 independently proves the world-space convention by
+    // subtracting that position before multiplying a camera matrix built from
+    // the same rotation block. Pin the equivalent host composition M*T(-C).
+    camera.worldPosition = {10.0f, -20.0f, 30.0f};
+    const std::array<float, 4> worldPoint{12.0f, -17.0f, 34.0f, 1.0f};
+    const std::array<float, 4> cameraRelativePoint{2.0f, 3.0f, 4.0f, 1.0f};
+    const auto retailCameraRelative =
+        ratchet::game::transformRac1LiveCameraPointToClip(camera, cameraRelativePoint);
+    const auto worldMatrix =
+        ratchet::render::rac1RetailWorldToClipMatrixColumnMajor(camera);
+    const auto hostWorld = ratchet::render::transformColumnMajor(worldMatrix, worldPoint);
+    const std::array<float, 4> expectedWorld{66.0f, 76.0f, 86.0f, 96.0f};
+    for (std::size_t i = 0u; i < hostWorld.size(); ++i) {
+        test.expect(close(retailCameraRelative[i], expectedWorld[i]),
+                    "Retail camera-relative oracle includes world-minus-camera input");
+        test.expect(close(hostWorld[i], expectedWorld[i]),
+                    "world-to-clip host matrix composes Retail T(-cameraPosition)");
+    }
+
+    // Retail FUN_0022BF94 clips in canonical +/-W space, divides by W, and
+    // only then applies its GS screen transform. GS visible Y increases from
+    // top to bottom, whereas OpenGL window Y increases from bottom to top. The
+    // native bridge must therefore preserve X/Z/W and negate only clip Y.
+    const auto openGlWorldMatrix =
+        ratchet::render::rac1RetailWorldToOpenGlClipMatrixColumnMajor(camera);
+    const auto openGlWorld =
+        ratchet::render::transformColumnMajor(openGlWorldMatrix, worldPoint);
+    test.expect(close(openGlWorld[0], expectedWorld[0]) &&
+                    close(openGlWorld[1], -expectedWorld[1]) &&
+                    close(openGlWorld[2], expectedWorld[2]) &&
+                    close(openGlWorld[3], expectedWorld[3]),
+                "OpenGL bridge negates only Retail clip Y after world-to-camera composition");
+
+    // Counterfactual screen-space proof: for the same positive half-height,
+    // Retail's top-origin GS raster mapping is center + halfHeight*ndcY. OpenGL
+    // produces bottom-origin window coordinates, so converting those back to a
+    // top-origin raster must give the same row only when clip Y is negated.
+    constexpr float viewportHeight = 448.0f;
+    const float retailNdcY = expectedWorld[1] / expectedWorld[3];
+    const float openGlNdcY = openGlWorld[1] / openGlWorld[3];
+    const float retailTopOriginY =
+        0.5f * viewportHeight + 0.5f * viewportHeight * retailNdcY;
+    const float openGlBottomOriginY =
+        0.5f * viewportHeight + 0.5f * viewportHeight * openGlNdcY;
+    const float openGlTopOriginY = viewportHeight - openGlBottomOriginY;
+    test.expect(close(retailTopOriginY, openGlTopOriginY),
+                "Retail GS and OpenGL viewport mappings agree after the proved clip-Y conversion");
+
+    const auto oldDirectWorld = ratchet::render::transformColumnMajor(matrix, worldPoint);
+    test.expect(!close(oldDirectWorld[0], expectedWorld[0]) ||
+                    !close(oldDirectWorld[1], expectedWorld[1]) ||
+                    !close(oldDirectWorld[2], expectedWorld[2]) ||
+                    !close(oldDirectWorld[3], expectedWorld[3]),
+                "counterfactual direct clip matrix does not accept absolute world xyz");
+
     if (test.failures != 0) {
         std::cerr << test.failures << " render bridge test(s) failed\n";
         return 1;

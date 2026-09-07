@@ -99,6 +99,10 @@ int main() {
 
     test.expect(Contract::kGameAudioBootstrapFunction == 0x0022c8d0u,
                 "audio HLE owns the game-side startup wrapper, not a SIF packet");
+    test.expect(Contract::k989SndCommand8Function == 0x0012e1a8u,
+                "audio HLE owns the proved zero-payload 989snd command-8 wrapper");
+    test.expect(Contract::k989SndCommandSubmitFunction == 0x0012e6e0u,
+                "audio HLE owns the shared 989snd EE command-submission boundary");
     test.expect(Contract::k989SndCommandService == 0x00123456u &&
                     Contract::k989SndLoaderService == 0x00123457u,
                 "audio HLE documents both generated 989snd RPC service IDs");
@@ -126,17 +130,21 @@ int main() {
 
     ratchet::runtime::NativeReplacementRegistry registry;
     ratchet::game::declareNativeAudioBootstrapReplacements(registry);
-    test.expect(registry.size(ratchet::runtime::NativeReplacementStage::Runtime) == 2u,
-                "audio bootstrap declares exactly two game-level native boundaries");
-    test.expect(registry.entries().size() == 2u &&
+    test.expect(registry.size(ratchet::runtime::NativeReplacementStage::Runtime) == 4u,
+                "audio bootstrap declares exactly four proved native boundaries");
+    test.expect(registry.entries().size() == 4u &&
                     registry.entries()[0].address == Contract::kGameAudioBootstrapFunction &&
-                    registry.entries()[1].address == Contract::kLevelSoundBankLoadFunction,
-                "audio replacement addresses match the proved startup and level-bank wrappers");
-    test.expect(registry.entries().size() == 2u &&
-                    registry.entries()[1].fallbackStorage == nullptr,
-                "deferred level-bank load has no legacy 989snd/SIF fallback");
+                    registry.entries()[1].address == Contract::kLevelSoundBankLoadFunction &&
+                    registry.entries()[2].address == Contract::k989SndCommand8Function &&
+                    registry.entries()[3].address == Contract::k989SndCommandSubmitFunction,
+                "audio replacement addresses match the proved startup, level-bank, command-8 and shared submit boundaries");
+    test.expect(registry.entries().size() == 4u &&
+                    registry.entries()[1].fallbackStorage == nullptr &&
+                    registry.entries()[2].fallbackStorage == nullptr &&
+                    registry.entries()[3].fallbackStorage == nullptr,
+                "deferred audio boundaries have no legacy 989snd/SIF fallback");
 
-    if (registry.entries().size() == 2u) {
+    if (registry.entries().size() == 4u) {
         std::vector<std::uint8_t> callbackGuest(Contract::kGuestRamBytes, 0x5au);
         writeLe32(callbackGuest, Contract::kAudioOutputModeAddress, kOutputMode);
         writeLe32(callbackGuest, Contract::kAudioVolumeAddress, kVolume);
@@ -168,6 +176,44 @@ int main() {
                     "deferred level-bank wrapper returns directly to the game caller");
         test.expect(callbackGuest == beforeLevelBank,
                     "deferred level-bank wrapper has zero guest-memory side effects");
+
+        const std::vector<std::uint8_t> beforeCommand8 = callbackGuest;
+        R5900Context command8Context;
+        setGuestRegister(command8Context, 31u, kReturnAddress);
+        setGuestRegister(command8Context, 2u, 0xdeadbeefu);
+        registry.entries()[2].function(callbackGuest.data(), &command8Context, nullptr);
+        test.expect(getRegU32(&command8Context, 2) == 0u,
+                    "deferred 989snd command 8 returns the proved successful submission result 0");
+        test.expect(command8Context.pc == kReturnAddress,
+                    "deferred 989snd command 8 returns directly to the Retail caller");
+        test.expect(callbackGuest == beforeCommand8,
+                    "deferred 989snd command 8 has zero guest-memory side effects");
+
+        const std::vector<std::uint8_t> beforeSubmit = callbackGuest;
+        constexpr std::uint32_t kSubmitV0 = 0x2468ace0u;
+        constexpr std::uint32_t kSubmitCommand = 0x50u;
+        constexpr std::uint32_t kSubmitPayloadBytes = 0x14u;
+        constexpr std::uint32_t kSubmitPayload = 0x00123400u;
+        constexpr std::uint32_t kSubmitA3 = 0x55667788u;
+        R5900Context submitContext;
+        setGuestRegister(submitContext, 31u, kReturnAddress);
+        setGuestRegister(submitContext, 2u, kSubmitV0);
+        setGuestRegister(submitContext, 4u, kSubmitCommand);
+        setGuestRegister(submitContext, 5u, kSubmitPayloadBytes);
+        setGuestRegister(submitContext, 6u, kSubmitPayload);
+        setGuestRegister(submitContext, 7u, kSubmitA3);
+        registry.entries()[3].function(callbackGuest.data(), &submitContext, nullptr);
+        test.expect(submitContext.pc == kReturnAddress,
+                    "deferred 989snd command submission returns directly to the Retail caller");
+        test.expect(getRegU32(&submitContext, 2) == kSubmitV0,
+                    "deferred 989snd command submission preserves incoming v0 instead of inventing a result");
+        test.expect(getRegU32(&submitContext, 4) == kSubmitCommand &&
+                        getRegU32(&submitContext, 5) == kSubmitPayloadBytes &&
+                        getRegU32(&submitContext, 6) == kSubmitPayload &&
+                        getRegU32(&submitContext, 7) == kSubmitA3,
+                    "deferred 989snd command submission preserves all observed submission arguments");
+        test.expect(callbackGuest == beforeSubmit,
+                    "deferred 989snd command submission has zero guest-memory side effects");
     }
 
     if (test.failures != 0) {

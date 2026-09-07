@@ -81,6 +81,8 @@ add_executable(openratchet
     src/game/native_io.cpp
     src/game/native_assets.cpp
     src/game/native_platform_bootstrap.cpp
+    src/game/rac1_native_stash.cpp
+    src/game/rac1_native_input.cpp
     src/game/native_audio_bootstrap.cpp
     src/game/native_replacements.cpp
     src/game/rac1_live_state.cpp
@@ -171,6 +173,26 @@ if(BUILD_TESTING)
     target_include_directories(rac1_render_bridge_tests PRIVATE src)
     add_test(NAME rac1_render_bridge COMMAND rac1_render_bridge_tests)
 
+    add_executable(ps2recomp_control_flow_tests
+        tests/ps2recomp_control_flow_tests.cpp
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRecomp/src/lib/control_flow_analyzer.cpp"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRecomp/src/lib/recompiler_reporter.cpp")
+    target_include_directories(ps2recomp_control_flow_tests PRIVATE
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRecomp/include")
+    add_test(NAME ps2recomp_control_flow COMMAND ps2recomp_control_flow_tests)
+
+    add_executable(ps2recomp_spr_dma_tests
+        tests/ps2recomp_spr_dma_tests.cpp
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xTest/src/test_function_table.cpp")
+    target_link_libraries(ps2recomp_spr_dma_tests PRIVATE ps2_runtime)
+    add_test(NAME ps2recomp_spr_dma COMMAND ps2recomp_spr_dma_tests)
+
+    add_executable(ps2recomp_deci2_tests
+        tests/ps2recomp_deci2_tests.cpp
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xTest/src/test_function_table.cpp")
+    target_link_libraries(ps2recomp_deci2_tests PRIVATE ps2_runtime)
+    add_test(NAME ps2recomp_deci2 COMMAND ps2recomp_deci2_tests)
+
     add_executable(native_platform_bootstrap_tests
         tests/native_platform_bootstrap_tests.cpp
         src/game/native_platform_bootstrap.cpp)
@@ -180,6 +202,26 @@ if(BUILD_TESTING)
         "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel"
         "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xIOP/include")
     add_test(NAME native_platform_bootstrap COMMAND native_platform_bootstrap_tests)
+
+    add_executable(rac1_native_stash_tests
+        tests/rac1_native_stash_tests.cpp
+        src/game/rac1_native_stash.cpp)
+    target_include_directories(rac1_native_stash_tests PRIVATE
+        src
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xIOP/include")
+    add_test(NAME rac1_native_stash COMMAND rac1_native_stash_tests)
+
+    add_executable(rac1_native_input_tests
+        tests/rac1_native_input_tests.cpp
+        src/game/rac1_native_input.cpp)
+    target_include_directories(rac1_native_input_tests PRIVATE
+        src
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/include"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel"
+        "${OPENRATCHET_PS2RECOMP_BUILD_SOURCE_DIR}/ps2xIOP/include")
+    add_test(NAME rac1_native_input COMMAND rac1_native_input_tests)
 
     add_executable(native_audio_bootstrap_tests
         tests/native_audio_bootstrap_tests.cpp

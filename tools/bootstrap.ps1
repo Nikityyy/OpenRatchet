@@ -18,7 +18,11 @@ $ErrorActionPreference = 'Stop'
 $buildJobs = if ($Jobs -gt 0) { $Jobs } else { [Environment]::ProcessorCount }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $ps2RecompRevisionFile = Join-Path $root 'patches\ps2recomp-base-revision.txt'
+$ps2RecompPatchFile = Join-Path $root 'patches\ps2recomp-synchronous-dmac-interrupt-stack.patch'
+$ps2RecompPrepareTool = Join-Path $root 'cmake\PreparePs2RecompTool.cmake'
 if (-not (Test-Path -LiteralPath $ps2RecompRevisionFile)) { throw "Missing PS2Recomp revision pin '$ps2RecompRevisionFile'." }
+if (-not (Test-Path -LiteralPath $ps2RecompPatchFile)) { throw "Missing PS2Recomp compatibility patch '$ps2RecompPatchFile'." }
+if (-not (Test-Path -LiteralPath $ps2RecompPrepareTool)) { throw "Missing PS2Recomp preparation script '$ps2RecompPrepareTool'." }
 $ps2RecompRevision = (Get-Content -Raw -LiteralPath $ps2RecompRevisionFile).Trim()
 if (-not $ps2RecompRevision) { throw "PS2Recomp revision pin is empty: '$ps2RecompRevisionFile'." }
 if (-not $Iso) { $Iso = Join-Path $root 'games\Ratchet & Clank (USA) (En,Fr,De,Es,It).iso' }
@@ -57,7 +61,19 @@ function Assert-CleanPinnedPs2Recomp([string]$Path) {
     $status = @(& git -C $Path status --porcelain --untracked-files=all)
     if ($LASTEXITCODE -ne 0) { throw "Could not inspect PS2Recomp status in '$Path'." }
     if ($status.Count -gt 0) {
-        throw "third_party/PS2Recomp must remain clean. Restore local changes before building/recompiling. OpenRatchet applies its compatibility patch only to build/native/_openratchet/PS2Recomp.`n$($status -join [Environment]::NewLine)"
+        throw "third_party/PS2Recomp must remain clean. Restore local changes before building/recompiling. OpenRatchet applies its compatibility patch only to deterministic build-local copies.`n$($status -join [Environment]::NewLine)"
+    }
+}
+function Prepare-PatchedPs2Recomp([string]$UpstreamPath, [string]$OutputPath) {
+    Require-Command cmake
+    & cmake `
+        "-DOPENRATCHET_PS2RECOMP_UPSTREAM=$UpstreamPath" `
+        "-DOPENRATCHET_PS2RECOMP_PATCH=$ps2RecompPatchFile" `
+        "-DOPENRATCHET_PS2RECOMP_REVISION=$ps2RecompRevisionFile" `
+        "-DOPENRATCHET_PS2RECOMP_OUTPUT=$OutputPath" `
+        -P $ps2RecompPrepareTool
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to prepare patched PS2Recomp source at '$OutputPath'."
     }
 }
 
@@ -115,12 +131,36 @@ if ($Stage -in @('Recompile', 'All')) {
     Require-Command cmake
     if (-not (Test-Path -LiteralPath $Elf)) { throw "Missing ELF '$Elf'. Run with -Stage Extract first." }
     if (-not (Test-Path -LiteralPath $Config)) { throw "Missing TOML '$Config'. Export it from Ghidra first." }
+    $elfPath = (Resolve-Path -LiteralPath $Elf).Path.Replace('\', '/')
     $generatedPath = (Join-Path $root 'generated').Replace('\', '/')
+    $ghidraCsvPath = (Join-Path $root 'build\game.csv').Replace('\', '/')
     $configText = [System.IO.File]::ReadAllText($Config)
-    $configText = [regex]::Replace($configText, '(?m)^output\s*=.*$', "output = `"$generatedPath`"")
+
+    # Ghidra exports absolute paths into game.toml. The repository may later be
+    # renamed or moved, so those paths are not authoritative at recompile time.
+    # Canonicalize every filesystem path consumed by PS2Recomp to this checkout.
+    $configPaths = [ordered]@{
+        input = $elfPath
+        output = $generatedPath
+        ghidra_output = $ghidraCsvPath
+    }
+    foreach ($entry in $configPaths.GetEnumerator()) {
+        $key = [string]$entry.Key
+        $value = [string]$entry.Value
+        $pattern = "(?m)^$([regex]::Escape($key))\s*=.*$"
+        $matches = [regex]::Matches($configText, $pattern)
+        if ($matches.Count -ne 1) {
+            throw "Expected exactly one '$key = ...' entry in '$Config', found $($matches.Count). Re-export build/game.toml from Ghidra."
+        }
+        $replacement = '{0} = "{1}"' -f $key, $value
+        $configText = [regex]::Replace($configText, $pattern, $replacement)
+    }
     [System.IO.File]::WriteAllText($Config, $configText)
-    $toolBuild = Join-Path $PS2RecompDir 'build'
-    cmake -S $PS2RecompDir -B $toolBuild -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF
+    Write-Host "[recompiler] normalized config input=$elfPath output=$generatedPath ghidra_output=$ghidraCsvPath"
+    $preparedPs2RecompDir = Join-Path $root 'build\tooling\_openratchet\PS2Recomp'
+    Prepare-PatchedPs2Recomp $PS2RecompDir $preparedPs2RecompDir
+    $toolBuild = Join-Path $root 'build\tooling\ps2recomp'
+    cmake -S $preparedPs2RecompDir -B $toolBuild -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF
     if ($LASTEXITCODE -ne 0) { throw 'PS2Recomp configuration failed.' }
     cmake --build $toolBuild --config Release --target ps2_recomp --parallel $buildJobs
     if ($LASTEXITCODE -ne 0) { throw 'PS2Recomp build failed.' }
