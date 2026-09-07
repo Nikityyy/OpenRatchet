@@ -886,6 +886,56 @@ std::array<float, 3> transformRac1MobySkinnedPositionToWorld(
     };
 }
 
+Rac1MobyClassCatalogResult inspectRac1MobyClassCatalog(
+    std::span<const std::uint8_t> coreIndex,
+    Rac1ArrayRange mobyClasses) {
+    Rac1MobyClassCatalogResult result{};
+    if (mobyClasses.count > kMaxCount) return result;
+
+    std::size_t bytes = 0u;
+    if (!checkedMul(mobyClasses.count, kMobyClassEntryBytes, bytes) ||
+        !fits(mobyClasses.offset, bytes, coreIndex.size())) {
+        return result;
+    }
+
+    result.classes.reserve(mobyClasses.count);
+    for (std::uint32_t i = 0u; i < mobyClasses.count; ++i) {
+        const std::size_t offset = static_cast<std::size_t>(mobyClasses.offset) +
+                                   static_cast<std::size_t>(i) * kMobyClassEntryBytes;
+        const Rac1MobyClassCatalogEntry entry{
+            readI32(coreIndex, offset + 0x4u),
+            readU32(coreIndex, offset + 0x0u),
+        };
+        const auto duplicate = std::find_if(
+            result.classes.begin(), result.classes.end(),
+            [&](const Rac1MobyClassCatalogEntry& existing) {
+                return existing.oClass == entry.oClass;
+            });
+        if (duplicate != result.classes.end()) {
+            result.status = Rac1MobyClassCatalogStatus::DuplicateOClass;
+            return result;
+        }
+        result.classes.push_back(entry);
+    }
+
+    std::sort(result.classes.begin(), result.classes.end(),
+              [](const Rac1MobyClassCatalogEntry& lhs,
+                 const Rac1MobyClassCatalogEntry& rhs) {
+                  return lhs.oClass < rhs.oClass;
+              });
+    result.status = Rac1MobyClassCatalogStatus::Ok;
+    return result;
+}
+
+const char* rac1MobyClassCatalogStatusName(Rac1MobyClassCatalogStatus status) noexcept {
+    switch (status) {
+    case Rac1MobyClassCatalogStatus::Ok: return "ok";
+    case Rac1MobyClassCatalogStatus::InvalidIndexTable: return "invalid-index-table";
+    case Rac1MobyClassCatalogStatus::DuplicateOClass: return "duplicate-oclass";
+    }
+    return "unknown";
+}
+
 const char* rac1MobyStatusName(Rac1MobyStatus status) noexcept {
     switch (status) {
     case Rac1MobyStatus::Ok: return "ok";

@@ -1,5 +1,6 @@
 #include "game/rac1_live_state.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cassert>
@@ -190,6 +191,78 @@ void testOutOfRangePoolHardFails() {
     assert(result.status == ratchet::game::Rac1LiveMobyPoolStatus::PoolRangeOutOfRange);
 }
 
+void testRetailRuntimeClassRegistry() {
+    using L = ratchet::game::Rac1LiveMobyClassRegistryLayout;
+    std::vector<std::uint8_t> ram(0x001c0000u, 0u);
+    std::fill(ram.begin() + L::kOClassToSlotAddress,
+              ram.begin() + L::kOClassToSlotAddress + L::kOClassToSlotBytes,
+              L::kUnregisteredSlot);
+
+    ratchet::game::Rac1LiveMobyPoolSnapshot pool;
+    pool.status = ratchet::game::Rac1LiveMobyPoolStatus::Ok;
+    pool.slotsBeforeTerminator = 3u;
+    pool.traversedMobyCount = 2u;
+    pool.skippedNegativeStateCount = 1u;
+
+    ratchet::game::Rac1LiveMobyRecord levelClass;
+    levelClass.guestAddress = 0x00180000u;
+    levelClass.participatesInRetailTraversal = true;
+    levelClass.oClass = 530;
+    levelClass.classPointer = 0x00123400u;
+    pool.records.push_back(levelClass);
+
+    ratchet::game::Rac1LiveMobyRecord runtimeOnlyClass;
+    runtimeOnlyClass.guestAddress = 0x00180100u;
+    runtimeOnlyClass.participatesInRetailTraversal = true;
+    runtimeOnlyClass.oClass = 1905;
+    runtimeOnlyClass.classPointer = 0x00156780u;
+    pool.records.push_back(runtimeOnlyClass);
+
+    ratchet::game::Rac1LiveMobyRecord inactive;
+    inactive.guestAddress = 0x00180200u;
+    inactive.participatesInRetailTraversal = false;
+    inactive.oClass = 1999; // stale bytes must not be consulted
+    pool.records.push_back(inactive);
+
+    ram.at(L::kOClassToSlotAddress + 530u) = 3u;
+    ram.at(L::kOClassToSlotAddress + 1905u) = 4u;
+    writeLe32(ram, L::kClassDataPointerTableAddress + 3u * 4u, levelClass.classPointer);
+    writeLe32(ram, L::kClassDataPointerTableAddress + 4u * 4u, runtimeOnlyClass.classPointer);
+    // FUN_0020C5F0 also reads 0x1B3580[slot], but stores that independent word
+    // at moby+0x74. A conflicting decoy here proves class identity is sourced
+    // from 0x1B3200 rather than accidentally regressing to the auxiliary table.
+    writeLe32(ram, L::kRuntimeAuxPointerTableAddress + 3u * 4u, 0x00abc001u);
+    writeLe32(ram, L::kRuntimeAuxPointerTableAddress + 4u * 4u, 0x00abc002u);
+
+    const auto registry = ratchet::game::inspectRac1LiveMobyClassRegistry(ram, pool);
+    assert(registry.ok());
+    assert(registry.records == 3u);
+    assert(registry.active == 2u);
+    assert(registry.inactive == 1u);
+    assert(registry.activeEntries.size() == 2u);
+    assert(registry.activeEntries[0].ok());
+    assert(registry.activeEntries[0].registrySlot == 3u);
+    assert(registry.activeEntries[0].registryClassPointer == levelClass.classPointer);
+    assert(registry.activeEntries[1].ok());
+    assert(registry.activeEntries[1].oClass == 1905);
+    assert(registry.activeEntries[1].registrySlot == 4u);
+    assert(registry.activeEntries[1].registryClassPointer == runtimeOnlyClass.classPointer);
+
+    auto pointerMismatchPool = pool;
+    pointerMismatchPool.records[1].classPointer ^= 0x100u;
+    const auto pointerMismatch = ratchet::game::inspectRac1LiveMobyClassRegistry(
+        ram, pointerMismatchPool);
+    assert(pointerMismatch.ok());
+    assert(pointerMismatch.activeEntries[1].status ==
+           ratchet::game::Rac1LiveMobyClassRegistryEntryStatus::ClassPointerMismatch);
+
+    ram.at(L::kOClassToSlotAddress + 1905u) = L::kUnregisteredSlot;
+    const auto unregistered = ratchet::game::inspectRac1LiveMobyClassRegistry(ram, pool);
+    assert(unregistered.ok());
+    assert(unregistered.activeEntries[1].status ==
+           ratchet::game::Rac1LiveMobyClassRegistryEntryStatus::UnregisteredOClass);
+}
+
 } // namespace
 
 int main() {
@@ -198,6 +271,7 @@ int main() {
     testLastSlotContract();
     testMissingTerminatorHardFails();
     testOutOfRangePoolHardFails();
+    testRetailRuntimeClassRegistry();
 
     assert(std::string_view(ratchet::game::rac1LiveMobyPoolStatusName(
                ratchet::game::Rac1LiveMobyPoolStatus::Ok)) == "ok");

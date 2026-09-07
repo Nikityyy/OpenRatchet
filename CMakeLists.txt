@@ -87,7 +87,9 @@ add_executable(openratchet
     src/game/rac1_live_animation.cpp
     src/game/rac1_live_transform.cpp
     src/game/rac1_live_camera.cpp
+    src/game/rac1_live_sky.cpp
     src/render/native_mesh_renderer.cpp
+    src/render/native_skinned_moby_renderer.cpp
     src/render/rac1_render_bridge.cpp
     src/render/rac1_runtime_renderer.cpp
     src/guest_overrides.cpp
@@ -123,7 +125,8 @@ add_executable(native_level_viewer
     src/assets/rac1_moby_animation.cpp
     src/assets/wad_decompressor.cpp
     src/platform/native_vfs.cpp
-    src/render/native_mesh_renderer.cpp)
+    src/render/native_mesh_renderer.cpp
+    src/render/native_skinned_moby_renderer.cpp)
 target_include_directories(native_level_viewer PRIVATE src)
 target_link_libraries(native_level_viewer PRIVATE raylib)
 
@@ -163,7 +166,8 @@ if(BUILD_TESTING)
     add_executable(rac1_render_bridge_tests
         tests/rac1_render_bridge_tests.cpp
         src/render/rac1_render_bridge.cpp
-        src/game/rac1_live_camera.cpp)
+        src/game/rac1_live_camera.cpp
+        src/game/rac1_live_sky.cpp)
     target_include_directories(rac1_render_bridge_tests PRIVATE src)
     add_test(NAME rac1_render_bridge COMMAND rac1_render_bridge_tests)
 
@@ -241,6 +245,12 @@ if(BUILD_TESTING)
         src/assets/rac1_sky.cpp)
     target_include_directories(rac1_sky_tests PRIVATE src)
     add_test(NAME rac1_sky COMMAND rac1_sky_tests)
+
+    add_executable(rac1_live_sky_tests
+        tests/rac1_live_sky_tests.cpp
+        src/game/rac1_live_sky.cpp)
+    target_include_directories(rac1_live_sky_tests PRIVATE src)
+    add_test(NAME rac1_live_sky COMMAND rac1_live_sky_tests)
 
     add_executable(rac1_moby_tests
         tests/rac1_moby_tests.cpp

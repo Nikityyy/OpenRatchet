@@ -36,6 +36,26 @@ enum class Rac1MobySkipReason : std::uint8_t {
     SpecialMaterialDiscard,
 };
 
+enum class Rac1MobyClassCatalogStatus : std::uint8_t {
+    Ok,
+    InvalidIndexTable,
+    DuplicateOClass,
+};
+
+struct Rac1MobyClassCatalogEntry {
+    std::int32_t oClass = 0;
+    std::uint32_t classOffset = 0u;
+};
+
+struct Rac1MobyClassCatalogResult {
+    Rac1MobyClassCatalogStatus status = Rac1MobyClassCatalogStatus::InvalidIndexTable;
+    std::vector<Rac1MobyClassCatalogEntry> classes;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return status == Rac1MobyClassCatalogStatus::Ok;
+    }
+};
+
 struct Rac1MobySkippedClass {
     std::int32_t oClass = 0;
     Rac1MobySkipReason reason = Rac1MobySkipReason::NoClassData;
@@ -120,6 +140,16 @@ struct Rac1MobyResult {
 
     [[nodiscard]] bool ok() const noexcept { return status == Rac1MobyStatus::Ok; }
 };
+
+// Parses only the exact level-core Moby class identity table. This deliberately
+// does not decode a class blob or consult gameplay instances: it is the
+// authoritative native-domain oClass catalog used to join Retail live Mobys to
+// the currently loaded level without proximity/static-instance heuristics.
+Rac1MobyClassCatalogResult inspectRac1MobyClassCatalog(
+    std::span<const std::uint8_t> coreIndex,
+    Rac1ArrayRange mobyClasses);
+
+const char* rac1MobyClassCatalogStatusName(Rac1MobyClassCatalogStatus status) noexcept;
 
 // Decodes R&C1 moby class LOD0 meshes plus gameplay instance transforms into
 // ordinary host-side world-space triangles. This is deliberately a bind-pose

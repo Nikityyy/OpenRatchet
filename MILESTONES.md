@@ -21,7 +21,7 @@ Status values: `DONE`, `IN PROGRESS`, `TODO`.
 | Phase 8 | `DONE` | Native sky, ties & shrubs | Full static environment: tie structures, shrub vegetation, camera-relative sky shells. |
 | Phase 9 | `DONE` | Native mobys & instance accounting | Ratchet, crates, NPCs, enemies rendered in bind pose; strict 296/296 accounting. |
 | Phase 10 | `DONE` | Skeletal & model animation | Native pose decoding/skinning validated for all Level-0 skeletal frames; Ratchet visibly animates from its external retail sequence bank with retail loop interpolation. |
-| Phase 11 | `IN PROGRESS` | Live game-state & camera bridge | Native renderer continuously follows running recompiled game logic and gameplay camera. |
+| Phase 11 | `DONE` | Live game-state & camera bridge | Native renderer follows the running recompiled game through proved live Moby, animation, transform, camera, renderer-identity, and gameplay-sky bridges; unavailable Retail state remains explicitly deferred. |
 | Phase 12 | `TODO` | Native input & playable Ratchet | PC controller/keyboard input drives original simulation; playable Ratchet. |
 | Phase 13 | `TODO` | Native 2D / UI renderer | Native font, text, fades, sprites, and screen-space overlays. |
 | Phase 14 | `TODO` | Frontend & main menu | Boot sequence, logos, title screen, main menu, New Game / Load Game. |
@@ -405,7 +405,7 @@ retail simulation before any native input or gameplay ownership is introduced.
   construction state `status=orientation-not-materialized`; this is evidence of
   pre-materialization, not a reason to fabricate identity orientation, FOV or a
   host camera. Step 11.6 is now the next active step.
-- **Step 11.6 (`IN PROGRESS`):** Transfer final frame ownership in
+- **Step 11.6 (`DONE`):** Transfer final frame ownership in
   `openratchet.exe` from the PS2 GS/framebuffer presentation path to the existing
   native Phase-6..10 renderer, then continuously update native scene/Moby state
   from the proved 11.2-11.5 live bridges. The current horizontal-line/fragmented
@@ -460,10 +460,147 @@ retail simulation before any native input or gameplay ownership is introduced.
     `rendered=0 deferred=1` rather than inventing a host camera. The resulting
     black native-owned frame is therefore the expected fail-closed output of
     11.6A, not a GS presentation regression.
-  - **Step 11.6B (`TODO`):** Bridge the remaining renderer-facing Retail identity
-    needed for live Mobys/Ratchet and the Retail sky transform, then consume the
-    already proved 11.3 pose packets and 11.4 basis/position/scale only when each
-    component is actually materialized. No Phase-12 input semantics are included.
-- **Step 11.7 (`TODO`):** Full Phase-11 regression and mandatory 20-second
-  runtime gate before commit.
+  - **Step 11.6B (`DONE`):** Bridge the remaining renderer-facing Retail
+    identity needed for live Mobys/Ratchet and the Retail sky transform, then
+    consume the already proved 11.3 pose packets and 11.4 basis/position/scale
+    only when each component is actually materialized. No Phase-12 input
+    semantics are included.
+    - **Step 11.6B1 (`DONE`):** Ratchet's
+      renderer identity is now joined without instance proximity or relocated
+      pointer guesses. Retail `FUN_0020C5F0` receives `oClass` as its second
+      argument and writes it unchanged to `moby+0xA6`; Steps 11.3/11.4 already
+      select exactly one traversed `oClass==0` Moby. The native Level-0 decoder
+      independently exposes exactly one rendered `oClass==0` topology. Those
+      domains are therefore joined only when animation and transform identify
+      the same guest Moby address and the live transform also reports
+      `oClass==0`. A tempting stronger relation was explicitly disproved: the
+      native Ratchet class offset is `0x739540`; `0x654000 + 0x739540` is
+      `0xD8D540`, not the sampled live `moby+0x24` class pointer `0xA9E340`.
+      `moby+0x24` is consequently not used as a native-class relocation oracle.
+
+      The Phase-10 CPU-skinned dynamic-VBO helper has been extracted from the
+      viewer into `src/render/native_skinned_moby_renderer.*` and is shared by
+      viewer and runtime. Runtime Level 0 now validates and retains Ratchet's
+      exact `skinVertexIndex` topology: **4 material batches / 6,856 triangles /
+      4,026 skin vertices**. When and only when both Step-11.3 live pose packets
+      and Step-11.4 world basis are materialized, the runtime decodes those
+      observed packets, executes the already-proved Ratchet skinning program,
+      transforms each raw skinned point by the exact
+      `position + basis * (raw * scale/1024)` bridge, and updates that shared
+      topology. Current `endpoints-not-materialized` / `basis-not-materialized`
+      states remain deferred; no native-bank animation or static instance
+      transform is substituted. Renderer accounting now exposes
+      `liveMobyMapped/liveMobyMaterialized/liveMobyRendered`, `ratchetIdentity`,
+      `ratchetFrame`, and `ratchetGpu`. On the current sampled construction state
+      the expected new invariant is one mapped Ratchet, zero materialized/rendered
+      live Mobys, all live records deferred, and `liveMobyUnaccounted=0`.
+
+      Local GCC/Clang `-Wall -Wextra -Werror` gates pass for the pure identity
+      bridge, shared dynamic renderer, runtime renderer and modified viewer; the
+      complete runtime translation unit is also clean apart from known pinned
+      PS2Recomp-header warnings demoted from `-Werror`. A real Level-0 no-op-GPU
+      smoke test reproduces the 11.6A static counts plus the exact 4/6,856/4,026
+      Ratchet topology, and counterfactually creates then updates the dynamic GPU
+      buffers from an authentic decoded Ratchet skinning frame. Windows acceptance
+      is now green as well: Release builds, **22/22** CTests pass, the Phase-10
+      viewer keeps the exact 6,856/4,026 Ratchet visual gate, the 20-second runtime
+      remains alive with graphics activity and harness exit 0, and the stable native
+      frame reports `liveMobyMapped=1`, `ratchetIdentity=ok`,
+      `liveMobyUnaccounted=0`, `poolUnaccounted=0`, `status=ok` while preserving the
+      authentic `endpoints-not-materialized`, `basis-not-materialized` and
+      `orientation-not-materialized` deferrals. `third_party/PS2Recomp` is clean.
+    - **Step 11.6B2A (`DONE`):**
+      Extend proved live class identity from Ratchet to every active Retail Moby
+      without joining to a Phase-10 static instance. The first Windows gate exposed
+      the level-core/runtime-domain distinction (`oClass=1905` is valid live state
+      but absent from Level 0's 125 native class entries). The second Windows gate
+      then caught a separate field/table mistake: all 5/5 active Mobys failed when
+      `moby+0x24` was compared against `0x1B3580[slot]`. Re-reading the constructor
+      proves that `FUN_0020C5F0` performs **two different slot-table lookups**:
+      `slot = *(u8 *)(0x1B3AC0 + oClass)`, then
+      `classDataPtr = *(u32 *)(0x1B3200 + slot*4)` is stored at `moby+0x24`, while
+      the independent word `*(u32 *)(0x1B3580 + slot*4)` is stored at `moby+0x74`.
+      The latter is not the class-data pointer and remains semantically
+      uninterpreted here. `sub_00203640` publishes loaded class-data pointers into
+      `0x1B3200`; `FUN_0020C5F0` immediately consumes `moby+0x24` as the class block
+      (`+0x0E/+0x44/+0x24/+0x40/+0x48`), independently corroborating the field.
+      OpenRatchet therefore requires exact `0x1B3200[slot] == moby+0x24` agreement
+      for every active record. Only after that Retail identity proof does the native
+      level catalog classify topology. Level 0 remains exactly **125** unique native
+      classes = **14 renderable + 7 intentionally invisible + 104 class-only**;
+      registry-valid identities absent from that catalog are explicitly
+      `runtime-only`. Out-of-range oClass, `0xFF` slots, class-data pointer mismatch,
+      duplicate native classes and count mismatches remain hard failures. Local
+      GCC/Clang tests include a conflicting `0x1B3580` decoy specifically to prevent
+      regression to the disproved table. Windows revalidation is now green: Release
+      builds, **22/22 CTests pass**, the Phase-10 viewer remains exact, PS2Recomp is
+      clean, and the stable 20-second runtime classifies all five sampled active
+      Mobys as **3 renderable-topology + 1 class-only + 1 runtime-only**, with
+      `liveMobyMapped=5`, all Retail registry error counters zero,
+      `liveMobyUnaccounted=0`, `poolUnaccounted=0`, `liveMobyClassMap=ok` and
+      `status=ok`.
+    - **Step 11.6B2B (`DONE`):** The Retail
+      gameplay-sky transform is reconstructed from the renderer path rather than
+      copied from the Phase-10 viewer. `FUN_0022B288` reads the sky pointer at
+      `0x0016045C`, shell count at `sky+0x6`, shell pointers at `sky+0x20`, the
+      base angle at `0x00160404`, and the renderer translation qword at
+      `0x00160460`. For each shell it rebuilds the object matrix at transient
+      scratch `0x001D96E0`, then `FUN_0022B690/FUN_0022BF94` consume that matrix
+      with the exact Step-11.5 clip columns. OpenRatchet samples only the stable
+      inputs and reconstructs the per-shell object matrices; it never treats
+      `0x001D96E0` as persistent state and never substitutes the viewer camera.
+
+      `FUN_001FA070` proves the rotation order Z -> Y -> X; the sky passes X=0,
+      so the bridge evaluates the exact `Ry(Y) * Rz(Z)` path plus Retail's
+      per-shell scales. The angle wrapper and sine polynomial are transcribed with
+      the original binary32 constants and operation ordering, and dedicated tests
+      pin the matrices bit-for-bit against independent R5900 oracle values.
+
+      The first Windows B2B run passed Release, **23/23 CTests**, viewer regression,
+      runtime liveness and accounting, but its permanent provenance probe proved
+      that the live gameplay sky is **not** the Phase-8 level-core sky: live
+      `0x714640` has 4 shells with `(clusterCount,flags)` signatures
+      `(38,1),(25,0),(3,0),(24,0)`, whereas the viewer/core resource has 5 shells /
+      118 clusters / 2,366 triangles. Root-cause analysis of the exact Retail
+      level loader `sub_001EA830` closes that ambiguity. The complete indexed
+      `wads2/69` asset (`0x834` sectors, encoded WAD size `0x419F6E`) decompresses
+      to `0x7318C0` bytes at the same guest output base `0x654000` seen at runtime.
+      Retail forms `s5 = wadBase + *(u32 *)(wadBase+0x04)` and passes
+      `s5 + *(u32 *)(wadBase+0x14)` to `FUN_002028E0`; for this exact WAD the
+      offsets are `0x5C000 + 0x64640 = 0x0C0640`, and
+      `0x654000 + 0x0C0640 = 0x714640` exactly. Native decoding at `0x0C0640`
+      reproduces the live resource byte-semantically: **4 shells / 90 clusters /
+      1,472 triangles / 8 textures / 5 shell-separated GPU batches**, with the
+      same four shell signatures.
+
+      The corrected runtime renderer therefore keeps the Phase-8/core sky solely
+      for the standalone viewer, but obtains gameplay-sky topology from the exact
+      WAD2 asset that triggered the proved Level-0 load. It natively decompresses
+      that asset, resolves the Retail `+0x04 + +0x14` sky offset, and joins live
+      shell transforms only to this same-resource topology. Shell count, every
+      shell's native source offset/relocated guest pointer, and each
+      `(clusterCount,flags)` pair are verified **before** a deferred transform is
+      accepted, so `translation-not-materialized` can no longer conceal the old
+      5-vs-4 resource mismatch. Local GCC/Clang `-Wall -Wextra -Werror` contracts,
+      real WAD2/69 decode smoke and the full no-op-GPU Level-0 renderer smoke are
+      green. Windows revalidation is now green as well: Release builds, **23/23**
+      CTests pass, the Phase-10 viewer remains exact on its independent 5-shell
+      core-sky path, and the 20-second runtime remains alive with graphics activity
+      and harness exit 0. The live gameplay sky is the proved 4-shell resource at
+      `0x714640`; all four shell pointers/counts/flags pass the runtime-WAD identity
+      join before the authentic `translation-not-materialized` deferral is accepted.
+      Stable renderer accounting therefore reports `skyMap=live-transform-deferred`,
+      `skyMapped=1`, `skyMaterialized=0`, `skyDeferred=1`, `skyUnaccounted=0`,
+      `liveMobyMapped=5`, `liveMobyUnaccounted=0`, `poolUnaccounted=0`, and
+      overall `status=ok`. The Retail camera remains authentically
+      `orientation-not-materialized`, so the black native-owned frame is still the
+      correct fail-closed output. `third_party/PS2Recomp` remains clean.
+- **Step 11.7 (`DONE`):** Final Phase-11 regression passed on Windows: Release
+  build succeeds, **23/23 CTests pass**, the complete Phase-10 Level-0 viewer
+  regression remains `status=ok`, the mandatory 20-second runtime stays alive
+  with graphics activity and harness exit 0, all native bootstrap/runtime
+  replacements remain installed with zero install errors, renderer accounting
+  remains fully accounted, and `third_party/PS2Recomp` is clean. Phase 11 closes
+  without fabricating camera, sky translation, Ratchet pose, or Ratchet basis
+  state that Retail has not materialized yet.
 

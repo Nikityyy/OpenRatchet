@@ -33,17 +33,18 @@ bool near(float a, float b) {
 
 int main() {
     constexpr std::size_t base = 0x100u;
-    std::vector<std::uint8_t> core(0xa00u, 0u);
+    std::vector<std::uint8_t> core(0xc00u, 0u);
 
     core[base + 0u] = 12u;
     core[base + 1u] = 34u;
     core[base + 2u] = 56u;
     core[base + 3u] = 255u;
-    writeI16(core, base + 0x06u, 1); // shell count
+    writeI16(core, base + 0x06u, 2); // shell count
     writeI16(core, base + 0x0cu, 1); // texture count
     writeI32(core, base + 0x10u, 0x40);  // texture defs
     writeI32(core, base + 0x14u, 0x100); // texture data
     writeI32(core, base + 0x20u, 0x600); // shell 0
+    writeI32(core, base + 0x24u, 0x800); // shell 1, same material
 
     // 2x2 paletted sky texture. Palette and pixels are both relative to
     // header.textureData.
@@ -85,6 +86,21 @@ int main() {
     core[data + 0x32u] = 2u;
     core[data + 0x33u] = 0u;
 
+    // A second shell reuses material 0 but has its own Retail object transform.
+    // Its geometry must therefore remain a separate native batch.
+    writeI32(core, base + 0x800u + 0x0u, 1);
+    writeI32(core, base + 0x800u + 0x4u, 0);
+    constexpr std::size_t cluster1 = base + 0x810u;
+    writeI32(core, cluster1 + 0x10u, 0x900);
+    writeI16(core, cluster1 + 0x14u, 3);
+    writeI16(core, cluster1 + 0x16u, 1);
+    writeI16(core, cluster1 + 0x18u, 0x00);
+    writeI16(core, cluster1 + 0x1au, 0x20);
+    writeI16(core, cluster1 + 0x1cu, 0x30);
+    writeI16(core, cluster1 + 0x1eu, 0x40);
+    constexpr std::size_t data1 = base + 0x900u;
+    for (std::size_t i = 0u; i < 0x34u; ++i) core[data1 + i] = core[data + i];
+
     const auto result = ratchet::assets::decodeRac1Sky(core, static_cast<std::uint32_t>(base));
     if (!result.ok()) {
         std::cerr << "sky decode failed: "
@@ -92,11 +108,20 @@ int main() {
         return 1;
     }
     const auto& mesh = result.mesh;
-    if (mesh.shellCount != 1u || mesh.clusterCount != 1u ||
-        mesh.triangleCount != 1u || mesh.texturedTriangleCount != 1u ||
-        mesh.textures.size() != 1u || mesh.batches.size() != 1u ||
+    if (mesh.shellCount != 2u || mesh.clusterCount != 2u ||
+        mesh.triangleCount != 2u || mesh.texturedTriangleCount != 2u ||
+        mesh.textures.size() != 1u || mesh.batches.size() != 2u ||
         mesh.batches[0].triangleVertices.size() != 3u ||
-        mesh.batches[0].materialIndex != 0u ||
+        mesh.batches[1].triangleVertices.size() != 3u ||
+        mesh.batches[0].shellIndex != 0u || mesh.batches[1].shellIndex != 1u ||
+        mesh.shellIdentities.size() != 2u ||
+        mesh.shellIdentities[0].shellIndex != 0u ||
+        mesh.shellIdentities[0].sourceOffset != 0x600u ||
+        mesh.shellIdentities[0].clusterCount != 1 || mesh.shellIdentities[0].flags != 0 ||
+        mesh.shellIdentities[1].shellIndex != 1u ||
+        mesh.shellIdentities[1].sourceOffset != 0x800u ||
+        mesh.shellIdentities[1].clusterCount != 1 || mesh.shellIdentities[1].flags != 0 ||
+        mesh.batches[0].materialIndex != 0u || mesh.batches[1].materialIndex != 0u ||
         mesh.clearColor[0] != 12u || mesh.clearColor[1] != 34u || mesh.clearColor[2] != 56u) {
         std::cerr << "unexpected sky metadata\n";
         return 1;
@@ -117,6 +142,39 @@ int main() {
     }
     if (!sawX || !sawY) {
         std::cerr << "sky position/uv scaling mismatch\n";
+        return 1;
+    }
+
+    std::vector<std::uint8_t> runtimeWad(0x400u, 0u);
+    writeU32(runtimeWad, 0x04u, 0x100u);
+    writeU32(runtimeWad, 0x14u, 0x80u);
+    const auto runtimeSky = ratchet::assets::locateRac1RuntimeSky(runtimeWad);
+    if (!runtimeSky.ok() || runtimeSky.dataOffset != 0x100u ||
+        runtimeSky.skyRelativeOffset != 0x80u || runtimeSky.skyOffset != 0x180u) {
+        std::cerr << "runtime sky source resolver mismatch\n";
+        return 1;
+    }
+
+    const std::vector<std::uint8_t> shortWad(0x17u, 0u);
+    if (ratchet::assets::locateRac1RuntimeSky(shortWad).status !=
+        ratchet::assets::Rac1RuntimeSkySourceStatus::HeaderTooSmall) {
+        std::cerr << "runtime sky short-header guard mismatch\n";
+        return 1;
+    }
+
+    auto badDataOffset = runtimeWad;
+    writeU32(badDataOffset, 0x04u, 0x500u);
+    if (ratchet::assets::locateRac1RuntimeSky(badDataOffset).status !=
+        ratchet::assets::Rac1RuntimeSkySourceStatus::DataOffsetOutOfRange) {
+        std::cerr << "runtime sky data-offset guard mismatch\n";
+        return 1;
+    }
+
+    auto badSkyOffset = runtimeWad;
+    writeU32(badSkyOffset, 0x14u, 0x300u);
+    if (ratchet::assets::locateRac1RuntimeSky(badSkyOffset).status !=
+        ratchet::assets::Rac1RuntimeSkySourceStatus::SkyOffsetOutOfRange) {
+        std::cerr << "runtime sky final-offset guard mismatch\n";
         return 1;
     }
 

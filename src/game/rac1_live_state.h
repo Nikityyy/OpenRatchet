@@ -44,8 +44,12 @@ struct Rac1LiveMobyLayout final {
     static constexpr std::uint32_t kRotationBasisYOffset = 0xd0u;
     static constexpr std::uint32_t kRotationBasisZOffset = 0xe0u;
 
-    // FUN_0020c5f0 writes the resolved class pointer and original oClass here.
+    // FUN_0020c5f0 writes the class-data pointer selected from
+    // 0x001B3200[slot] at +0x24 and preserves the original oClass at +0xA6.
+    // It independently writes 0x001B3580[slot] at +0x74; that word is not the
+    // class-data pointer and its higher-level semantic role remains uninterpreted.
     static constexpr std::uint32_t kClassPointerOffset = 0x24u;
+    static constexpr std::uint32_t kRuntimeAuxPointerOffset = 0x74u;
     static constexpr std::uint32_t kOClassOffset = 0xa6u;
     static constexpr std::uint32_t kPoolIndexOffset = 0xacu;
 
@@ -59,6 +63,28 @@ struct Rac1LiveMobyLayout final {
     static constexpr std::uint32_t kFramePointerAOffset = 0x68u;
     static constexpr std::uint32_t kFramePointerBOffset = 0x6cu;
     static constexpr std::uint32_t kAnimationFlagsOffset = 0x70u;
+};
+
+// Retail's runtime Moby-class registry is independent from the current
+// level-core class-index table. FUN_0020C5F0 performs two distinct slot-table
+// lookups. The class-data identity path is exactly:
+//
+//   slot          = *(u8 *)(0x001B3AC0 + oClass)
+//   classDataPtr  = *(u32 *)(0x001B3200 + slot * 4)
+//   moby->class   = classDataPtr                         // moby+0x24
+//
+// The same constructor separately loads 0x001B3580[slot] and stores that word
+// at moby+0x74. It must not be confused with the +0x24 class-data pointer.
+// sub_001EA830 and FUN_00230F60 initialize the 0x800-byte oClass->slot table
+// to 0xFF, while sub_00203640 publishes loaded class-data pointers into
+// 0x001B3200. The +0x24/0x001B3200 equality is therefore the authoritative
+// class-data identity oracle for live runtime-only and level-origin classes.
+struct Rac1LiveMobyClassRegistryLayout final {
+    static constexpr std::uint32_t kOClassToSlotAddress = 0x001b3ac0u;
+    static constexpr std::uint32_t kOClassToSlotBytes = 0x800u;
+    static constexpr std::uint8_t kUnregisteredSlot = 0xffu;
+    static constexpr std::uint32_t kClassDataPointerTableAddress = 0x001b3200u;
+    static constexpr std::uint32_t kRuntimeAuxPointerTableAddress = 0x001b3580u;
 };
 
 enum class Rac1LiveMobyPoolStatus : std::uint8_t {
@@ -115,6 +141,47 @@ struct Rac1LiveMobyPoolSnapshot {
     std::vector<Rac1LiveMobyRecord> records;
 };
 
+enum class Rac1LiveMobyClassRegistryStatus : std::uint8_t {
+    Ok,
+    PoolUnavailable,
+    GuestMemoryTooSmall,
+    AccountingMismatch,
+};
+
+enum class Rac1LiveMobyClassRegistryEntryStatus : std::uint8_t {
+    Ok,
+    OClassOutOfRange,
+    UnregisteredOClass,
+    ClassPointerMismatch,
+};
+
+struct Rac1LiveMobyClassRegistryEntry {
+    Rac1LiveMobyClassRegistryEntryStatus status =
+        Rac1LiveMobyClassRegistryEntryStatus::OClassOutOfRange;
+    std::uint32_t mobyGuestAddress = 0u;
+    std::int16_t oClass = 0;
+    std::uint8_t registrySlot = Rac1LiveMobyClassRegistryLayout::kUnregisteredSlot;
+    std::uint32_t mobyClassPointer = 0u;
+    std::uint32_t registryClassPointer = 0u;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return status == Rac1LiveMobyClassRegistryEntryStatus::Ok;
+    }
+};
+
+struct Rac1LiveMobyClassRegistrySnapshot {
+    Rac1LiveMobyClassRegistryStatus status =
+        Rac1LiveMobyClassRegistryStatus::PoolUnavailable;
+    std::size_t records = 0u;
+    std::size_t active = 0u;
+    std::size_t inactive = 0u;
+    std::vector<Rac1LiveMobyClassRegistryEntry> activeEntries;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return status == Rac1LiveMobyClassRegistryStatus::Ok;
+    }
+};
+
 // Decode only fields whose layout/use is proved by retail generated code.
 // Step 11.4 adds the raw live world-transform inputs and Retail-cached rotation
 // basis; semantic validation/conversion remains in rac1_live_transform.*. Camera
@@ -122,6 +189,17 @@ struct Rac1LiveMobyPoolSnapshot {
 [[nodiscard]] Rac1LiveMobyPoolSnapshot inspectRac1LiveMobyPool(
     std::span<const std::uint8_t> guestRdram);
 
+// Snapshot the same runtime-class lookup that FUN_0020C5F0 consumes. This is
+// called under the same GuestExecutionScope as inspectRac1LiveMobyPool so the
+// Moby's stored +0x24 class-data pointer and the 0x1B3200 registry table are coherent.
+[[nodiscard]] Rac1LiveMobyClassRegistrySnapshot inspectRac1LiveMobyClassRegistry(
+    std::span<const std::uint8_t> guestRdram,
+    const Rac1LiveMobyPoolSnapshot& livePool);
+
 [[nodiscard]] const char* rac1LiveMobyPoolStatusName(Rac1LiveMobyPoolStatus status);
+[[nodiscard]] const char* rac1LiveMobyClassRegistryStatusName(
+    Rac1LiveMobyClassRegistryStatus status) noexcept;
+[[nodiscard]] const char* rac1LiveMobyClassRegistryEntryStatusName(
+    Rac1LiveMobyClassRegistryEntryStatus status) noexcept;
 
 } // namespace ratchet::game

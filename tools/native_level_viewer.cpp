@@ -7,6 +7,7 @@
 #include "assets/rac1_tfrag.h"
 #include "platform/native_vfs.h"
 #include "render/native_mesh_renderer.h"
+#include "render/native_skinned_moby_renderer.h"
 
 #include <raylib.h>
 #include <rlgl.h>
@@ -78,21 +79,15 @@ using ratchet::render::unloadBatches;
 using ratchet::render::unloadTextures;
 using ratchet::render::uploadTextures;
 
-struct NativeAnimatedMobyBatch {
-    Model model{};
-    bool transparent = false;
-    std::vector<std::uint32_t> skinVertexIndices;
-    std::vector<float> positions;
-};
+using NativeAnimatedMobyBatch = ratchet::render::NativeSkinnedMobyBatch;
 
 void unloadAnimatedMobyBatches(std::vector<NativeAnimatedMobyBatch>& batches) {
-    for (auto& batch : batches) UnloadModel(batch.model);
-    batches.clear();
+    ratchet::render::unloadSkinnedMobyBatches(batches);
 }
 
 bool animatedMobyVertexMatches(const ratchet::assets::Rac1MobyVertex& vertex,
                                const ratchet::assets::Rac1MobyRenderedInstance& instance) noexcept {
-    return vertex.oClass == instance.oClass && vertex.instanceIndex == instance.instanceIndex;
+    return ratchet::render::nativeSkinnedMobyVertexMatches(vertex, instance);
 }
 
 Vector3 animatedMobyViewerPosition(
@@ -115,64 +110,17 @@ bool appendAnimatedMobyBatch(
     Vector3 center,
     float scale,
     std::vector<NativeAnimatedMobyBatch>& output) {
-    if (vertices.empty()) return true;
-    if (materialIndex >= gpuTextures.size() || materialIndex >= sourceTextures.size() ||
-        vertices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return false;
-    }
-
-    const std::size_t vertexCount = vertices.size();
-    Mesh mesh{};
-    mesh.vertexCount = static_cast<int>(vertexCount);
-    mesh.triangleCount = static_cast<int>(vertexCount / 3u);
-    mesh.vertices = static_cast<float*>(MemAlloc(
-        static_cast<unsigned int>(vertexCount * 3u * sizeof(float))));
-    mesh.texcoords = static_cast<float*>(MemAlloc(
-        static_cast<unsigned int>(vertexCount * 2u * sizeof(float))));
-    mesh.colors = static_cast<unsigned char*>(MemAlloc(
-        static_cast<unsigned int>(vertexCount * 4u)));
-    if (mesh.vertices == nullptr || mesh.texcoords == nullptr || mesh.colors == nullptr) {
-        return false;
-    }
-
-    NativeAnimatedMobyBatch batch{};
-    batch.transparent = sourceTextures[materialIndex].hasAlpha;
-    batch.skinVertexIndices.reserve(vertexCount);
-    batch.positions.resize(vertexCount * 3u);
-    for (std::size_t i = 0u; i < vertexCount; ++i) {
-        const auto& source = vertices[i];
-        if (!animatedMobyVertexMatches(source, instance) ||
-            source.skinVertexIndex >= execution.vertices.size()) {
-            return false;
-        }
-        const Vector3 p = animatedMobyViewerPosition(
-            instance, execution.vertices[source.skinVertexIndex].position, center, scale);
-        mesh.vertices[i * 3u + 0u] = p.x;
-        mesh.vertices[i * 3u + 1u] = p.y;
-        mesh.vertices[i * 3u + 2u] = p.z;
-        mesh.texcoords[i * 2u + 0u] = source.u;
-        mesh.texcoords[i * 2u + 1u] = source.v;
-        mesh.colors[i * 4u + 0u] = source.r;
-        mesh.colors[i * 4u + 1u] = source.g;
-        mesh.colors[i * 4u + 2u] = source.b;
-        mesh.colors[i * 4u + 3u] = source.a;
-        batch.skinVertexIndices.push_back(source.skinVertexIndex);
-        batch.positions[i * 3u + 0u] = p.x;
-        batch.positions[i * 3u + 1u] = p.y;
-        batch.positions[i * 3u + 2u] = p.z;
-    }
-
-    UploadMesh(&mesh, true);
-    Model model = LoadModelFromMesh(mesh);
-    if (model.materialCount <= 0 || model.materials == nullptr ||
-        model.meshCount <= 0 || model.meshes == nullptr) {
-        UnloadModel(model);
-        return false;
-    }
-    model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = gpuTextures[materialIndex];
-    batch.model = model;
-    output.push_back(std::move(batch));
-    return true;
+    return ratchet::render::appendSkinnedMobyBatch(
+        vertices,
+        materialIndex,
+        gpuTextures,
+        sourceTextures,
+        instance,
+        execution,
+        [&](const std::array<float, 3>& rawPosition) {
+            return animatedMobyViewerPosition(instance, rawPosition, center, scale);
+        },
+        output);
 }
 
 bool updateAnimatedMobyBatches(
@@ -181,38 +129,16 @@ bool updateAnimatedMobyBatches(
     const ratchet::assets::Rac1MobySkinExecution& execution,
     Vector3 center,
     float scale) {
-    for (auto& batch : batches) {
-        if (batch.model.meshCount <= 0 || batch.model.meshes == nullptr ||
-            batch.skinVertexIndices.size() * 3u != batch.positions.size()) {
-            return false;
-        }
-        for (std::size_t i = 0u; i < batch.skinVertexIndices.size(); ++i) {
-            const std::uint32_t source = batch.skinVertexIndices[i];
-            if (source >= execution.vertices.size()) return false;
-            const Vector3 p = animatedMobyViewerPosition(
-                instance, execution.vertices[source].position, center, scale);
-            batch.positions[i * 3u + 0u] = p.x;
-            batch.positions[i * 3u + 1u] = p.y;
-            batch.positions[i * 3u + 2u] = p.z;
-        }
-        UpdateMeshBuffer(batch.model.meshes[0],
-                         0,
-                         batch.positions.data(),
-                         static_cast<int>(batch.positions.size() * sizeof(float)),
-                         0);
-    }
-    return true;
+    return ratchet::render::updateSkinnedMobyBatches(
+        batches,
+        execution,
+        [&](const std::array<float, 3>& rawPosition) {
+            return animatedMobyViewerPosition(instance, rawPosition, center, scale);
+        });
 }
 
 void drawAnimatedMobyBatches(const std::vector<NativeAnimatedMobyBatch>& batches) {
-    for (int pass = 0; pass < 2; ++pass) {
-        const bool wantTransparent = pass != 0;
-        for (const auto& batch : batches) {
-            if (batch.transparent == wantTransparent) {
-                DrawModel(batch.model, {0.0f, 0.0f, 0.0f}, 1.0f, WHITE);
-            }
-        }
-    }
+    ratchet::render::drawSkinnedMobyBatches(batches);
 }
 
 template <std::size_t N>

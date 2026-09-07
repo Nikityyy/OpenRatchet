@@ -348,6 +348,33 @@ int main() {
     }
 
 
+    // The class catalog is the complete level-index identity domain, independent
+    // of whether a class is referenced by the static gameplay instance table.
+    const auto catalog = ratchet::assets::inspectRac1MobyClassCatalog(
+        indexWithDormant, {0x00u, 2u});
+    if (!catalog.ok() || catalog.classes.size() != 2u ||
+        catalog.classes[0].oClass != 42 || catalog.classes[0].classOffset != 0x100u ||
+        catalog.classes[1].oClass != 99 || catalog.classes[1].classOffset != 0x5f0u) {
+        std::cerr << "complete moby class identity catalog mismatch\n";
+        return 1;
+    }
+
+    auto duplicateCatalogIndex = indexWithDormant;
+    writeI32(duplicateCatalogIndex, 0x24u, 42);
+    const auto duplicateCatalog = ratchet::assets::inspectRac1MobyClassCatalog(
+        duplicateCatalogIndex, {0x00u, 2u});
+    if (duplicateCatalog.status != ratchet::assets::Rac1MobyClassCatalogStatus::DuplicateOClass) {
+        std::cerr << "duplicate moby class identity was silently accepted\n";
+        return 1;
+    }
+
+    const auto invalidCatalog = ratchet::assets::inspectRac1MobyClassCatalog(
+        makeIndex(), {0x30u, 2u});
+    if (invalidCatalog.status != ratchet::assets::Rac1MobyClassCatalogStatus::InvalidIndexTable) {
+        std::cerr << "out-of-range moby class identity table was accepted\n";
+        return 1;
+    }
+
     // Every non-rendered instance must now be structurally accounted for with
     // an exact oClass and reason. No missing class is allowed to disappear.
     auto accountingCore = makeCore();

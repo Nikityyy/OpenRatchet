@@ -77,11 +77,16 @@ std::uint8_t skyVertexAlpha(std::int16_t alpha) noexcept {
         std::min<int>(255, static_cast<int>(alpha) * 2));
 }
 
-std::size_t batchFor(Rac1SkyMesh& mesh, std::uint32_t materialIndex) {
+std::size_t batchFor(Rac1SkyMesh& mesh,
+                     std::uint32_t shellIndex,
+                     std::uint32_t materialIndex) {
     for (std::size_t i = 0u; i < mesh.batches.size(); ++i) {
-        if (mesh.batches[i].materialIndex == materialIndex) return i;
+        if (mesh.batches[i].shellIndex == shellIndex &&
+            mesh.batches[i].materialIndex == materialIndex) {
+            return i;
+        }
     }
-    mesh.batches.push_back({materialIndex, {}});
+    mesh.batches.push_back({shellIndex, materialIndex, {}});
     return mesh.batches.size() - 1u;
 }
 
@@ -90,6 +95,49 @@ Rac1SkyResult fail(Rac1SkyStatus status, Rac1SkyMesh mesh = {}) {
 }
 
 } // namespace
+
+Rac1RuntimeSkySource locateRac1RuntimeSky(
+    std::span<const std::uint8_t> decompressedRuntimeWad) noexcept {
+    constexpr std::size_t kRuntimeHeaderRequiredBytes = 0x18u;
+    if (decompressedRuntimeWad.size() < kRuntimeHeaderRequiredBytes) {
+        return {Rac1RuntimeSkySourceStatus::HeaderTooSmall, 0u, 0u, 0u};
+    }
+
+    const std::uint32_t dataOffset = readU32(decompressedRuntimeWad, 0x04u);
+    const std::uint32_t skyRelativeOffset = readU32(decompressedRuntimeWad, 0x14u);
+    if (static_cast<std::size_t>(dataOffset) > decompressedRuntimeWad.size()) {
+        return {Rac1RuntimeSkySourceStatus::DataOffsetOutOfRange,
+                dataOffset, skyRelativeOffset, 0u};
+    }
+
+    const std::uint64_t skyOffset64 = static_cast<std::uint64_t>(dataOffset) +
+                                      static_cast<std::uint64_t>(skyRelativeOffset);
+    if (skyOffset64 > std::numeric_limits<std::uint32_t>::max() ||
+        skyOffset64 > decompressedRuntimeWad.size() ||
+        kSkyHeaderBytes > decompressedRuntimeWad.size() -
+                              static_cast<std::size_t>(skyOffset64)) {
+        return {Rac1RuntimeSkySourceStatus::SkyOffsetOutOfRange,
+                dataOffset, skyRelativeOffset, 0u};
+    }
+
+    return {Rac1RuntimeSkySourceStatus::Ok,
+            dataOffset,
+            skyRelativeOffset,
+            static_cast<std::uint32_t>(skyOffset64)};
+}
+
+const char* rac1RuntimeSkySourceStatusName(
+    Rac1RuntimeSkySourceStatus status) noexcept {
+    switch (status) {
+    case Rac1RuntimeSkySourceStatus::Ok: return "ok";
+    case Rac1RuntimeSkySourceStatus::HeaderTooSmall: return "header-too-small";
+    case Rac1RuntimeSkySourceStatus::DataOffsetOutOfRange:
+        return "data-offset-out-of-range";
+    case Rac1RuntimeSkySourceStatus::SkyOffsetOutOfRange:
+        return "sky-offset-out-of-range";
+    }
+    return "unknown";
+}
 
 const char* rac1SkyStatusName(Rac1SkyStatus status) noexcept {
     switch (status) {
@@ -210,6 +258,12 @@ Rac1SkyResult decodeRac1Sky(std::span<const std::uint8_t> core,
             return fail(Rac1SkyStatus::InvalidShell, std::move(mesh));
         }
         const std::size_t clusterCount = static_cast<std::size_t>(clusterCountSigned);
+        mesh.shellIdentities.push_back({
+            static_cast<std::uint32_t>(shellIndex),
+            static_cast<std::uint32_t>(shellOffset),
+            clusterCountSigned,
+            flags,
+        });
         const bool textured = (flags & 1) == 0;
         std::size_t clusterHeaderBytes = 0u;
         if (!mul(clusterCount, kSkyClusterHeaderBytes, clusterHeaderBytes) ||
@@ -311,7 +365,8 @@ Rac1SkyResult decodeRac1Sky(std::span<const std::uint8_t> core,
                     }
                     ++mesh.colorTriangleCount;
                 }
-                auto& out = mesh.batches[batchFor(mesh, material)].triangleVertices;
+                auto& out = mesh.batches[batchFor(
+                    mesh, static_cast<std::uint32_t>(shellIndex), material)].triangleVertices;
                 // Retail sky indices use the opposite winding from our native
                 // host convention, matching Wrench/noclip's import path.
                 out.push_back(vertices[i2].vertex);

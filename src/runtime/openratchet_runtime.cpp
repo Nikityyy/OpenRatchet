@@ -5,6 +5,7 @@
 #include "game/rac1_live_animation.h"
 #include "game/rac1_live_camera.h"
 #include "game/rac1_live_state.h"
+#include "game/rac1_live_sky.h"
 #include "game/rac1_live_transform.h"
 #include "guest_overrides.h"
 #include "platform/native_vfs.h"
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <optional>
 #include <span>
+#include <utility>
 
 #if defined(_M_X64) || defined(__SSE__)
 #include <immintrin.h>
@@ -243,22 +245,79 @@ void logLiveCamera(const game::Rac1LiveCameraResult& cameraResult) {
               << '\n';
 }
 
+void logLiveSky(const game::Rac1LiveSkyResult& skyResult) {
+    const auto printVec4 = [](const std::array<float, 4>& value) {
+        std::cerr << '(' << value[0] << ',' << value[1] << ',' << value[2] << ','
+                  << value[3] << ')';
+    };
+
+    std::cerr << "[OpenRatchet:live:sky]"
+              << " source=guest-rdram"
+              << " sky=0x" << std::hex << skyResult.sky.skyGuestAddress << std::dec
+              << " shells=" << skyResult.sky.shellCount
+              << " identityMaterialized=" << (skyResult.identityMaterialized ? 1 : 0);
+    if (skyResult.identityMaterialized) {
+        std::cerr << " baseAngle=" << skyResult.sky.baseAngle
+                  << " translation=";
+        printVec4(skyResult.sky.translation);
+        const std::size_t shellCount = std::min(
+            skyResult.sky.shellCount,
+            game::Rac1LiveSkyLayout::kProvedShellTransformCount);
+        for (std::size_t shell = 0u; shell < shellCount; ++shell) {
+            std::cerr << " shell" << shell
+                      << "=0x" << std::hex << skyResult.sky.shellGuestAddresses[shell]
+                      << std::dec << ":clusters=" << skyResult.sky.shellClusterCounts[shell]
+                      << ":flags=0x" << std::hex
+                      << static_cast<std::uint32_t>(skyResult.sky.shellFlags[shell])
+                      << std::dec;
+        }
+    }
+    std::cerr << " status=" << game::rac1LiveSkyStatusName(skyResult.status) << '\n';
+}
+
 struct NativeRenderAccountingSignature {
     int requestedLevel = -1;
     bool sceneMaterialized = false;
     bool sceneRendered = false;
     std::size_t liveMobyRecords = 0u;
+    std::size_t liveMobyActive = 0u;
+    std::size_t liveMobyInactive = 0u;
+    std::size_t liveMobyMapped = 0u;
+    std::size_t liveMobyRuntimeOnlyClass = 0u;
+    std::size_t liveMobyRegistryOClassOutOfRange = 0u;
+    std::size_t liveMobyRegistryUnregistered = 0u;
+    std::size_t liveMobyRegistryPointerMismatch = 0u;
+    bool liveMobyHasFirstRegistryIssueOClass = false;
+    std::int32_t liveMobyFirstRegistryIssueOClass = 0;
+    std::size_t liveMobyClassUnaccounted = 0u;
+    render::Rac1LiveMobyClassMapStatus liveMobyClassMapStatus =
+        render::Rac1LiveMobyClassMapStatus::PoolUnavailable;
     std::size_t mobyPoolUnaccounted = 0u;
     game::Rac1LiveMobyPoolStatus mobyPoolStatus =
         game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
     game::Rac1LiveCameraStatus cameraStatus =
         game::Rac1LiveCameraStatus::GuestMemoryTooSmall;
+    game::Rac1LiveSkyStatus skyStatus =
+        game::Rac1LiveSkyStatus::GuestMemoryTooSmall;
+    render::Rac1LiveSkyMapStatus skyMapStatus =
+        render::Rac1LiveSkyMapStatus::NativeSkyUnavailable;
+    std::size_t skyMapped = 0u;
+    std::size_t skyMaterialized = 0u;
+    std::size_t skyRendered = 0u;
+    std::size_t skyDeferred = 0u;
+    std::size_t skyUnaccounted = 0u;
     game::Rac1LiveRatchetAnimationStatus animationStatus =
         game::Rac1LiveRatchetAnimationStatus::PoolNotReady;
     game::Rac1LiveRatchetTransformStatus transformStatus =
         game::Rac1LiveRatchetTransformStatus::PoolNotReady;
     render::Rac1RuntimeRendererStatus rendererStatus =
         render::Rac1RuntimeRendererStatus::Uninitialized;
+    render::Rac1LiveRatchetRenderIdentityStatus ratchetIdentityStatus =
+        render::Rac1LiveRatchetRenderIdentityStatus::NativeTopologyUnavailable;
+    render::Rac1RuntimeLiveRatchetFrameStatus ratchetFrameStatus =
+        render::Rac1RuntimeLiveRatchetFrameStatus::RendererNotReady;
+    render::Rac1RuntimeLiveRatchetApplyStatus ratchetApplyStatus =
+        render::Rac1RuntimeLiveRatchetApplyStatus::FrameNotMaterialized;
 
     bool operator==(const NativeRenderAccountingSignature&) const = default;
 };
@@ -271,7 +330,9 @@ struct OpenRatchetRuntime::Impl {
     runtime::NativeReplacementRegistry replacements;
     render::Rac1RuntimeRenderer nativeRenderer;
     std::atomic<int> requestedNativeLevel{-1};
+    std::atomic<int> requestedRuntimeWad2{-1};
     std::optional<int> rendererAttemptedLevel;
+    std::optional<int> rendererAttemptedRuntimeWad2;
     std::optional<NativeRenderAccountingSignature> lastRenderAccounting;
     std::optional<LiveMobySnapshotSignature> lastLiveMobySignature;
     game::Rac1LiveRatchetAnimationResult liveRatchetAnimation;
@@ -280,7 +341,14 @@ struct OpenRatchetRuntime::Impl {
     std::optional<game::Rac1LiveRatchetTransformStatus> lastLoggedTransformStatus;
     game::Rac1LiveCameraResult liveCamera;
     std::optional<game::Rac1LiveCameraStatus> lastLoggedCameraStatus;
+    game::Rac1LiveSkyResult liveSky;
+    std::optional<game::Rac1LiveSkyStatus> lastLoggedSkyStatus;
+    render::Rac1RuntimeLiveRatchetFrame liveRatchetFrame;
+    render::Rac1RuntimeLiveRatchetApplyStatus liveRatchetApplyStatus =
+        render::Rac1RuntimeLiveRatchetApplyStatus::FrameNotMaterialized;
     std::uint64_t liveMobyPresentationCount = 0u;
+    game::Rac1LiveMobyPoolSnapshot liveMobySnapshot;
+    game::Rac1LiveMobyClassRegistrySnapshot liveMobyClassRegistry;
     std::size_t liveMobyRecordCount = 0u;
     std::size_t liveMobyPoolUnaccounted = 0u;
     game::Rac1LiveMobyPoolStatus liveMobyPoolStatus =
@@ -299,6 +367,8 @@ struct OpenRatchetRuntime::Impl {
         if (!mapped) return;
 
         const int next = static_cast<int>(*mapped);
+        const int wad2Index = static_cast<int>(asset.index);
+        self.requestedRuntimeWad2.store(wad2Index, std::memory_order_release);
         const int previous = self.requestedNativeLevel.exchange(
             next, std::memory_order_release);
         if (previous != next) {
@@ -308,6 +378,7 @@ struct OpenRatchetRuntime::Impl {
                       << " sectors=0x" << sectorCount
                       << " destination=0x" << destination << std::dec
                       << " nativeLevel=" << next
+                      << " runtimeWad2=" << wad2Index
                       << " mapping=retail-proved"
                       << " status=ok\n";
         }
@@ -322,9 +393,12 @@ struct OpenRatchetRuntime::Impl {
             presentation == 0u || (presentation % 60u) == 0u;
 
         game::Rac1LiveMobyPoolSnapshot snapshot;
+        game::Rac1LiveMobyClassRegistrySnapshot classRegistry;
         game::Rac1LiveRatchetAnimationResult animation;
         game::Rac1LiveRatchetTransformResult transform;
         game::Rac1LiveCameraResult camera;
+        game::Rac1LiveSkyResult sky;
+        render::Rac1RuntimeLiveRatchetFrame ratchetFrame;
         {
             // The fallback game thread mutates RDRAM while it executes. Use the
             // runtime's existing guest-execution handoff so the pool, live
@@ -337,11 +411,16 @@ struct OpenRatchetRuntime::Impl {
                 runtime.memory().getRDRAM(),
                 static_cast<std::size_t>(PS2_RAM_SIZE));
             snapshot = game::inspectRac1LiveMobyPool(guestRdram);
+            classRegistry = game::inspectRac1LiveMobyClassRegistry(guestRdram, snapshot);
             animation = game::inspectRac1LiveRatchetAnimation(guestRdram, snapshot);
             transform = game::inspectRac1LiveRatchetWorldTransform(snapshot);
             camera = game::inspectRac1LiveCamera(guestRdram);
+            sky = game::inspectRac1LiveSky(guestRdram);
+            ratchetFrame = nativeRenderer.prepareLiveRatchetFrame(
+                guestRdram, animation, transform);
         }
 
+        liveRatchetFrame = std::move(ratchetFrame);
         const bool animationStatusChanged =
             !lastLoggedAnimationStatus ||
             *lastLoggedAnimationStatus != animation.status;
@@ -353,6 +432,9 @@ struct OpenRatchetRuntime::Impl {
         const bool cameraStatusChanged =
             !lastLoggedCameraStatus || *lastLoggedCameraStatus != camera.status;
         liveCamera = camera;
+        const bool skyStatusChanged =
+            !lastLoggedSkyStatus || *lastLoggedSkyStatus != sky.status;
+        liveSky = sky;
         liveMobyRecordCount = snapshot.records.size();
         liveMobyPoolStatus = snapshot.status;
         liveMobyPoolUnaccounted = 0u;
@@ -385,6 +467,12 @@ struct OpenRatchetRuntime::Impl {
             lastLoggedCameraStatus = camera.status;
             logLiveCamera(camera);
         }
+        if (diagnosticTick || skyStatusChanged) {
+            lastLoggedSkyStatus = sky.status;
+            logLiveSky(sky);
+        }
+        liveMobySnapshot = std::move(snapshot);
+        liveMobyClassRegistry = std::move(classRegistry);
     }
 
     void initializeNativePresentation() {
@@ -398,26 +486,46 @@ struct OpenRatchetRuntime::Impl {
     void shutdownNativePresentation() {
         nativeRenderer.unload();
         rendererAttemptedLevel.reset();
+        rendererAttemptedRuntimeWad2.reset();
+        liveRatchetFrame = {};
+        liveMobySnapshot = {};
+        liveMobyClassRegistry = {};
+        liveSky = {};
+        lastLoggedSkyStatus.reset();
+        liveMobyRecordCount = 0u;
+        liveMobyPoolUnaccounted = 0u;
+        liveMobyPoolStatus = game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
+        liveRatchetApplyStatus =
+            render::Rac1RuntimeLiveRatchetApplyStatus::FrameNotMaterialized;
     }
 
     void ensureMappedLevelLoaded() {
         const int requested = requestedNativeLevel.load(std::memory_order_acquire);
-        if (requested < 0 || (rendererAttemptedLevel && *rendererAttemptedLevel == requested)) {
+        const int runtimeWad2 = requestedRuntimeWad2.load(std::memory_order_acquire);
+        if (requested < 0 || runtimeWad2 < 0 ||
+            (rendererAttemptedLevel && *rendererAttemptedLevel == requested &&
+             rendererAttemptedRuntimeWad2 && *rendererAttemptedRuntimeWad2 == runtimeWad2)) {
             return;
         }
 
         nativeRenderer.unload();
         rendererAttemptedLevel = requested;
+        rendererAttemptedRuntimeWad2 = runtimeWad2;
         const auto* level = vfs.findLevel(static_cast<std::uint32_t>(requested));
-        if (level == nullptr) {
+        const auto* runtimeWad = vfs.findAsset(
+            platform::NativeAssetKind::Wad2, static_cast<std::uint32_t>(runtimeWad2));
+        if (level == nullptr || runtimeWad == nullptr) {
             std::cerr << "[OpenRatchet:render:scene-load]"
                       << " nativeLevel=" << requested
+                      << " runtimeWad2=" << runtimeWad2
                       << " mapped=1 materialized=0 rendered=0 deferred=1 unaccounted=0"
-                      << " status=level-not-indexed\n";
+                      << " status="
+                      << (level == nullptr ? "level-not-indexed" : "runtime-wad2-not-indexed")
+                      << '\n';
             return;
         }
 
-        const bool loaded = nativeRenderer.loadLevel(*level);
+        const bool loaded = nativeRenderer.loadLevel(*level, *runtimeWad);
         const auto& summary = nativeRenderer.summary();
         std::cerr << "[OpenRatchet:render:scene-load]"
                   << " nativeLevel=" << requested
@@ -428,17 +536,31 @@ struct OpenRatchetRuntime::Impl {
                   << " terrainTriangles=" << summary.terrainTriangles
                   << " tieTriangles=" << summary.tieTriangles
                   << " shrubTriangles=" << summary.shrubTriangles
+                  << " skySource=wads2/" << summary.skySourceWad2Index
+                  << " skyOffset=0x" << std::hex << summary.skySourceOffset << std::dec
+                  << " skyBatches=" << summary.skyBatches
+                  << " skyShells=" << summary.skyShells
+                  << " skyClusters=" << summary.skyClusters
+                  << " skyTriangles=" << summary.skyTriangles
+                  << " skyTextures=" << summary.skyTextures
+                  << " nativeMobyClasses=" << summary.mobyNativeClasses
+                  << " renderableMobyClasses=" << summary.mobyRenderableClasses
+                  << " invisibleMobyClasses=" << summary.mobyIntentionallyInvisibleClasses
+                  << " classOnlyMobyClasses=" << summary.mobyClassOnlyClasses
+                  << " ratchetTopologyBatches=" << summary.ratchetTopologyBatches
+                  << " ratchetTopologyTriangles=" << summary.ratchetTopologyTriangles
+                  << " ratchetSkinVertices=" << summary.ratchetSkinVertices
                   << " rendered=0"
                   << " deferred=1"
                   << " unaccounted=0"
-                  << " sky=deferred-retail-transform-unbridged"
-                  << " mobys=deferred-live-identity-unbridged"
+                  << " sky=runtime-wad-retail-shell-transform-bridged"
+                  << " mobys=retail-oclass-catalog-mapped-dynamic-render-deferred"
                   << " status="
                   << render::rac1RuntimeRendererStatusName(nativeRenderer.status())
                   << '\n';
     }
 
-    void drawStaticWorldWithRetailCamera() {
+    void drawNativeWorldWithRetailCamera(bool skyMaterialized) {
         if (!nativeRenderer.ready() || !liveCamera.ok()) return;
 
         // FUN_0022BF94 uses vclipw.xyz against +/-w, matching OpenGL clip
@@ -453,9 +575,19 @@ struct OpenRatchetRuntime::Impl {
         rlMatrixMode(RL_MODELVIEW);
         rlPushMatrix();
         rlLoadIdentity();
-        rlEnableDepthTest();
 
+        if (skyMaterialized) {
+            // Retail draws sky shells before ordinary world geometry, each with
+            // its own FUN_0022B288 object matrix. Depth stays disabled here so
+            // sky geometry does not own the later world depth buffer.
+            const std::span<const std::array<float, 16>> skyMatrices(
+                liveSky.sky.shellObjectMatrices.data(), liveSky.sky.shellCount);
+            nativeRenderer.drawSky(skyMatrices);
+        }
+
+        rlEnableDepthTest();
         nativeRenderer.drawStaticWorld();
+        nativeRenderer.drawLiveRatchet();
         rlDrawRenderBatchActive();
 
         rlDisableDepthTest();
@@ -476,26 +608,102 @@ struct OpenRatchetRuntime::Impl {
             sceneAccountingOrdered ? mappedCount - renderedCount : 0u;
         const std::size_t sceneUnaccounted =
             sceneAccountingOrdered ? 0u : renderedCount - mappedCount;
-        const std::size_t liveMobyMapped = 0u;
-        const std::size_t liveMobyRendered = 0u;
-        const std::size_t liveMobyDeferred = liveMobyRecordCount;
+
+        const auto skyMap = render::mapLiveSkyRenderState(
+            nativeRenderer.nativeSkyShellIdentities(), liveSky);
+        const std::size_t skyMapped = skyMap.mapped;
+        const std::size_t skyMaterialized = skyMap.materialized;
+        const std::size_t skyRendered =
+            sceneRendered && skyMaterialized == 1u ? 1u : 0u;
+        const bool skyHierarchyOrdered =
+            skyMaterialized <= skyMapped && skyRendered <= skyMaterialized;
+        const std::size_t skyDeferred =
+            skyHierarchyOrdered ? skyMapped - skyRendered : 0u;
+        const std::size_t skyUnaccounted =
+            (materialized ? skyMap.unaccounted : 0u) +
+            (skyHierarchyOrdered ? 0u : 1u);
+
+        const auto liveClassMap = render::mapLiveMobyClassIdentity(
+            liveMobySnapshot, liveMobyClassRegistry, nativeRenderer.nativeMobyClasses());
+        const bool liveClassMapRequired =
+            materialized && liveMobyPoolStatus == game::Rac1LiveMobyPoolStatus::Ok;
+        const auto ratchetIdentity = render::identifyLiveRatchetRenderIdentity(
+            nativeRenderer.hasRatchetTopology(), liveRatchetAnimation, liveRatchetTransform);
+        const std::size_t liveMobyMapped = liveClassMap.mapped;
+        const std::size_t liveMobyMaterialized =
+            liveRatchetApplyStatus == render::Rac1RuntimeLiveRatchetApplyStatus::Ok &&
+                    liveRatchetFrame.ok()
+                ? 1u
+                : 0u;
+        const std::size_t liveMobyRendered =
+            sceneRendered && liveMobyMaterialized == 1u &&
+                    nativeRenderer.liveRatchetGpuReady()
+                ? 1u
+                : 0u;
+        const bool liveHierarchyOrdered =
+            liveMobyMaterialized <= liveMobyMapped &&
+            liveMobyRendered <= liveMobyMaterialized;
+        const std::size_t liveMobyDeferred =
+            liveHierarchyOrdered ? liveMobyMapped - liveMobyRendered : 0u;
+        const std::size_t liveClassUnaccounted =
+            liveClassMapRequired ? liveClassMap.unaccounted : 0u;
         const std::size_t liveMobyUnaccounted =
-            liveMobyRecordCount - liveMobyDeferred;
+            liveClassUnaccounted + (liveHierarchyOrdered ? 0u : 1u);
+
+        const bool liveClassMapHealthy = !liveClassMapRequired || liveClassMap.ok();
+        const bool ratchetIdentityHealthy =
+            ratchetIdentity.status != render::Rac1LiveRatchetRenderIdentityStatus::MobyAddressMismatch &&
+            ratchetIdentity.status != render::Rac1LiveRatchetRenderIdentityStatus::OClassMismatch;
+        const bool ratchetFrameHealthy =
+            liveRatchetFrame.status == render::Rac1RuntimeLiveRatchetFrameStatus::RendererNotReady ||
+            liveRatchetFrame.status == render::Rac1RuntimeLiveRatchetFrameStatus::IdentityNotMapped ||
+            liveRatchetFrame.status == render::Rac1RuntimeLiveRatchetFrameStatus::AnimationNotMaterialized ||
+            liveRatchetFrame.status == render::Rac1RuntimeLiveRatchetFrameStatus::TransformNotMaterialized ||
+            liveRatchetFrame.status == render::Rac1RuntimeLiveRatchetFrameStatus::Ok;
+        const bool ratchetApplyHealthy =
+            liveRatchetApplyStatus == render::Rac1RuntimeLiveRatchetApplyStatus::FrameNotMaterialized ||
+            liveRatchetApplyStatus == render::Rac1RuntimeLiveRatchetApplyStatus::Ok;
         const bool accountingOk = sceneUnaccounted == 0u &&
+                                  skyUnaccounted == 0u &&
                                   liveMobyUnaccounted == 0u &&
-                                  liveMobyPoolUnaccounted == 0u;
+                                  liveMobyPoolUnaccounted == 0u &&
+                                  liveClassMapHealthy &&
+                                  ratchetIdentityHealthy &&
+                                  ratchetFrameHealthy &&
+                                  ratchetApplyHealthy;
 
         NativeRenderAccountingSignature signature{
             requested,
             materialized,
             sceneRendered,
             liveMobyRecordCount,
+            liveClassMap.active,
+            liveClassMap.inactive,
+            liveMobyMapped,
+            liveClassMap.runtimeOnly,
+            liveClassMap.registryOClassOutOfRange,
+            liveClassMap.registryUnregistered,
+            liveClassMap.registryPointerMismatch,
+            liveClassMap.hasFirstRegistryIssueOClass,
+            liveClassMap.firstRegistryIssueOClass,
+            liveClassUnaccounted,
+            liveClassMap.status,
             liveMobyPoolUnaccounted,
             liveMobyPoolStatus,
             liveCamera.status,
+            liveSky.status,
+            skyMap.status,
+            skyMapped,
+            skyMaterialized,
+            skyRendered,
+            skyDeferred,
+            skyUnaccounted,
             liveRatchetAnimation.status,
             liveRatchetTransform.status,
             nativeRenderer.status(),
+            ratchetIdentity.status,
+            liveRatchetFrame.status,
+            liveRatchetApplyStatus,
         };
         const bool periodic =
             liveMobyPresentationCount <= 1u || (liveMobyPresentationCount % 60u) == 0u;
@@ -515,13 +723,44 @@ struct OpenRatchetRuntime::Impl {
                   << " renderer="
                   << render::rac1RuntimeRendererStatusName(nativeRenderer.status())
                   << " camera=" << game::rac1LiveCameraStatusName(liveCamera.status)
-                  << " sky=deferred"
+                  << " sky=" << game::rac1LiveSkyStatusName(liveSky.status)
+                  << " skyMap=" << render::rac1LiveSkyMapStatusName(skyMap.status)
+                  << " skyMapped=" << skyMapped
+                  << " skyMaterialized=" << skyMaterialized
+                  << " skyRendered=" << skyRendered
+                  << " skyDeferred=" << skyDeferred
+                  << " skyUnaccounted=" << skyUnaccounted
                   << " mobyPool=" << game::rac1LiveMobyPoolStatusName(liveMobyPoolStatus)
+                  << " liveMobyActive=" << liveClassMap.active
+                  << " liveMobyInactive=" << liveClassMap.inactive
                   << " liveMobyMapped=" << liveMobyMapped
+                  << " liveMobyRenderableTopology=" << liveClassMap.renderableTopology
+                  << " liveMobyIntentionallyInvisible=" << liveClassMap.intentionallyInvisible
+                  << " liveMobyClassOnly=" << liveClassMap.classOnly
+                  << " liveMobyRuntimeOnlyClass=" << liveClassMap.runtimeOnly
+                  << " liveMobyRegistryOClassOutOfRange="
+                  << liveClassMap.registryOClassOutOfRange
+                  << " liveMobyRegistryUnregistered=" << liveClassMap.registryUnregistered
+                  << " liveMobyRegistryPointerMismatch="
+                  << liveClassMap.registryPointerMismatch
+                  << " liveMobyFirstRegistryIssueOClass=";
+        if (liveClassMap.hasFirstRegistryIssueOClass) {
+            std::cerr << liveClassMap.firstRegistryIssueOClass;
+        }
+        else std::cerr << "none";
+        std::cerr << " liveMobyClassMap="
+                  << render::rac1LiveMobyClassMapStatusName(liveClassMap.status)
+                  << " liveMobyMaterialized=" << liveMobyMaterialized
                   << " liveMobyRendered=" << liveMobyRendered
                   << " liveMobyDeferred=" << liveMobyDeferred
                   << " liveMobyUnaccounted=" << liveMobyUnaccounted
                   << " poolUnaccounted=" << liveMobyPoolUnaccounted
+                  << " ratchetIdentity="
+                  << render::rac1LiveRatchetRenderIdentityStatusName(ratchetIdentity.status)
+                  << " ratchetFrame="
+                  << render::rac1RuntimeLiveRatchetFrameStatusName(liveRatchetFrame.status)
+                  << " ratchetGpu="
+                  << render::rac1RuntimeLiveRatchetApplyStatusName(liveRatchetApplyStatus)
                   << " animation="
                   << game::rac1LiveRatchetAnimationStatusName(liveRatchetAnimation.status)
                   << " transform="
@@ -539,8 +778,11 @@ struct OpenRatchetRuntime::Impl {
         ClearBackground(BLACK);
 
         ensureMappedLevelLoaded();
+        liveRatchetApplyStatus = nativeRenderer.applyLiveRatchetFrame(liveRatchetFrame);
+        const auto skyMap = render::mapLiveSkyRenderState(
+            nativeRenderer.nativeSkyShellIdentities(), liveSky);
         const bool sceneRendered = nativeRenderer.ready() && liveCamera.ok();
-        if (sceneRendered) drawStaticWorldWithRetailCamera();
+        if (sceneRendered) drawNativeWorldWithRetailCamera(skyMap.materialized == 1u);
         logNativeRenderAccounting(sceneRendered);
     }
 };

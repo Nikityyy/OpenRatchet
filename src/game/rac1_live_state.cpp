@@ -143,6 +143,77 @@ Rac1LiveMobyPoolSnapshot inspectRac1LiveMobyPool(
     return out;
 }
 
+Rac1LiveMobyClassRegistrySnapshot inspectRac1LiveMobyClassRegistry(
+    std::span<const std::uint8_t> guestRdram,
+    const Rac1LiveMobyPoolSnapshot& livePool) {
+    Rac1LiveMobyClassRegistrySnapshot out;
+    if (livePool.status != Rac1LiveMobyPoolStatus::Ok) {
+        out.status = Rac1LiveMobyClassRegistryStatus::PoolUnavailable;
+        return out;
+    }
+
+    constexpr auto mapAddress = Rac1LiveMobyClassRegistryLayout::kOClassToSlotAddress;
+    constexpr auto mapBytes = Rac1LiveMobyClassRegistryLayout::kOClassToSlotBytes;
+    constexpr auto pointerTable = Rac1LiveMobyClassRegistryLayout::kClassDataPointerTableAddress;
+    constexpr std::size_t pointerTableReach =
+        (static_cast<std::size_t>(std::numeric_limits<std::uint8_t>::max()) + 1u) *
+        sizeof(std::uint32_t);
+    if (!contains(guestRdram, mapAddress, mapBytes) ||
+        !contains(guestRdram, pointerTable, pointerTableReach)) {
+        out.status = Rac1LiveMobyClassRegistryStatus::GuestMemoryTooSmall;
+        return out;
+    }
+
+    out.records = livePool.records.size();
+    out.activeEntries.reserve(livePool.traversedMobyCount);
+    for (const auto& record : livePool.records) {
+        if (!record.participatesInRetailTraversal) {
+            ++out.inactive;
+            continue;
+        }
+        ++out.active;
+
+        Rac1LiveMobyClassRegistryEntry entry;
+        entry.mobyGuestAddress = record.guestAddress;
+        entry.oClass = record.oClass;
+        entry.mobyClassPointer = record.classPointer;
+        if (record.oClass < 0 ||
+            static_cast<std::uint32_t>(record.oClass) >= mapBytes) {
+            entry.status = Rac1LiveMobyClassRegistryEntryStatus::OClassOutOfRange;
+            out.activeEntries.push_back(entry);
+            continue;
+        }
+
+        entry.registrySlot = guestRdram[
+            mapAddress + static_cast<std::uint32_t>(record.oClass)];
+        if (entry.registrySlot == Rac1LiveMobyClassRegistryLayout::kUnregisteredSlot) {
+            entry.status = Rac1LiveMobyClassRegistryEntryStatus::UnregisteredOClass;
+            out.activeEntries.push_back(entry);
+            continue;
+        }
+
+        entry.registryClassPointer = readLe32(
+            guestRdram,
+            pointerTable + static_cast<std::uint32_t>(entry.registrySlot) *
+                               sizeof(std::uint32_t));
+        entry.status = entry.registryClassPointer == entry.mobyClassPointer
+                           ? Rac1LiveMobyClassRegistryEntryStatus::Ok
+                           : Rac1LiveMobyClassRegistryEntryStatus::ClassPointerMismatch;
+        out.activeEntries.push_back(entry);
+    }
+
+    const bool accountingMatches =
+        out.records == livePool.slotsBeforeTerminator &&
+        out.active == livePool.traversedMobyCount &&
+        out.inactive == livePool.skippedNegativeStateCount &&
+        out.active + out.inactive == out.records &&
+        out.activeEntries.size() == out.active;
+    out.status = accountingMatches
+                     ? Rac1LiveMobyClassRegistryStatus::Ok
+                     : Rac1LiveMobyClassRegistryStatus::AccountingMismatch;
+    return out;
+}
+
 const char* rac1LiveMobyPoolStatusName(Rac1LiveMobyPoolStatus status) {
     switch (status) {
     case Rac1LiveMobyPoolStatus::Ok:
@@ -157,6 +228,36 @@ const char* rac1LiveMobyPoolStatusName(Rac1LiveMobyPoolStatus status) {
         return "pool-last-slot-mismatch";
     case Rac1LiveMobyPoolStatus::MissingTraversalTerminator:
         return "missing-traversal-terminator";
+    }
+    return "unknown";
+}
+
+const char* rac1LiveMobyClassRegistryStatusName(
+    Rac1LiveMobyClassRegistryStatus status) noexcept {
+    switch (status) {
+    case Rac1LiveMobyClassRegistryStatus::Ok:
+        return "ok";
+    case Rac1LiveMobyClassRegistryStatus::PoolUnavailable:
+        return "pool-unavailable";
+    case Rac1LiveMobyClassRegistryStatus::GuestMemoryTooSmall:
+        return "guest-memory-too-small";
+    case Rac1LiveMobyClassRegistryStatus::AccountingMismatch:
+        return "accounting-mismatch";
+    }
+    return "unknown";
+}
+
+const char* rac1LiveMobyClassRegistryEntryStatusName(
+    Rac1LiveMobyClassRegistryEntryStatus status) noexcept {
+    switch (status) {
+    case Rac1LiveMobyClassRegistryEntryStatus::Ok:
+        return "ok";
+    case Rac1LiveMobyClassRegistryEntryStatus::OClassOutOfRange:
+        return "oclass-out-of-range";
+    case Rac1LiveMobyClassRegistryEntryStatus::UnregisteredOClass:
+        return "unregistered-oclass";
+    case Rac1LiveMobyClassRegistryEntryStatus::ClassPointerMismatch:
+        return "class-pointer-mismatch";
     }
     return "unknown";
 }

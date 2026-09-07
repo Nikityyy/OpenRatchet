@@ -125,6 +125,7 @@ Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatch
 Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
 Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines
 Write-RecentMatches 'Live gameplay camera' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:camera\]' $TailLines
+Write-RecentMatches 'Live gameplay sky' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:sky\]' $TailLines
 Write-RecentMatches 'Native renderer ownership' ($stdoutLines + $stderrLines) '\[OpenRatchet:render:(ownership|level-map|scene-load|frame)\]' $TailLines
 Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
 Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
