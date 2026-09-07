@@ -743,13 +743,64 @@ black-frame defect and the pure vertical-inversion defect. This remains an
 algebraic API-convention bridge, not a reconstructed host camera: no host
 `Camera3D`, FOV, target/up or guessed camera orientation is introduced.
 
-The post-fix runtime still shows large stretched/crossing triangles that do not
-appear in the standalone viewer. That evidence is now classified as a Phase-12
-**renderer-parity defect**, not a reason to duplicate the viewer path wholesale and
-not a reason to replace live Retail state with viewer state. Step 12.3B must isolate
-which supposedly equivalent renderer-facing invariant first diverges and then move
-that invariant to the shared implementation boundary. Only intentional frontend
-state/orchestration differences may remain afterwards.
+Step 12.3B has Windows-proven geometry/raster parity and closes the former
+runtime-only stretched/crossing-triangle defect. Both frontends call the shared
+`NativeRenderStateContract` for equivalent sky/world passes rather than inheriting
+partial PS2Runtime state. The canonical digest remains a permanent regression
+oracle; intentional frontend differences are still limited to state acquisition,
+camera ownership, animation clock, visibility/lifecycle, streaming and debug UI.
+
+The final 12.3B visual audit also proved a separate shrub-colour serialization bug.
+R&C1 `ShrubInstancePacked` is 0x70 bytes and stores `colour` as `Rgb96`: three
+little-endian signed 32-bit integer channels at instance offsets `+0x50`, `+0x54`
+and `+0x58`, each constrained to `0..255` on authentic Level 0. This matches
+Wrench's independent packed-instance definition. Reading three adjacent bytes from
+`+0x50` is invalid: for a real colour such as `(37,34,29)`, the little-endian
+storage begins `25 00 00 00 22 00 00 00 ...`, so that bug deterministically becomes
+`(37,0,0)`. Native static-scene decode therefore keeps the exact s32 layout and
+rejects out-of-range values instead of truncating them. The layout correction is
+Windows-proven: all 1697 Level-0 shrub instances validate and the former red-only
+assets disappear.
+
+A follow-up hypothesis treated the raw `Rgb96` value as the final GS vertex colour
+and expanded it by two for `TFX=MODULATE`. Windows disproved that interpretation:
+Release and 29/29 CTests stayed green, viewer/runtime agreed exactly on
+`vertexHash=0xca1ac5c5e1175a15` / `combinedHash=0x8d3962a4e86b7052`, and the runtime
+reached `renderer=ok camera=ok rendered=1 status=ok`, yet the same shrub/rock assets
+remained severely too dark. The error was applying a correct final GS modulation
+rule at the wrong semantic layer.
+
+`ShrubInstancePacked::colour` cannot be justified as a complete standalone texture
+tint. Wrench stores `dir_lights` in the same instance at `+0x60` and converts packed
+`Rgb96` to its editor colour domain with `/255`, not `/128`. OpenRatchet already has
+the same policy for Mobys: their gameplay colour is documented as an ambient-light
+input combined by Retail with geometry normals and directional-light selection, so
+the native Moby decoder deliberately emits neutral white until the complete lighting
+model exists instead of displaying an ambient-only false tint. Step 12.3B now applies
+that same fail-honest rule to shrubs: it still decodes and range-validates all three
+`Rgb96` s32 channels, but emits neutral white vertex colour and does not guess a
+brightness from one incomplete lighting component. The final GS texture-modulation
+conversion belongs after the complete lighting result, not on raw shrub ambient data.
+
+Exact shrub/tie ambient and directional lighting, normals-to-light evaluation, fog and
+other scene-lighting reproduction remain Phase 21 Rendering Completeness. This is not
+papering over a Phase-12 bug: the Phase-12 bug was the knowingly incorrect partial
+lighting application, and the correct pre-Phase-21 behavior is neutral rendering. On
+authentic Level 0 this policy retains all topology/material/texture/transform/render-
+state/draw-order hashes and changes only the canonical vertex digest to
+`vertexHash=0x1ecb9fff8b64f7b4`, with `combinedHash=0xc1069aa5990831b0`.
+
+The final Windows 12.3B gate is accepted. Release builds cleanly, **29/29 CTests** pass,
+the Level-0 viewer and runtime independently report the same canonical parity digest
+(`vertexHash=0x1ecb9fff8b64f7b4`, `combinedHash=0xc1069aa5990831b0`), and visual
+acceptance confirms the former artificial dark shrub/rock tint is gone. The mandatory
+20-second runtime remains alive with graphics activity and reaches native-owned
+`renderer=ok`, `camera=ok`, `rendered=1`, `ratchetIdentity=ok`, `ratchetFrame=ok`,
+`ratchetGpu=ok`, `animation=ok`, `transform=ok`, overall `status=ok`. Gameplay-sky
+translation and live Mobys whose Retail state is not yet materialized remain explicitly
+`deferred`; they are not hidden by guessed host state. `third_party/PS2Recomp` remains
+clean. Step 12.3B is therefore complete, and Phase 12 proceeds to authentic gameplay
+response rather than further static-scene colour work.
 
 Static scene ownership can therefore move before all dynamic state is available.
 Live Ratchet/Moby animation and transforms are consumed only when their proved

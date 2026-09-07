@@ -174,9 +174,14 @@ std::vector<std::uint8_t> makeGameplay() {
     constexpr std::size_t shrubInstance = 0x210u;
     writeI32(gameplay, shrubInstance + 0x0u, 20);
     writeIdentity(gameplay, shrubInstance + 0x10u, -5.0f, 7.0f, 9.0f);
-    gameplay[shrubInstance + 0x50u] = 128u;
-    gameplay[shrubInstance + 0x51u] = 192u;
-    gameplay[shrubInstance + 0x52u] = 255u;
+    // Retail ShrubInstancePacked::colour is Rgb96, i.e. three s32 channels.
+    // Keeping the upper bytes zero is intentional: the historical byte-wise
+    // decoder would misread this exact fixture as (64, 0, 0). The values are
+    // deliberately non-neutral so this test also proves that Phase 12 does not
+    // apply one incomplete shrub-lighting input as a standalone texture tint.
+    writeI32(gameplay, shrubInstance + 0x50u, 64);
+    writeI32(gameplay, shrubInstance + 0x54u, 96);
+    writeI32(gameplay, shrubInstance + 0x58u, 128);
     return gameplay;
 }
 
@@ -233,10 +238,25 @@ int main() {
     bool sawShrubOrigin = false;
     for (const auto& v : shrub->triangleVertices) {
         sawShrubOrigin |= near(v.x, -5.0f) && near(v.y, 7.0f) && near(v.z, 9.0f) &&
-                          v.r == 128u && v.g == 192u && v.b == 255u;
+                          v.r == 255u && v.g == 255u && v.b == 255u;
     }
     if (!sawTieOrigin || !sawShrubOrigin) {
-        std::cerr << "instance transform/color was not applied\n";
+        std::cerr << "instance transform/neutral deferred-lighting policy was not applied\n";
+        return 1;
+    }
+
+    auto invalidGameplay = gameplay;
+    writeI32(invalidGameplay, 0x210u + 0x54u, 256);
+    const auto invalidColour = ratchet::assets::decodeRac1StaticScene(
+        core,
+        index,
+        invalidGameplay,
+        {0x00u, 1u},
+        {0x30u, 1u},
+        1u,
+        3u);
+    if (invalidColour.status != ratchet::assets::Rac1StaticSceneStatus::InvalidInstanceBlock) {
+        std::cerr << "out-of-range shrub Rgb96 channel was not rejected\n";
         return 1;
     }
 

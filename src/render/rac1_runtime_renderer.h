@@ -9,6 +9,7 @@
 #include "render/native_mesh_renderer.h"
 #include "render/native_skinned_moby_renderer.h"
 #include "render/rac1_render_bridge.h"
+#include "render/rac1_render_parity.h"
 
 #include <array>
 #include <cstddef>
@@ -37,6 +38,7 @@ enum class Rac1RuntimeRendererStatus : std::uint8_t {
     MobyAnimationMetadataFailed,
     RatchetAnimationBankFailed,
     RatchetTopologyInvalid,
+    StaticWorldParityInvalid,
     GpuUploadFailed,
 };
 
@@ -61,6 +63,7 @@ struct Rac1RuntimeRendererSummary {
     std::size_t ratchetTopologyBatches = 0u;
     std::size_t ratchetTopologyTriangles = 0u;
     std::size_t ratchetSkinVertices = 0u;
+    Rac1StaticWorldParityDigest staticWorldParity{};
 };
 
 enum class Rac1RuntimeLiveRatchetFrameStatus : std::uint8_t {

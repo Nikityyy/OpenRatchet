@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/rac1_texture.h"
+#include "render/native_render_contract.h"
 
 #include <raylib.h>
 
@@ -21,6 +22,7 @@ std::vector<Texture2D> uploadTextures(
 void unloadTextures(std::vector<Texture2D>& textures) noexcept;
 void unloadBatches(std::vector<NativeDrawBatch>& batches) noexcept;
 void drawBatches(const std::vector<NativeDrawBatch>& batches, Vector3 position);
+void applyNativeRenderPassState(NativeRenderPass pass, bool wireframe = false);
 
 template <typename Vertex, typename PositionFn>
 bool appendMeshBatch(const std::vector<Vertex>& vertices,

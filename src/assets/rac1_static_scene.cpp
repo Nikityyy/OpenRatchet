@@ -111,7 +111,31 @@ bool parseInstanceBlock(std::span<const std::uint8_t> gameplay,
         inst.oClass = readI32(gameplay, o);
         for (std::size_t m = 0u; m < 16u; ++m) inst.matrix[m] = readF32(gameplay, o + 0x10u + m * 4u);
         if (shrub) {
-            inst.color = {gameplay[o + 0x50u], gameplay[o + 0x51u], gameplay[o + 0x52u], 255u};
+            // Retail ShrubInstancePacked stores colour as Rgb96: three little-endian
+            // signed 32-bit channel values at +0x50/+0x54/+0x58. Treating the
+            // first three bytes at +0x50 as RGB aliases the low byte of red and
+            // the zero padding of that same s32, producing the former red-only
+            // shrub tint. Wrench independently documents the same 0x70-byte
+            // packed layout.
+            const std::int32_t r = readI32(gameplay, o + 0x50u);
+            const std::int32_t g = readI32(gameplay, o + 0x54u);
+            const std::int32_t b = readI32(gameplay, o + 0x58u);
+            if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) {
+                return false;
+            }
+
+            // This packed colour cannot be treated as a proved standalone texture
+            // tint. ShrubInstancePacked also carries dir_lights at +0x60, while the
+            // current native path evaluates none of that directional-light state.
+            // Windows visual acceptance disproved both direct and GS-expanded use of
+            // this one field: affected shrubs/rocks remained severely too dark. This
+            // is the same partial-lighting failure already avoided by the Moby path.
+            //
+            // Keep decoding/range-validating Rgb96 now so the serialization contract
+            // stays proved, but render shrubs neutrally until Phase 21 implements the
+            // complete shrub lighting equation. Do not guess brightness from one
+            // component of that equation.
+            inst.color = {255u, 255u, 255u, 255u};
         }
         out.push_back(inst);
     }

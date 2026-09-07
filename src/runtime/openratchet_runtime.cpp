@@ -694,6 +694,26 @@ struct OpenRatchetRuntime::Impl {
                   << " status="
                   << render::rac1RuntimeRendererStatusName(nativeRenderer.status())
                   << '\n';
+
+        const auto& parity = summary.staticWorldParity;
+        std::cerr << "[OpenRatchet:render:parity] frontend=runtime scope=level-static"
+                  << " batches=" << parity.batchCount
+                  << " vertices=" << parity.vertexCount
+                  << " indices=" << parity.indexCount
+                  << " triangles=" << parity.triangleCount
+                  << " vertexHash=0x" << std::hex << parity.vertexHash
+                  << " indexHash=0x" << parity.indexHash
+                  << " materialHash=0x" << parity.materialHash
+                  << " textureHash=0x" << parity.textureHash
+                  << " transformHash=0x" << parity.transformHash
+                  << " topologyHash=0x" << parity.topologyHash
+                  << " renderStateHash=0x" << parity.renderStateHash
+                  << " drawOrderHash=0x" << parity.drawOrderHash
+                  << " combinedHash=0x" << parity.combinedHash << std::dec
+                  << " topology=triangle-list-unindexed"
+                  << " transform=retail-world-identity"
+                  << " status=" << render::rac1RenderParityStatusName(parity.status)
+                  << '\n';
     }
 
     void drawNativeWorldWithRetailCamera(bool skyMaterialized) {
@@ -719,29 +739,29 @@ struct OpenRatchetRuntime::Impl {
         rlPushMatrix();
         rlLoadIdentity();
 
-        // The native Level-0 meshes are reconstructed from Retail PS2 strip
-        // topology and intentionally rendered two-sided, exactly like the
-        // standalone native level viewer. Do not inherit PS2Runtime/raylib
-        // backface-culling state here: alternating strip winding otherwise
-        // drops valid faces and exposes the black clear as triangular holes.
-        rlDisableBackfaceCulling();
-
+        // The frontend may inherit arbitrary compatibility renderer state.
+        // Establish the exact same native raster contract as the standalone
+        // viewer before each equivalent draw pass; do not rely on inherited
+        // depth-write, cull or blend state from PS2Runtime.
+        render::applyNativeRenderPassState(render::NativeRenderPass::Sky, false);
         if (skyMaterialized) {
-            // Retail draws sky shells before ordinary world geometry, each with
-            // its own FUN_0022B288 object matrix. Depth stays disabled here so
-            // sky geometry does not own the later world depth buffer.
             const std::span<const std::array<float, 16>> skyMatrices(
                 liveSky.sky.shellObjectMatrices.data(), liveSky.sky.shellCount);
             nativeRenderer.drawSky(skyMatrices);
         }
 
-        rlEnableDepthTest();
+        render::applyNativeRenderPassState(render::NativeRenderPass::World, false);
         nativeRenderer.drawStaticWorld();
         nativeRenderer.drawLiveRatchet();
         rlDrawRenderBatchActive();
 
+        // Preserve the host's expected post-3D state for any later debug/UI work.
         rlDisableDepthTest();
+        rlEnableDepthMask();
         rlEnableBackfaceCulling();
+        rlEnableColorBlend();
+        rlSetBlendMode(RL_BLEND_ALPHA);
+        rlDisableWireMode();
         rlPopMatrix();
         rlMatrixMode(RL_PROJECTION);
         rlPopMatrix();

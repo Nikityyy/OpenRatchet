@@ -8,6 +8,7 @@
 #include "platform/native_vfs.h"
 #include "render/native_mesh_renderer.h"
 #include "render/native_skinned_moby_renderer.h"
+#include "render/rac1_render_parity.h"
 
 #include <raylib.h>
 #include <rlgl.h>
@@ -257,6 +258,33 @@ int main(int argc, char** argv) {
                   << ratchet::assets::rac1StaticSceneStatusName(staticScene.status) << '\n';
         return 1;
     }
+
+    const auto staticWorldParity = ratchet::render::buildRac1StaticWorldParityDigest(
+        terrain.mesh,
+        tfragTextures.textures,
+        staticScene.mesh,
+        tieTextures.textures,
+        shrubTextures.textures);
+    std::cout << "[OpenRatchet:render:parity] frontend=viewer scope=level-static"
+              << " batches=" << staticWorldParity.batchCount
+              << " vertices=" << staticWorldParity.vertexCount
+              << " indices=" << staticWorldParity.indexCount
+              << " triangles=" << staticWorldParity.triangleCount
+              << " vertexHash=0x" << std::hex << staticWorldParity.vertexHash
+              << " indexHash=0x" << staticWorldParity.indexHash
+              << " materialHash=0x" << staticWorldParity.materialHash
+              << " textureHash=0x" << staticWorldParity.textureHash
+              << " transformHash=0x" << staticWorldParity.transformHash
+              << " topologyHash=0x" << staticWorldParity.topologyHash
+              << " renderStateHash=0x" << staticWorldParity.renderStateHash
+              << " drawOrderHash=0x" << staticWorldParity.drawOrderHash
+              << " combinedHash=0x" << staticWorldParity.combinedHash << std::dec
+              << " topology=triangle-list-unindexed"
+              << " transform=retail-world-identity"
+              << " status="
+              << ratchet::render::rac1RenderParityStatusName(staticWorldParity.status)
+              << '\n';
+    if (!staticWorldParity.ok()) return 1;
 
     auto mobys = ratchet::assets::decodeRac1MobyScene(
         loaded.core,
@@ -1686,20 +1714,16 @@ int main(int argc, char** argv) {
                          sky.mesh.clearColor[2],
                          255u});
         BeginMode3D(camera);
-        rlDisableBackfaceCulling();
-        if (wireframe) rlEnableWireMode();
 
-        // Sky shells are authored camera-relative by the game. They are a
-        // background layer, not world-space occluders. The retail renderer
-        // effectively draws them with depth compare ALWAYS and depth writes
-        // disabled; mirror that here so nearby shell geometry cannot hide
-        // distant terrain/static scenery as the free camera moves around.
-        rlDisableDepthTest();
-        rlDisableDepthMask();
+        // Viewer and runtime intentionally use different camera/state sources,
+        // but equivalent native draw passes must establish the same raster
+        // contract instead of inheriting frontend-specific rlgl state.
+        ratchet::render::applyNativeRenderPassState(
+            ratchet::render::NativeRenderPass::Sky, wireframe);
         drawBatches(skyBatches, camera.position);
-        rlEnableDepthMask();
-        rlEnableDepthTest();
 
+        ratchet::render::applyNativeRenderPassState(
+            ratchet::render::NativeRenderPass::World, wireframe);
         drawBatches(terrainBatches, {0.0f, 0.0f, 0.0f});
         drawBatches(staticBatches, {0.0f, 0.0f, 0.0f});
         drawBatches(mobyBatches, {0.0f, 0.0f, 0.0f});

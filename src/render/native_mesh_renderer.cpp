@@ -1,5 +1,7 @@
 #include "render/native_mesh_renderer.h"
 
+#include <rlgl.h>
+
 namespace ratchet::render {
 
 std::vector<Texture2D> uploadTextures(
@@ -32,6 +34,27 @@ void unloadTextures(std::vector<Texture2D>& textures) noexcept {
 void unloadBatches(std::vector<NativeDrawBatch>& batches) noexcept {
     for (auto& batch : batches) UnloadModel(batch.model);
     batches.clear();
+}
+
+
+void applyNativeRenderPassState(NativeRenderPass pass, bool wireframe) {
+    const auto state = nativeRenderStateContract(pass, wireframe);
+
+    if (state.depthTest) rlEnableDepthTest();
+    else rlDisableDepthTest();
+
+    if (state.depthWrite) rlEnableDepthMask();
+    else rlDisableDepthMask();
+
+    if (state.backfaceCulling) rlEnableBackfaceCulling();
+    else rlDisableBackfaceCulling();
+
+    if (state.colorBlend) rlEnableColorBlend();
+    else rlDisableColorBlend();
+    rlSetBlendMode(RL_BLEND_ALPHA);
+
+    if (state.wireframe) rlEnableWireMode();
+    else rlDisableWireMode();
 }
 
 void drawBatches(const std::vector<NativeDrawBatch>& batches, Vector3 position) {

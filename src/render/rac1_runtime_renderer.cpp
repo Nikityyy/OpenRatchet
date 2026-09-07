@@ -156,6 +156,18 @@ bool Rac1RuntimeRenderer::loadLevel(
         return false;
     }
 
+    const auto staticWorldParity = buildRac1StaticWorldParityDigest(
+        terrain.mesh,
+        tfragTextures.textures,
+        staticScene.mesh,
+        tieTextures.textures,
+        shrubTextures.textures);
+    if (!staticWorldParity.ok()) {
+        status_ = Rac1RuntimeRendererStatus::StaticWorldParityInvalid;
+        return false;
+    }
+    summary_.staticWorldParity = staticWorldParity;
+
     std::vector<std::uint8_t> runtimeWadEncoded;
     if (runtimeLevelWad.kind != platform::NativeAssetKind::Wad2 ||
         !std::filesystem::is_regular_file(runtimeLevelWad.path)) {
@@ -683,6 +695,8 @@ const char* rac1RuntimeRendererStatusName(Rac1RuntimeRendererStatus status) noex
         return "ratchet-animation-bank-failed";
     case Rac1RuntimeRendererStatus::RatchetTopologyInvalid:
         return "ratchet-topology-invalid";
+    case Rac1RuntimeRendererStatus::StaticWorldParityInvalid:
+        return "static-world-parity-invalid";
     case Rac1RuntimeRendererStatus::GpuUploadFailed:
         return "gpu-upload-failed";
     }

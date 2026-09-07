@@ -168,6 +168,14 @@ $sifRpcTraceMatches = [regex]::Matches(
     $combinedText,
     '\[OpenRatchet:SIF:RPC\]\s+([^\r\n]+)'
 )
+$frameUploadMatches = [regex]::Matches(
+    $combinedText,
+    '\[frame:upload\]\s+idx=\d+'
+)
+$nativeRenderMatches = [regex]::Matches(
+    $combinedText,
+    '\[OpenRatchet:render:frame\][^\r\n]*\brendered=1\b[^\r\n]*\bstatus=ok\b'
+)
 $diagnostics = @(
     ($combinedText -split '\r?\n') |
         Where-Object { $_ -match '(?i)\b(unimplemented|stub|failed|error)\b' } |
@@ -175,7 +183,11 @@ $diagnostics = @(
 )
 
 $latestTick = $null
-$graphicsActivity = $false
+# Guest run-tick counters are only one graphics oracle. Once final presentation is
+# native-owned, a valid run can have no sampled [run:tick] line while still proving
+# frame uploads and an OpenRatchet native render. Treat either native evidence source
+# as graphics activity so the harness does not report a false negative.
+$graphicsActivity = $frameUploadMatches.Count -gt 0 -or $nativeRenderMatches.Count -gt 0
 foreach ($match in $tickMatches) {
     $latestTick = [pscustomobject]@{
         Tick = [int]$match.Groups[1].Value

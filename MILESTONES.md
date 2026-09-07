@@ -887,23 +887,57 @@ already consumes.
   preserving Retail X/Z/W while negating only clip Y before the OpenGL viewport.
   `FUN_0022BF94` remains the oracle for the post-divide GS screen transform; no
   host `Camera3D`, guessed FOV, target/up or host-authored gameplay camera is used.
-- **New visual evidence after 12.3A:** the runtime frame is now oriented correctly,
-  but it still contains large stretched/crossing triangle corruption that is not
-  present in `native_level_viewer`. This is therefore no longer a camera-convention
-  blocker. It is a renderer/frontend parity blocker and must be isolated before
-  gameplay-response work continues.
-- **Renderer-parity rule for the next substep:** viewer and runtime may intentionally
+- **Step-12.3B is Windows-accepted and complete.** Release builds and **29/29
+  CTests** passed the
+  geometry/state gate, and viewer/runtime independently produced the same canonical
+  Level-0 static world. That gate closed the former large stretched/crossing-triangle
+  defect as an accidental frontend raster-state fork: equivalent sky/world passes now
+  use the shared `NativeRenderStateContract`, including explicit world depth-write
+  ownership. The first colour audit then exposed a separate serialization defect:
+  Retail `ShrubInstancePacked` stores `Rgb96` as three little-endian signed 32-bit
+  channel values at `+0x50/+0x54/+0x58`, while OpenRatchet had consumed bytes
+  `+0x50/+0x51/+0x52` and therefore turned affected shrubs red-only. The s32 layout
+  correction is Windows-proven: all **1697/1697** authentic Level-0 shrub instances
+  are valid and the red-only assets disappear.
+
+  A second candidate fix expanded raw shrub `Rgb96` by two under the PS2 GS
+  `TFX=MODULATE` `/128` convention. The complete Windows gate disproved that as the
+  solution: **29/29 CTests** passed, viewer and runtime both reported
+  `vertexHash=0xca1ac5c5e1175a15` / `combinedHash=0x8d3962a4e86b7052`, the 20-second
+  runtime stayed alive with graphics activity and reached `renderer=ok`, `camera=ok`,
+  `rendered=1`, overall `status=ok`, but visual acceptance still showed the same
+  shrub/rock classes severely too dark. Therefore the remaining issue is not another
+  GS scale constant.
+
+  The root cause is an unjustified partial-lighting application. The same packed shrub
+  instance carries `dir_lights` at `+0x60`, while OpenRatchet currently evaluates none
+  of that directional-light state; Wrench maps raw
+  `Rgb96` through `/255`. This matches OpenRatchet's already-established Moby policy,
+  where gameplay colour is an ambient-light input and is deliberately **not** applied
+  alone while Retail normal/directional-light evaluation is absent. Step 12.3B now
+  follows that same policy for shrubs: continue decoding/range-checking `Rgb96`, but
+  render shrubs with neutral white vertex colour until the full lighting equation is
+  implemented. No brightness heuristic or guessed directional light is introduced.
+  Exact shrub/tie lighting and fog remain Phase 21 Rendering Completeness.
+
+  Authentic Level 0 with this neutral deferred-lighting policy retains
+  `batches=279`, `vertices=2247207`, `indices=0`, `triangles=749069` and every
+  non-vertex component hash, while the canonical reference is
+  `vertexHash=0x1ecb9fff8b64f7b4` and `combinedHash=0xc1069aa5990831b0`. Local GCC and
+  Clang `-Wall -Wextra -Werror` tests, ASan/UBSan, and a real Level-0 parity decode are
+  green. The final Windows gate now independently reproduces that exact digest in both
+  viewer and runtime, **29/29 CTests** pass, the screenshot confirms the artificial
+  dark shrub/rock tint is gone, and the 20-second runtime remains alive with graphics
+  activity while reaching `renderer=ok`, `camera=ok`, `rendered=1`, Ratchet
+  animation/transform/GPU state `ok`, and overall `status=ok`. Sky translation and
+  non-materialized live Mobys remain explicitly deferred with zero unaccounted native
+  scene state. `third_party/PS2Recomp` remains clean. Step 12.3B is complete.
+- **Canonical renderer-parity invariant retained:** viewer and runtime may intentionally
   differ in state acquisition, camera ownership, animation clock, visibility,
   streaming/lifecycle and debug UI, but equivalent canonical render inputs must use
-  shared rendering semantics and backend behavior. Geometry/topology conversion,
-  texture/material interpretation, vertex/index data, world-transform math,
-  cull/depth/blend state, batching and native draw submission must not have
-  accidental viewer/runtime forks. Deterministic parity diagnostics should compare
-  at least vertex/index counts and hashes, material/texture identity, transform
-  hashes, primitive topology, render state and draw ordering. If canonical hashes
-  differ, the defect is upstream in materialization/preparation; if they match but
-  pixels differ, the defect is downstream in GPU state, resource lifetime or draw
-  submission.
+  shared rendering semantics/backend behavior. Deterministic parity diagnostics keep
+  vertex/index counts and hashes, material/texture identity, transform hashes,
+  primitive topology, render state and draw ordering as permanent regression gates.
 
 ### Remaining Phase 12 Steps
 
@@ -915,27 +949,28 @@ already consumes.
   visible in `openratchet.exe`; absolute-world -> camera-relative composition and
   GS-screen-Y -> OpenGL-viewport conversion are Windows-validated. Release build,
   **28/28 CTests**, strict viewer regression and the mandatory 20-second native run
-  are green. The scene is not yet visually accepted because the live runtime still
-  shows stretched/crossing triangles absent from the viewer.
-- **Step 12.3B (`TODO`, next after this checkpoint commit): Viewer/runtime render
-  parity.** Converge all equivalent render operations onto shared semantics/backend
-  while preserving only documented intentional frontend differences. Add canonical
-  frame parity evidence (counts/hashes/state) and eliminate the unexplained runtime-
-  only triangle corruption. Exit requires: no unintended duplicate renderer
-  semantics, all remaining frontend differences explicitly classified, equivalent
-  geometry/material/transform/render-state data proven equal, the Level-0 viewer
-  still visually correct, and the live runtime free of unexplained stretched or
-  corrupt triangles.
-- **Step 12.3C (`TODO`): Authentic gameplay response.** After render parity is
-  closed, trace focused movement/camera input through the already-proved parser to
-  the original Retail gameplay consumers and prove resulting Ratchet/camera state
-  changes. Do not substitute host-authored movement, camera state or a viewer
-  camera.
+  are green. Its remaining runtime-only triangle corruption was closed by 12.3B.
+- **Step 12.3B (`DONE`): Viewer/runtime render parity and fail-honest pre-lighting
+  colour policy.** Geometry/state parity and the `Rgb96` layout fix are Windows-proven;
+  stretched/crossing triangles and red-only shrubs are closed. The Windows-tested
+  raw-`Rgb96` GS-MODULATE expansion is rejected because the assets remained too dark
+  despite perfect viewer/runtime parity. Shrub `Rgb96` is an incomplete lighting input,
+  so Phase 12 mirrors the existing Moby policy: validate the packed values but render
+  neutrally until Phase 21 implements the full ambient/directional-light equation.
+  Final Windows build/CTest/viewer/runtime plus screenshot acceptance now pass with
+  `vertexHash=0x1ecb9fff8b64f7b4` and `combinedHash=0xc1069aa5990831b0` in both
+  frontends and **29/29 CTests** green.
+- **Step 12.3C (`IN PROGRESS`): Authentic gameplay response.** Trace focused
+  movement/camera input through the already-proved parser to the original Retail
+  gameplay consumers and prove resulting Ratchet/camera state changes. Do not
+  substitute host-authored movement, camera state or a viewer camera.
 - **Step 12.4 (`TODO`):** Controller parity/polish required for the phase gate,
   including any Retail-required pressure/rumble semantics only after their
   consumers are proved.
 - **Step 12.5 (`TODO`):** Full Phase-12 regression and mandatory Windows runtime
   gate with genuinely playable Ratchet before Phase-12 completion.
 
-The validated 12.3A state is a legitimate checkpoint commit. **Phase 12 remains
-`IN PROGRESS`**; the next implementation task is Step 12.3B, not Phase 13.
+**Step 12.3B is checkpoint-ready and complete.** Phase 12 remains `IN PROGRESS`, with
+Step 12.3C now the active work. Do not reopen static-scene lighting in Phase 12 unless a
+new parity regression appears; exact Retail lighting remains deliberately owned by
+Phase 21.
