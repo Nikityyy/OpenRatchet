@@ -174,17 +174,32 @@ int main(int argc, char** argv) {
         return value != nullptr && value[0] != '\0' && value[0] != '0';
     }();
 
-    if (argc != 3 && argc != 4) {
-        std::cerr << "usage: native_level_viewer <toc.json> <extracted-root> [level-index]\n";
+    if (argc < 3 || argc > 5) {
+        std::cerr << "usage: native_level_viewer <toc.json> <extracted-root> [level-index] [smoke-seconds]\n";
         return 2;
     }
 
     int requestedIndex = -1;
-    if (argc == 4) {
+    if (argc >= 4) {
         try {
             requestedIndex = std::stoi(argv[3]);
         } catch (...) {
             std::cerr << "invalid level index: " << argv[3] << '\n';
+            return 2;
+        }
+    }
+
+    double smokeSeconds = 0.0;
+    if (argc == 5) {
+        try {
+            smokeSeconds = std::stod(argv[4]);
+        } catch (...) {
+            std::cerr << "invalid smoke duration: " << argv[4] << '\n';
+            return 2;
+        }
+        if (!std::isfinite(smokeSeconds) || smokeSeconds <= 0.0 || smokeSeconds > 3600.0) {
+            std::cerr << "smoke duration must be finite and in (0, 3600]: "
+                      << argv[4] << '\n';
             return 2;
         }
     }
@@ -1633,6 +1648,7 @@ int main(int argc, char** argv) {
                                        sky.mesh.triangleCount;
     bool wireframe = false;
     const double visualStartTime = GetTime();
+    std::size_t renderedFrameCount = 0u;
     std::size_t visualFrameIndex = 0u;
     std::size_t visualNextFrameIndex = 1u;
     float visualInterpolationAlpha = 0.0f;
@@ -1765,8 +1781,23 @@ int main(int argc, char** argv) {
                  24, 120, 16, GRAY);
         DrawFPS(GetScreenWidth() - 90, 16);
         EndDrawing();
+        ++renderedFrameCount;
+
+        if (smokeSeconds > 0.0 && (GetTime() - visualStartTime) >= smokeSeconds) {
+            break;
+        }
     }
 
+    const double visualElapsedSeconds = GetTime() - visualStartTime;
     cleanup();
+    if (smokeSeconds > 0.0) {
+        const bool smokeOk = renderedFrameCount > 0u &&
+                             visualElapsedSeconds >= smokeSeconds;
+        std::cout << "[OpenRatchet:viewer:smoke] seconds=" << smokeSeconds
+                  << " elapsed=" << visualElapsedSeconds
+                  << " frames=" << renderedFrameCount
+                  << " status=" << (smokeOk ? "ok" : "incomplete") << '\n';
+        return smokeOk ? 0 : 1;
+    }
     return 0;
 }

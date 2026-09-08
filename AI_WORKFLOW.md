@@ -52,6 +52,11 @@ class of failures over many local workarounds.
     archive timestamps, but only when file content actually changed. Never touch
     unchanged dirty headers on every validation cycle; that can invalidate the
     PCH and needlessly rebuild hundreds of generated Retail translation units.
+15. **Use the canonical compact verification handoff.** For normal Windows gates,
+    run `tools/verify-native.ps1` and review/send
+    `build/native/verification/latest.md`. Do not paste build, CTest, viewer and
+    runtime raw logs into chat unless the compact report identifies a specific
+    failing stage that requires its corresponding raw evidence file.
 
 ## Decision checklist before every patch
 

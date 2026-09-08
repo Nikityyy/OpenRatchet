@@ -96,6 +96,33 @@ header and level-core index and validates its compressed core with the native
 WAD decoder. The parser now also preserves the decompressed core as a native
 host buffer for renderer-owned asset decoders.
 
+### Canonical native verification
+
+Normal Windows acceptance is now one command instead of four large console dumps:
+
+```powershell
+.\tools\verify-native.ps1
+```
+
+The command runs the Release build, full CTest suite, an automated Level-0 viewer
+smoke run, the mandatory 20-second native runtime run, viewer/runtime render-parity
+comparison and repository/submodule status. The console shows only stage-level
+`RUN`/`PASS`/`FAIL` lines. Full raw evidence is retained under the ignored
+`build/native/verification/<timestamp>/` directory, while the compact handoff report
+is always written to:
+
+```text
+build/native/verification/latest.md
+```
+
+For normal review, send only `latest.md`. A raw log is needed only when that report
+identifies a specific failing stage. The viewer smoke duration and runtime duration
+can be adjusted with `-ViewerSmokeSeconds` and `-RuntimeSeconds`; the defaults are
+3 and 20 seconds respectively. `tools/diagnose-native.ps1` is also concise by
+default now. Use `-VerboseSections` only for deep packet/register/resource triage;
+individual diagnostic lines are bounded so malformed or concatenated trace output
+cannot flood the terminal.
+
 ### Native level viewer
 
 Phase 6 established the PC-native renderer with authentic R&C1 collision
@@ -111,6 +138,10 @@ After extracting level 0 and building Release, run:
 ```powershell
 .\tools\run-native-level-viewer.ps1 -LevelIndex 0
 ```
+
+For non-interactive verification, `-SmokeSeconds N` opens the same renderer, draws
+for `N` seconds, emits `[OpenRatchet:viewer:smoke] ... status=ok`, and exits cleanly.
+`verify-native.ps1` uses this path; manual visual inspection remains unchanged.
 
 The window displays the native R&C1 scene currently covered by the renderer:
 textured tfrag terrain, ties, shrubs, bind-pose mobys and sky. Use `TAB` to

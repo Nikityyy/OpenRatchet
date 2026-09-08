@@ -938,6 +938,16 @@ already consumes.
   shared rendering semantics/backend behavior. Deterministic parity diagnostics keep
   vertex/index counts and hashes, material/texture identity, transform hashes,
   primitive topology, render state and draw ordering as permanent regression gates.
+- **Canonical verification workflow hardened (tooling-only):**
+  `tools/verify-native.ps1` is the standard Windows acceptance entry point. It runs
+  build -> CTest -> automated native viewer smoke -> mandatory native runtime gate,
+  preserves complete raw logs under `build/native/verification/<timestamp>/`, compares
+  the viewer/runtime canonical render hash, records repository/submodule state, and
+  emits only the compact `build/native/verification/latest.md` handoff report. The
+  interactive viewer now has an evidence-only `-SmokeSeconds` auto-exit mode, and
+  `diagnose-native.ps1` suppresses unbounded packet/register tails unless
+  `-VerboseSections` is requested. This changes no runtime/gameplay ownership and does
+  not advance Step 12.3C by itself.
 
 ### Remaining Phase 12 Steps
 

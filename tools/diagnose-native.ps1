@@ -5,7 +5,10 @@ param(
     [switch]$Build,
     [switch]$KeepProcess,
     [ValidateRange(1, 100)]
-    [int]$TailLines = 12
+    [int]$TailLines = 12,
+    [switch]$VerboseSections,
+    [ValidateRange(256, 16384)]
+    [int]$MaxDiagnosticLineLength = 2048
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +44,13 @@ if ($KeepProcess) {
     $harnessArgs += '-KeepProcess'
 }
 
+function Limit-DiagnosticLine([string]$line) {
+    if ($null -eq $line) { return '' }
+    if ($line.Length -le $MaxDiagnosticLineLength) { return $line }
+    return ($line.Substring(0, $MaxDiagnosticLineLength) +
+        " ... [truncated originalLength=$($line.Length)]")
+}
+
 Write-Output "Working directory: $repoRoot"
 Write-Output ("Diagnostic command: powershell.exe " + ($harnessArgs -join ' '))
 
@@ -48,7 +58,11 @@ $harnessOutput = @(
     & powershell.exe @harnessArgs 2>&1 | ForEach-Object { "$($_)" }
 )
 $harnessExit = $LASTEXITCODE
-$harnessOutput | Write-Output
+if ($VerboseSections) {
+    Write-Output ''
+    Write-Output '--- Native harness output ---'
+    $harnessOutput | ForEach-Object { Limit-DiagnosticLine $_ } | Write-Output
+}
 Write-Output "Harness exit code: $harnessExit"
 
 function Get-LogPathFromSummary([string]$label, [string[]]$lines) {
@@ -98,7 +112,7 @@ foreach ($prefix in $summaryLines) {
     $harnessOutput |
         Where-Object { $_.TrimStart() -like "$prefix*" } |
         Select-Object -Last 1 |
-        ForEach-Object { $_.Trim() } |
+        ForEach-Object { Limit-DiagnosticLine $_.Trim() } |
         Write-Output
 }
 
@@ -112,26 +126,34 @@ function Write-RecentMatches([string]$title, [string[]]$lines, [string]$pattern,
     if ($matches.Count -eq 0) {
         Write-Output '(none)'
     } else {
-        $matches | Write-Output
+        $matches | ForEach-Object { Limit-DiagnosticLine $_ } | Write-Output
     }
 }
 
-Write-RecentMatches 'Recent GS/GIF packets and registers' $stdoutLines '\[gs:(gif|reg|copy-reg)\]' $TailLines
-Write-RecentMatches 'Recent frame uploads' $stdoutLines '\[frame:upload\]' $TailLines
-Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLines
-Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF(?::RPC)?\].*(injected completion|deferred data-bearing CALL|disposition=)' $TailLines
-Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenRatchet:platform\]' $TailLines
-Write-RecentMatches 'Native resource stash' ($stdoutLines + $stderrLines) '\[OpenRatchet:stash\]' $TailLines
-Write-RecentMatches 'Native host input' ($stdoutLines + $stderrLines) '\[OpenRatchet:input\]' $TailLines
-Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
-Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
-Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines
-Write-RecentMatches 'Live gameplay camera' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:camera\]' $TailLines
-Write-RecentMatches 'Live gameplay sky' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:sky\]' $TailLines
-Write-RecentMatches 'Native renderer ownership' ($stdoutLines + $stderrLines) '\[OpenRatchet:render:(ownership|level-map|scene-load|parity|frame)\]' $TailLines
-Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
-Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
-Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines
+if ($VerboseSections) {
+    Write-RecentMatches 'Recent GS/GIF packets and registers' $stdoutLines '\[gs:(gif|reg|copy-reg)\]' $TailLines
+    Write-RecentMatches 'Recent frame uploads' $stdoutLines '\[frame:upload\]' $TailLines
+    Write-RecentMatches 'Recent runtime ticks' $stdoutLines '\[run:tick\]' $TailLines
+    Write-RecentMatches 'Recent SIF transport' ($stdoutLines + $stderrLines) '\[OpenRatchet:SIF(?::RPC)?\].*(injected completion|deferred data-bearing CALL|disposition=)' $TailLines
+    Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenRatchet:platform\]' $TailLines
+    Write-RecentMatches 'Native resource stash' ($stdoutLines + $stderrLines) '\[OpenRatchet:stash\]' $TailLines
+    Write-RecentMatches 'Native host input' ($stdoutLines + $stderrLines) '\[OpenRatchet:input\]' $TailLines
+    Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
+    Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
+    Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines
+    Write-RecentMatches 'Live gameplay camera' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:camera\]' $TailLines
+    Write-RecentMatches 'Live gameplay sky' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:sky\]' $TailLines
+    Write-RecentMatches 'Native renderer ownership' ($stdoutLines + $stderrLines) '\[OpenRatchet:render:(ownership|level-map|scene-load|parity|frame)\]' $TailLines
+    Write-RecentMatches 'Native VFS' ($stdoutLines + $stderrLines) '\[OpenRatchet:VFS\]' $TailLines
+    Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
+    Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines
+} else {
+    Write-RecentMatches 'Latest native renderer state' ($stdoutLines + $stderrLines) '\[OpenRatchet:render:(ownership|level-map|scene-load|parity|frame)\]' 5
+    Write-RecentMatches 'Latest live gameplay state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:(camera|sky|moby|ratchet-animation|ratchet-transform)\]' 8
+    Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|error|failed' 8
+    Write-Output ''
+    Write-Output 'Detailed packet/register/resource tails suppressed. Re-run with -VerboseSections for full diagnostic sections.'
+}
 
 Write-Output ''
 Write-Output '--- Repository state ---'

@@ -721,6 +721,17 @@ CPU-side data localizes the defect to scene materialization/preparation; matchin
 canonical data with divergent pixels localizes it to GPU upload/state, resource
 lifetime or draw submission.
 
+The permanent acceptance/observability rule is **compact summary, lossless raw
+evidence**. `tools/verify-native.ps1` owns the normal Windows verification sequence:
+Release build, CTest, automated viewer smoke, mandatory native runtime run, canonical
+viewer/runtime parity comparison, and repository/submodule state. Complete output is
+kept below ignored `build/native/verification/<timestamp>/`; normal handoff consumes
+only `build/native/verification/latest.md`. High-volume packet/register/resource
+traces are opt-in diagnostics, not default console output, and diagnostic rendering
+must bound individual line size so a missing newline cannot consume unbounded review
+context. This observability policy does not alter Retail state ownership or renderer
+semantics.
+
 The runtime feeds the shared renderer authoritative native tfrag/tie/shrub data in
 untouched Retail world coordinates. Scene activation is tied only to proved Retail
 resource identity: currently exactly a successful full `wads2[69]` (`0x38F6`,
