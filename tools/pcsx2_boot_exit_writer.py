@@ -21,6 +21,11 @@ and the pre-write state, then proves 0x15F5B0==1 at the Boot-loop escape and the
 subsequent dispatcher return.
 
 No memory memchecks, no guest writes, no snapshot loading, no native rebuild.
+
+The trace also records the read-only transient callback state used by
+sub_002192A8: owner 0x001D5BF4, table offset 0x44, fourteen object slots, and
+each readable object's first-word target. This is sampled at the same Retail
+breakpoints as the writer/control-flow proof; it does not mutate guest state.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ if str(TOOLS_DIR) not in sys.path:
 from pcsx2_sif_capture import format_address, parse_address
 from pcsx2_level0_oracle import OracleDebugClient, OracleError, wait_until_paused
 
-SCHEMA = 4
+SCHEMA = 5
 KIND = "RAC1_RETAIL_BOOT_EXIT_WRITER"
 DEFAULT_TIMEOUT = 300.0
 
@@ -54,6 +59,10 @@ LOADER_STATE_15ED84 = 0x0015ED84
 LOADER_STATE_15ED88 = 0x0015ED88
 OVERLAY_STREAM_POINTER = 0x0015EE4C
 GENERATION_PROBE_PC = 0x001EBA08
+CALLBACK_2195_OWNER = 0x001D5BF4
+CALLBACK_2195_TABLE_OFFSET = 0x44
+CALLBACK_2195_SLOT_COUNT = 14
+CALLBACK_21E7C8 = 0x0021E7C8
 
 DISPROVED_FIXED_WRITER_PC = 0x0021E880
 BRANCH_STATE_WRITE_PC = 0x0022E190
@@ -64,9 +73,10 @@ EXPECTED_BOOT_GP = 0x00166C00
 BOOT_LOOP_ESCAPE_PC = 0x001EBC2C
 DISPATCHER_RETURN_PC = 0x0012DA00
 
-OWNED_PREFIX = "OpenRatchet boot-exit-writer-v4:"
+OWNED_PREFIX = "OpenRatchet boot-exit-writer-v5:"
 STALE_PREFIXES = (
     OWNED_PREFIX,
+    "OpenRatchet boot-exit-writer-v4:",
     "OpenRatchet boot-exit-writer-v3:",
     "OpenRatchet boot-exit-path:",
     "OpenRatchet boot-exit-writer:",
@@ -141,6 +151,55 @@ def read_u32(client: OracleDebugClient, address: int) -> int:
 
 def read_state(client: OracleDebugClient) -> dict[str, str]:
     return {name: format_address(read_u32(client, address)) for name, address in STATE_WORDS}
+
+
+def read_callback_state(client: OracleDebugClient) -> dict[str, Any]:
+    """Mirror sub_002192A8's read-only callback walk against live EE RAM."""
+    result: dict[str, Any] = {
+        "owner_pointer": "0x00000000",
+        "table_pointer": "0x00000000",
+        "table_readable": False,
+        "non_null_objects": 0,
+        "readable_objects": 0,
+        "non_null_targets": 0,
+        "targets": ["0x00000000"] * CALLBACK_2195_SLOT_COUNT,
+        "callback21e7c8_present": False,
+        "callback21e7c8_slot": None,
+    }
+
+    owner = read_u32(client, CALLBACK_2195_OWNER)
+    result["owner_pointer"] = format_address(owner)
+    if owner == 0:
+        return result
+
+    table = owner + CALLBACK_2195_TABLE_OFFSET
+    if table > 0xFFFFFFFF:
+        return result
+    try:
+        table_bytes = read_bytes(client, table, CALLBACK_2195_SLOT_COUNT * 4)
+    except OracleError:
+        return result
+
+    result["table_pointer"] = format_address(table)
+    result["table_readable"] = True
+    for slot in range(CALLBACK_2195_SLOT_COUNT):
+        object_pointer = int.from_bytes(table_bytes[slot * 4:slot * 4 + 4], "little")
+        if object_pointer == 0:
+            continue
+        result["non_null_objects"] += 1
+        try:
+            target = read_u32(client, object_pointer)
+        except OracleError:
+            continue
+        result["readable_objects"] += 1
+        result["targets"][slot] = format_address(target)
+        if target == 0:
+            continue
+        result["non_null_targets"] += 1
+        if target == CALLBACK_21E7C8 and not result["callback21e7c8_present"]:
+            result["callback21e7c8_present"] = True
+            result["callback21e7c8_slot"] = slot
+    return result
 
 
 def read_generation_hex(client: OracleDebugClient, width: int) -> str:
@@ -271,6 +330,7 @@ def capture_context(
         "pc": format_address(pc),
         "cycles": status.get("cycles"),
         "state": read_state(client),
+        "callback2195": read_callback_state(client),
         "gpr": client.read_registers("ee", 0),
         "backtrace": client.backtrace("ee", 24),
         "disassembly": client.disassemble("ee", max(0, pc - 24), 16),
@@ -309,9 +369,9 @@ def wait_for_trace_breakpoint(
 
 def write_archive(output: Path, trace: dict[str, Any], *, oracle_zip: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    readme = "# OpenRatchet Retail Boot-Exit Writer Trace v4\n\n"
+    readme = "# OpenRatchet Retail Boot-Exit Writer Trace v5\n\n"
     readme += (
-        "This archive is external read-only Retail evidence. v4 uses executable breakpoints only; "
+        "This archive is external read-only Retail evidence. v5 uses executable breakpoints only; "
         "there are no memory memchecks. It captures `0x0022E19C` immediately before the JR delay "
         "slot at `0x0022E1A0`, where Retail executes `sw $v0,-0x7650($gp)`. The captured `$gp` "
         "is used to prove the effective destination is exactly `0x0015F5B0`.\n\n"
@@ -496,7 +556,7 @@ def capture(args: argparse.Namespace) -> int:
         },
     }
     write_archive(args.output, trace, oracle_zip=args.oracle)
-    print(f"Retail Boot-exit writer trace v4 complete: {args.output}")
+    print(f"Retail Boot-exit writer trace v{SCHEMA} complete: {args.output}")
     print(
         "Writer: "
         f"{writer['writer_pc'] if writer else 'unknown'} -> "
@@ -536,6 +596,21 @@ def inspect(path: Path) -> int:
     print(f"Dispatcher return seen: {int(bool(result.get('dispatcher_return_seen')))}")
     print(f"Boot exit flag: {result.get('boot_exit_flag')}")
     print(f"Processed edges: {result.get('processed_edges')}")
+    writer_event = next(
+        (event for event in trace.get("events", []) if event.get("event") == "gp-relative-writer-pre-delay"),
+        None,
+    )
+    if isinstance(writer_event, dict):
+        callback = writer_event.get("callback2195", {})
+        print(
+            "Writer callback state: "
+            f"owner={callback.get('owner_pointer')} "
+            f"table={callback.get('table_pointer')} "
+            f"readable={int(bool(callback.get('table_readable')))} "
+            f"objects={callback.get('non_null_objects')} "
+            f"targets={callback.get('non_null_targets')} "
+            f"0x21E7C8={int(bool(callback.get('callback21e7c8_present')))}"
+        )
     return 0
 
 

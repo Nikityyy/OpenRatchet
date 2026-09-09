@@ -786,6 +786,20 @@ completed Level-0 oracle later has `[0x1D5BF4]=0` does not rule out a transient 
 on the authentic Boot-exit path. Directly writing `0x15F5B0`, forcing the generation, or synthesizing
 this call chain is forbidden.
 
+The first native reachability comparison now identifies a concrete pre-callback gate without
+promoting it to a root-cause fix. In a fresh OpenRatchet runtime, `sub_001EB0A8` reaches branch
+`0x1EB34C`, reads `0x13CAE4 == 0`, and therefore takes the `0x1EB3BC` path because the `0x840`
+mask is zero. The exact `JAL 0x2192A8` is skipped. An independent aggressive function-entry trace
+and the overlay diagnostic agree: `sub_002192A8`, `0x2235B8`, and `0x22E188` are not entered,
+`materializerCalls=0`, and the callback owner/list is still empty. This proves the current native
+first divergence is before the callback-owner read and before the authentic `0x22E1A0` writer.
+
+This does not identify the owner-pointer writer or establish that writer as the root cause. Static
+stores such as `0x2189A8` (`sw a2,4(v0)` with `v0=0x1D5BF0`) and `0x218BF4` (the corresponding
+indirect clear) remain candidates only until a Retail runtime capture proves their effective address,
+register values, written value, and caller chain at the transient callback boundary. Do not patch
+`0x13CAE4`, `0x1D5BF4`, `0x15F5B0`, or the generation state from these observations.
+
 OpenRatchet has one **intended native rendering implementation**, but two distinct
 frontends consume it: the standalone `native_level_viewer` diagnostic frontend and
 the live `openratchet.exe` runtime frontend. They already share

@@ -592,6 +592,14 @@ completed-Level-0 zero owner does **not** close the transient Boot callback/life
 root-cause test must compare that owner/list and dispatch path at the writer boundary itself. Do not
 promote `0x21E7C8`, patch Boot state, or infer a missing callable merely from either zero-owner snapshot.
 
+The first native reachability comparison now identifies the earlier gate. OpenRatchet reaches
+`sub_001EB0A8`, but at branch `0x1EB34C` its live `0x13CAE4` value is `0`; the `0x840` test therefore
+selects the `0x1EB3BC` skip path and does not call `0x2192A8`. A separate function-entry trace records
+no entries for `sub_002192A8`, `0x2235B8`, or `0x22E188`, while the independent overlay line reports
+zero materializer calls and an empty callback owner/list. This proves the current divergence boundary,
+not the root cause. A possible static writer of `0x1D5BF4` must not be treated as the cause until its
+Retail effective address, register values, written value, and caller chain are proven independently.
+
 Phase-12 Boot forensics now use one external first-divergence capture rather than serial state-word
 probes. With PCSX2 paused during the exact Retail Boot generation, run:
 

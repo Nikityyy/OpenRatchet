@@ -55,6 +55,21 @@ class FakeClient:
             raise AssertionError(cpu)
 
 
+class MemoryClient:
+    def __init__(self) -> None:
+        self.memory = bytearray(0x200000)
+
+    def read_memory(self, cpu: str, address: int, length: int) -> str:
+        if cpu != "ee":
+            raise AssertionError(cpu)
+        if address < 0 or address + length > len(self.memory):
+            raise writer.OracleError("out of range")
+        return bytes(self.memory[address:address + length]).hex()
+
+    def write_u32(self, address: int, value: int) -> None:
+        self.memory[address:address + 4] = (value & 0xFFFFFFFF).to_bytes(4, "little")
+
+
 def make_gpr(**values: int) -> dict[str, object]:
     regs = []
     defaults = {"gp": 0, "v0": 0, "ra": 0}
@@ -104,6 +119,42 @@ class BootExitWriterTests(unittest.TestCase):
         regs = make_gpr(gp=0x166C00, v0=0, ra=0x1EBC08)
         with self.assertRaisesRegex(writer.OracleError, "write zero"):
             writer.attribute_gp_relative_writer(regs)
+
+    def test_callback_state_mirrors_owner_table_and_targets(self) -> None:
+        client = MemoryClient()
+        client.write_u32(writer.CALLBACK_2195_OWNER, 0x180000)
+        client.write_u32(0x180044 + 0 * 4, 0x181000)
+        client.write_u32(0x180044 + 2 * 4, 0x181010)
+        client.write_u32(0x180044 + 13 * 4, 0x181020)
+        client.write_u32(0x181000, writer.CALLBACK_21E7C8)
+        client.write_u32(0x181010, 0x002192A8)
+        client.write_u32(0x181020, 0x0021E890)
+
+        state = writer.read_callback_state(client)
+
+        self.assertEqual(state["owner_pointer"], "0x00180000")
+        self.assertEqual(state["table_pointer"], "0x00180044")
+        self.assertTrue(state["table_readable"])
+        self.assertEqual(state["non_null_objects"], 3)
+        self.assertEqual(state["readable_objects"], 3)
+        self.assertEqual(state["non_null_targets"], 3)
+        self.assertEqual(state["targets"][0], "0x0021e7c8")
+        self.assertEqual(state["targets"][2], "0x002192a8")
+        self.assertEqual(state["targets"][13], "0x0021e890")
+        self.assertTrue(state["callback21e7c8_present"])
+        self.assertEqual(state["callback21e7c8_slot"], 0)
+
+    def test_callback_state_fails_closed_for_unreadable_table(self) -> None:
+        client = MemoryClient()
+        client.write_u32(writer.CALLBACK_2195_OWNER, 0x1FFFF0)
+
+        state = writer.read_callback_state(client)
+
+        self.assertEqual(state["owner_pointer"], "0x001ffff0")
+        self.assertEqual(state["table_pointer"], "0x00000000")
+        self.assertFalse(state["table_readable"])
+        self.assertEqual(state["non_null_objects"], 0)
+        self.assertFalse(state["callback21e7c8_present"])
 
     def test_cleanup_removes_v3_memcheck_and_old_breakpoints(self) -> None:
         client = FakeClient()

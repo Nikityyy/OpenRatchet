@@ -1208,6 +1208,18 @@ already consumes.
       the later completed-Level-0 `[0x1D5BF4]=0` snapshot. Promote a callable or repair lifecycle state
       only if the first divergence proves it missing. Directly setting `0x15F5B0`, synthesizing the
       call chain or forcing `0x245C28` remains forbidden.
+    - **12.3C.2B.3 first-divergence result (`PROVED / ROOT CAUSE NOT YET PROVED`):** a fresh native
+      runtime trace reaches `sub_001EB0A8`, then reads `0x13CAE4` at branch `0x1EB34C`. The live value
+      is `0x0`, so `(value & 0x840) == 0` and Retail code takes the direct `0x1EB3BC` path, skipping
+      `JAL 0x2192A8`. The independent aggressive function-entry trace records zero entries for
+      `sub_002192A8`, `FUN_002235B8`, and `sub_0022E188`; the same run's native overlay diagnostic
+      reports `materializerCalls=0`, `activeGeneration=0`, `callback2195Owner=0`, and an empty target
+      list. This proves the current OpenRatchet divergence is before the callback-owner read and before
+      the authentic `0x22E1A0` writer. It does **not** prove that the owner-pointer writer is missing.
+      Static candidates `0x2189A8` (indirect store to `0x1D5BF4`) and `0x218BF4` (indirect clear) are
+      not accepted as the Retail owner writer: neither has yet been tied to the transient Retail value
+      `0x1D4C88` by an independent runtime register/address/value proof. The next gate is therefore the
+      producer/lifecycle path for `0x13CAE4`, plus a separate exact owner-writer proof if still needed.
 - **Step 12.4 (`TODO`):** Controller parity/polish required for the phase gate,
   including any Retail-required pressure/rumble semantics only after their
   consumers are proved.
