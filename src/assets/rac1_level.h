@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <vector>
 
 namespace ratchet::assets {
@@ -23,6 +24,35 @@ struct Rac1ArrayRange {
     std::uint32_t count = 0u;
 };
 
+// Level-data overlay records are stored as a contiguous sequence of
+// 16-byte headers followed immediately by payload bytes. Only the two fields
+// proven by the Retail loader are named semantically here; the remaining words
+// stay neutral until their consumers are established.
+struct Rac1LevelOverlaySegment {
+    std::uint32_t destination = 0u;
+    std::uint32_t payloadSize = 0u;
+    std::uint32_t field8 = 0u;
+    std::uint32_t fieldC = 0u;
+    std::uint32_t payloadOffset = 0u;
+};
+
+enum class Rac1LevelOverlayStatus : std::uint8_t {
+    Ok,
+    TruncatedHeader,
+    PayloadOutOfRange,
+    DestinationOverflow,
+};
+
+struct Rac1LevelOverlayResult {
+    Rac1LevelOverlayStatus status = Rac1LevelOverlayStatus::TruncatedHeader;
+    std::vector<Rac1LevelOverlaySegment> segments;
+    std::size_t payloadBytes = 0u;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return status == Rac1LevelOverlayStatus::Ok;
+    }
+};
+
 enum class Rac1LevelInspectStatus : std::uint8_t {
     Ok,
     FileOpenFailed,
@@ -31,6 +61,8 @@ enum class Rac1LevelInspectStatus : std::uint8_t {
     InvalidHeaderSize,
     InvalidDataRange,
     InvalidLevelDataHeader,
+    InvalidOverlayRange,
+    InvalidOverlayContainer,
     InvalidCoreIndexRange,
     InvalidGsRamRange,
     InvalidCoreDataRange,
@@ -57,6 +89,8 @@ struct Rac1LevelSummary {
     Rac1SectorRange occlusion{};
 
     Rac1ByteRange overlay{};
+    std::size_t overlaySegmentCount = 0u;
+    std::size_t overlayPayloadBytes = 0u;
     Rac1ByteRange soundBank{};
     Rac1ByteRange coreIndex{};
     Rac1ByteRange gsRam{};
@@ -128,6 +162,8 @@ struct Rac1LevelInspectResult {
 struct Rac1LevelCoreLoadResult {
     Rac1LevelInspectStatus status = Rac1LevelInspectStatus::FileOpenFailed;
     Rac1LevelSummary summary{};
+    std::vector<std::uint8_t> overlay;
+    std::vector<Rac1LevelOverlaySegment> overlaySegments;
     std::vector<std::uint8_t> core;
     std::vector<std::uint8_t> coreIndex;
     std::vector<std::uint8_t> gsRam;
@@ -137,6 +173,12 @@ struct Rac1LevelCoreLoadResult {
         return status == Rac1LevelInspectStatus::Ok;
     }
 };
+
+// Parses the exact LevelDataHeader overlay container. Empty containers are
+// valid and produce zero segments. Non-empty containers must be covered exactly
+// by {16-byte header, payload} records; trailing bytes are rejected.
+Rac1LevelOverlayResult parseRac1LevelOverlay(std::span<const std::uint8_t> overlay);
+const char* rac1LevelOverlayStatusName(Rac1LevelOverlayStatus status) noexcept;
 
 // Parses a native contiguous span extracted from the retail R&C1 disc and
 // returns the decompressed level core. The original 0x2434 amalgamated header

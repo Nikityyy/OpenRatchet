@@ -152,6 +152,7 @@ int main() {
         writeGuestU32(guest, state + ParsedLayout::kCurrentButtonsOffset, 0x00004808u);
         writeGuestU32(guest, state + ParsedLayout::kPressedEdgesOffset, 0x00004000u);
         writeGuestU32(guest, state + ParsedLayout::kReleasedEdgesOffset, 0x00000008u);
+        writeGuestU32(guest, state + ParsedLayout::kProcessedPressedEdgesOffset, 0x00000020u);
 
         const auto parsedRegionBegin = guest.begin() + state;
         const auto parsedRegionEnd = parsedRegionBegin + ParsedLayout::kRequiredBytes;
@@ -161,8 +162,9 @@ int main() {
                     "parsed-input inspector accepts the complete Retail controller state");
         test.expect(parsed.currentButtons == 0x00004808u &&
                         parsed.pressedEdges == 0x00004000u &&
-                        parsed.releasedEdges == 0x00000008u,
-                    "parsed-input inspector reads Retail current/press/release fields exactly");
+                        parsed.releasedEdges == 0x00000008u &&
+                        parsed.processedPressedEdges == 0x00000020u,
+                    "parsed-input inspector reads Retail current/raw-edge/processed-edge fields exactly");
         test.expect(parsed.rightX == 0.25f && parsed.rightY == -0.5f &&
                         parsed.leftX == 0.75f && parsed.leftY == -1.0f,
                     "parsed-input inspector preserves Retail right-X/right-Y/left-X/left-Y order");

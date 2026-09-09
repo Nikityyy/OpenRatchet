@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assets/rac1_level.h"
 #include "assets/rac1_moby.h"
 #include "assets/rac1_moby_animation.h"
 #include "assets/rac1_sky.h"
@@ -144,6 +145,12 @@ public:
     [[nodiscard]] std::span<const Rac1NativeSkyShellIdentity> nativeSkyShellIdentities() const noexcept {
         return nativeSkyShellIdentities_;
     }
+    [[nodiscard]] std::span<const std::uint8_t> levelOverlayBytes() const noexcept {
+        return levelOverlay_;
+    }
+    [[nodiscard]] std::span<const assets::Rac1LevelOverlaySegment> levelOverlaySegments() const noexcept {
+        return levelOverlaySegments_;
+    }
     [[nodiscard]] Rac1RuntimeRendererStatus status() const noexcept { return status_; }
     [[nodiscard]] const Rac1RuntimeRendererSummary& summary() const noexcept {
         return summary_;
@@ -153,6 +160,8 @@ private:
     Rac1RuntimeRendererStatus status_ = Rac1RuntimeRendererStatus::Uninitialized;
     Rac1RuntimeRendererSummary summary_{};
     std::vector<std::uint8_t> core_;
+    std::vector<std::uint8_t> levelOverlay_;
+    std::vector<assets::Rac1LevelOverlaySegment> levelOverlaySegments_;
     std::vector<assets::Rac1Texture> mobySourceTextures_;
     assets::Rac1MobyRenderedInstance ratchetTopologyInstance_{};
     assets::Rac1MobyAnimationClass ratchetAnimationClass_{};

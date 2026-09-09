@@ -52,11 +52,26 @@ class of failures over many local workarounds.
     archive timestamps, but only when file content actually changed. Never touch
     unchanged dirty headers on every validation cycle; that can invalidate the
     PCH and needlessly rebuild hundreds of generated Retail translation units.
-15. **Use the canonical compact verification handoff.** For normal Windows gates,
-    run `tools/verify-native.ps1` and review/send
-    `build/native/verification/latest.md`. Do not paste build, CTest, viewer and
-    runtime raw logs into chat unless the compact report identifies a specific
-    failing stage that requires its corresponding raw evidence file.
+15. **Generated-output timestamps are evidence-bearing.** CMake unity wrappers and
+    build-local generated tables must use write-if-different semantics. A no-op
+    configure/build must leave equal-content generated files' hashes and timestamps
+    unchanged; verify MSBuild/TLog input mapping before attributing a rebuild to
+    compiler performance. An ordinary native `.cpp` change may rebuild its own
+    translation unit, while a changed Retail AOT source may rebuild only its owning
+    wrapper.
+16. **Use the canonical compact verification handoff.** For normal Windows gates,
+    run `tools/verify-native.ps1` and review/send the single timestamped Markdown
+    report created directly under `build/native/verification/`. Build, CTest, viewer,
+    runtime stdout/stderr and repository evidence are embedded in that one report; do
+    not manually paste companion raw logs unless a separate investigation explicitly
+    requires them.
+17. **Use external Retail oracles to end repeated guesswork.** PCSX2 may be used as an
+    investigation-only differential oracle when direct Retail execution evidence can
+    identify the first semantic divergence more efficiently than another speculative
+    pointer/callback hypothesis. Keep captures deterministic, record producer/consumer
+    writes and inputs, and package enough provenance to reproduce the comparison. Never
+    turn emulator state, RAM snapshots or captured outputs into a shipping runtime
+    dependency or substitute them for original/native-owned game logic.
 
 ## Decision checklist before every patch
 

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "scenarios": [
+    {
+      "name": "idle",
+      "instruction": "Release every movement/camera/action control."
+    },
+    {
+      "name": "move_forward",
+      "instruction": "Hold FORWARD for Ratchet."
+    },
+    {
+      "name": "move_left",
+      "instruction": "Hold LEFT movement for Ratchet."
+    },
+    {
+      "name": "camera_right",
+      "instruction": "Hold CAMERA RIGHT / right-stick right."
+    },
+    {
+      "name": "camera_up",
+      "instruction": "Hold CAMERA UP / right-stick up."
+    },
+    {
+      "name": "jump",
+      "instruction": "Hold/press JUMP and keep it held until capture finishes."
+    },
+    {
+      "name": "attack",
+      "instruction": "Hold/press the normal ATTACK control and keep it held until capture finishes."
+    }
+  ]
+}

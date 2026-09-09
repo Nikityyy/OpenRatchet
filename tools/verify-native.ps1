@@ -10,7 +10,16 @@ param(
     [int]$RuntimeSeconds = 20,
 
     [ValidateRange(1, 3600)]
-    [double]$ViewerSmokeSeconds = 3
+    [double]$ViewerSmokeSeconds = 3,
+
+    [ValidateRange(15, 600)]
+    [int]$BuildHangSeconds = 30,
+
+    [ValidateRange(0, 3)]
+    [int]$BuildRetries = 1,
+
+    [ValidateRange(1, 30)]
+    [int]$ProgressHeartbeatSeconds = 2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,12 +28,12 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
 
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $verificationRoot = Join-Path $repoRoot 'build\native\verification'
-$runDirectory = Join-Path $verificationRoot $stamp
-$latestReport = Join-Path $verificationRoot 'latest.md'
-$reportPath = Join-Path $runDirectory 'report.md'
-New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
+$reportPath = Join-Path $verificationRoot ("{0}.md" -f $stamp)
+$tempDirectory = Join-Path ([IO.Path]::GetTempPath()) ("OpenRatchetVerify-{0}-{1}" -f $stamp, $PID)
+New-Item -ItemType Directory -Path $verificationRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
 
 function Get-RelativePath([string]$path) {
     if ([string]::IsNullOrWhiteSpace($path)) { return '(none)' }
@@ -41,6 +50,56 @@ function Write-Stage([string]$name, [string]$state, [string]$detail = '') {
     } else {
         Write-Host ("[{0}] {1} - {2}" -f $state, $name, $detail)
     }
+}
+
+function Update-VerificationProgress([string]$stage, [int]$percent, [string]$detail = '') {
+    $status = $stage
+    if (-not [string]::IsNullOrWhiteSpace($detail)) {
+        $status = "{0} - {1}" -f $stage, $detail
+    }
+    Write-Progress -Id 1 -Activity 'OpenRatchet native verification' -Status $status -PercentComplete $percent
+}
+
+function Get-OutputByteCount([string]$stdoutPath, [string]$stderrPath) {
+    [long]$total = 0
+    if (Test-Path -LiteralPath $stdoutPath) {
+        $total += [long](Get-Item -LiteralPath $stdoutPath).Length
+    }
+    if (Test-Path -LiteralPath $stderrPath) {
+        $total += [long](Get-Item -LiteralPath $stderrPath).Length
+    }
+    return $total
+}
+
+function Get-LatestOutputPreview([string]$stdoutPath, [string]$stderrPath) {
+    $line = $null
+    if (Test-Path -LiteralPath $stderrPath) {
+        $line = @(Get-Content -LiteralPath $stderrPath -Tail 1 -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        if ($line.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$line[0])) {
+            $line = [string]$line[0]
+        } else {
+            $line = $null
+        }
+    }
+    if (-not $line -and (Test-Path -LiteralPath $stdoutPath)) {
+        $tail = @(Get-Content -LiteralPath $stdoutPath -Tail 1 -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        if ($tail.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$tail[0])) {
+            $line = [string]$tail[0]
+        }
+    }
+    if (-not $line) { return 'waiting for output' }
+    $line = ($line -replace '\s+', ' ').Trim()
+    if ($line.Length -gt 120) { $line = $line.Substring(0, 117) + '...' }
+    return $line
+}
+
+function Stop-NativeProcessTree([int]$processId) {
+    $taskkill = Get-Command taskkill.exe -ErrorAction SilentlyContinue
+    if ($taskkill) {
+        & $taskkill.Source /PID "$processId" /T /F 2>$null | Out-Null
+        return
+    }
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 
 function ConvertTo-NativeArgument([string]$argument) {
@@ -90,46 +149,79 @@ function ConvertTo-NativeArgument([string]$argument) {
     return $builder.ToString()
 }
 
-function Invoke-CapturedCommand(
-    [string]$filePath,
-    [string[]]$arguments,
-    [string]$logPath
-) {
+function Invoke-CapturedCommand {
+    param(
+        [string]$filePath,
+        [string[]]$arguments,
+        [string]$logPath,
+        [string]$displayName = 'Command',
+        [ValidateRange(0, 100)]
+        [int]$progressPercent = 0,
+        [ValidateRange(0, 3600)]
+        [int]$inactivityTimeoutSeconds = 0
+    )
+
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $output = @()
     $exitCode = 1
+    $timedOut = $false
     $stdoutPath = "$logPath.stdout.tmp"
     $stderrPath = "$logPath.stderr.tmp"
 
     Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
 
     try {
-        # Do not capture native stderr through PowerShell's 2>&1 pipeline. Windows
-        # PowerShell turns redirected native stderr into ErrorRecord/RemoteException
-        # objects, and that can both corrupt the evidence log and make a successful
-        # .cmd/.exe invocation look failed. Start the process directly, redirect the
-        # two OS streams to files, and use Process.ExitCode as the only pass/fail
-        # authority.
+        # Keep native stdout/stderr as raw OS streams. The process is intentionally
+        # NOT started with -Wait: polling keeps verify-native visibly alive and lets
+        # us detect a genuinely stuck build instead of looking frozen forever.
         $argumentLine = (@($arguments) | ForEach-Object { ConvertTo-NativeArgument ([string]$_) }) -join ' '
         $process = Start-Process `
             -FilePath $filePath `
             -ArgumentList $argumentLine `
             -WorkingDirectory $repoRoot `
             -NoNewWindow `
-            -Wait `
             -PassThru `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath
 
-        $exitCode = [int]$process.ExitCode
+        $lastOutputBytes = Get-OutputByteCount $stdoutPath $stderrPath
+        $lastActivityUtc = [DateTime]::UtcNow
+        $lastHeartbeatUtc = [DateTime]::MinValue
 
-        # Wrap the entire conditional in @(...), not only Get-Content. In
-        # Windows PowerShell an if-statement writes its branch output to the
-        # pipeline, which can collapse an empty file to $null (or a one-line
-        # file to a scalar). Under StrictMode, reading .Count from that value
-        # throws. Keeping the complete conditional inside the array
-        # subexpression guarantees a real array for empty, one-line, and
-        # multi-line streams.
+        while (-not $process.HasExited) {
+            Start-Sleep -Milliseconds 250
+            $process.Refresh()
+
+            $nowUtc = [DateTime]::UtcNow
+            $outputBytes = Get-OutputByteCount $stdoutPath $stderrPath
+            if ($outputBytes -ne $lastOutputBytes) {
+                $lastOutputBytes = $outputBytes
+                $lastActivityUtc = $nowUtc
+            }
+
+            $idleSeconds = [math]::Floor(($nowUtc - $lastActivityUtc).TotalSeconds)
+            if (($nowUtc - $lastHeartbeatUtc).TotalSeconds -ge $ProgressHeartbeatSeconds) {
+                $preview = Get-LatestOutputPreview $stdoutPath $stderrPath
+                $detail = "elapsed={0}s, idle={1}s, {2}" -f [math]::Floor($timer.Elapsed.TotalSeconds), $idleSeconds, $preview
+                Update-VerificationProgress $displayName $progressPercent $detail
+                $lastHeartbeatUtc = $nowUtc
+            }
+
+            if ($inactivityTimeoutSeconds -gt 0 -and $idleSeconds -ge $inactivityTimeoutSeconds) {
+                $timedOut = $true
+                Write-Host ("[HANG] {0} - no output activity for {1}s; terminating process tree" -f $displayName, $inactivityTimeoutSeconds)
+                Stop-NativeProcessTree $process.Id
+                break
+            }
+        }
+
+        try { [void]$process.WaitForExit(5000) } catch {}
+        if ($timedOut) {
+            $exitCode = 124
+        } else {
+            $exitCode = [int]$process.ExitCode
+        }
+
         $stdoutLines = @(
             if (Test-Path -LiteralPath $stdoutPath) {
                 Get-Content -LiteralPath $stdoutPath
@@ -141,13 +233,15 @@ function Invoke-CapturedCommand(
             }
         )
 
-        # Keep parsable stdout first. Stderr is preserved verbatim as evidence but
-        # deliberately separated so warnings cannot masquerade as command failure.
         $output = @($stdoutLines)
         if ($stderrLines.Count -gt 0) {
             if ($output.Count -gt 0) { $output += '' }
             $output += '--- stderr ---'
             $output += @($stderrLines)
+        }
+        if ($timedOut) {
+            if ($output.Count -gt 0) { $output += '' }
+            $output += ("[verify-native] process terminated after {0}s without output activity" -f $inactivityTimeoutSeconds)
         }
     } catch {
         $output = @("Process launch exception: $($_.Exception.Message)")
@@ -163,6 +257,57 @@ function Invoke-CapturedCommand(
         ElapsedSeconds = [math]::Round($timer.Elapsed.TotalSeconds, 2)
         Lines = @($output)
         LogPath = $logPath
+        TimedOut = [bool]$timedOut
+    }
+}
+
+function Invoke-BuildWithRetry {
+    param(
+        [string]$buildScript,
+        [string]$configuration,
+        [string]$combinedLogPath
+    )
+
+    $allLines = [System.Collections.Generic.List[string]]::new()
+    $attemptResults = [System.Collections.Generic.List[object]]::new()
+    $maxAttempts = 1 + $BuildRetries
+    $totalTimer = [Diagnostics.Stopwatch]::StartNew()
+
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $attemptLog = Join-Path $tempDirectory ("build-attempt-{0}.log" -f $attempt)
+        Write-Stage "Native build ($configuration)" 'RUN' ("attempt {0}/{1}" -f $attempt, $maxAttempts)
+        $result = Invoke-CapturedCommand `
+            'powershell.exe' `
+            @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-Configuration', $configuration) `
+            $attemptLog `
+            ("Native build ($configuration), attempt $attempt/$maxAttempts") `
+            10 `
+            $BuildHangSeconds
+        $attemptResults.Add($result)
+
+        $allLines.Add(("===== BUILD ATTEMPT {0}/{1} | exit={2} | elapsed={3}s | timedOut={4} =====" -f $attempt, $maxAttempts, $result.ExitCode, $result.ElapsedSeconds, $result.TimedOut))
+        foreach ($line in $result.Lines) { $allLines.Add([string]$line) }
+        $allLines.Add('')
+
+        if (-not $result.TimedOut) { break }
+        if ($attempt -lt $maxAttempts) {
+            Write-Stage "Native build ($configuration)" 'RETRY' ("attempt {0} hung; restarting automatically" -f $attempt)
+            Start-Sleep -Seconds 1
+        }
+    }
+
+    $totalTimer.Stop()
+    Set-Content -LiteralPath $combinedLogPath -Value @($allLines) -Encoding UTF8
+    $final = $attemptResults[$attemptResults.Count - 1]
+
+    return [pscustomobject]@{
+        ExitCode = [int]$final.ExitCode
+        ElapsedSeconds = [math]::Round($totalTimer.Elapsed.TotalSeconds, 2)
+        Lines = @($allLines)
+        LogPath = $combinedLogPath
+        TimedOut = [bool]$final.TimedOut
+        Attempts = [int]$attemptResults.Count
+        TimedOutAttempts = [int](@($attemptResults | Where-Object { $_.TimedOut }).Count)
     }
 }
 
@@ -230,24 +375,38 @@ function Add-ReportLine([System.Collections.Generic.List[string]]$report, [strin
     $report.Add($line)
 }
 
-$buildLog = Join-Path $runDirectory 'build.log'
-$ctestLog = Join-Path $runDirectory 'ctest.log'
-$viewerLog = Join-Path $runDirectory 'viewer.log'
-$runtimeHarnessLog = Join-Path $runDirectory 'runtime-harness.log'
-$gitStatusLog = Join-Path $runDirectory 'git-status.log'
+function Add-EmbeddedLogSection([System.Collections.Generic.List[string]]$report, [string]$title, [string[]]$lines) {
+    Add-ReportLine $report ("### {0}" -f $title)
+    Add-ReportLine $report ''
+    Add-ReportLine $report '<details>'
+    Add-ReportLine $report ("<summary>Full {0}</summary>" -f $title)
+    Add-ReportLine $report ''
+    Add-ReportLine $report '````text'
+    if ($null -eq $lines -or $lines.Count -eq 0) {
+        Add-ReportLine $report '(no captured output)'
+    } else {
+        foreach ($line in $lines) { Add-ReportLine $report ([string]$line) }
+    }
+    Add-ReportLine $report '````'
+    Add-ReportLine $report ''
+    Add-ReportLine $report '</details>'
+    Add-ReportLine $report ''
+}
+
+$buildLog = Join-Path $tempDirectory 'build.log'
+$ctestLog = Join-Path $tempDirectory 'ctest.log'
+$viewerLog = Join-Path $tempDirectory 'viewer.log'
+$runtimeHarnessLog = Join-Path $tempDirectory 'runtime-harness.log'
 
 $overallPass = $true
 
-Write-Stage "Native build ($Configuration)" 'RUN'
+Update-VerificationProgress 'Starting' 1 'preparing verification'
 $buildScript = Join-Path $repoRoot 'tools\build-native.ps1'
-$build = Invoke-CapturedCommand 'powershell.exe' @(
-    '-NoProfile', '-ExecutionPolicy', 'Bypass',
-    '-File', $buildScript,
-    '-Configuration', $Configuration
-) $buildLog
+$build = Invoke-BuildWithRetry $buildScript $Configuration $buildLog
 $buildPass = $build.ExitCode -eq 0
 if (-not $buildPass) { $overallPass = $false }
-Write-Stage "Native build ($Configuration)" $(if ($buildPass) { 'PASS' } else { 'FAIL' }) ("{0}s" -f $build.ElapsedSeconds)
+Write-Stage "Native build ($Configuration)" $(if ($buildPass) { 'PASS' } else { 'FAIL' }) ("{0}s, attempts={1}, timedOutAttempts={2}" -f $build.ElapsedSeconds, $build.Attempts, $build.TimedOutAttempts)
+Update-VerificationProgress 'Native build complete' 25 ("{0}s" -f $build.ElapsedSeconds)
 
 $ctest = $null
 $viewer = $null
@@ -266,10 +425,11 @@ if ($buildPass) {
             '--test-dir', (Join-Path $repoRoot 'build\native'),
             '-C', $Configuration,
             '--output-on-failure'
-        ) $ctestLog
+        ) $ctestLog 'CTest' 40 0
         $ctestPass = $ctest.ExitCode -eq 0
         if (-not $ctestPass) { $overallPass = $false }
         Write-Stage 'CTest' $(if ($ctestPass) { 'PASS' } else { 'FAIL' }) ("{0}s" -f $ctest.ElapsedSeconds)
+        Update-VerificationProgress 'CTest complete' 45 ("{0}s" -f $ctest.ElapsedSeconds)
     } else {
         Set-Content -LiteralPath $ctestLog -Value 'ctest was not found on PATH.' -Encoding UTF8
         $ctestPass = $false
@@ -284,7 +444,7 @@ if ($buildPass) {
         '-Configuration', $Configuration,
         '-LevelIndex', "$LevelIndex",
         '-SmokeSeconds', $ViewerSmokeSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)
-    ) $viewerLog
+    ) $viewerLog 'Level viewer smoke' 60 0
     $viewerSmokeLine = Get-LastLine $viewer.Lines '^\[OpenRatchet:viewer:smoke\] '
     $viewerParityLine = Get-LastLine $viewer.Lines '^\[OpenRatchet:render:parity\] frontend=viewer '
     $viewerSceneLine = Get-LastLine $viewer.Lines '^\[OpenRatchet:scene\] '
@@ -306,6 +466,7 @@ if ($buildPass) {
     )
     if (-not $viewerPass) { $overallPass = $false }
     Write-Stage 'Level viewer smoke' $(if ($viewerPass) { 'PASS' } else { 'FAIL' }) ("{0}s" -f $viewer.ElapsedSeconds)
+    Update-VerificationProgress 'Level viewer complete' 65 ("{0}s" -f $viewer.ElapsedSeconds)
 
     Write-Stage 'Native runtime harness' 'RUN'
     $runtime = Invoke-CapturedCommand 'powershell.exe' @(
@@ -313,7 +474,7 @@ if ($buildPass) {
         '-File', (Join-Path $repoRoot 'tools\run-native-test.ps1'),
         '-Configuration', $Configuration,
         '-DurationSeconds', "$RuntimeSeconds"
-    ) $runtimeHarnessLog
+    ) $runtimeHarnessLog 'Native runtime harness' 80 0
 
     $runtimeLaunched = Get-SummaryValue $runtime.Lines 'Launched'
     $runtimeAlive = Get-SummaryValue $runtime.Lines 'Alive at duration'
@@ -326,6 +487,7 @@ if ($buildPass) {
     )
     if (-not $runtimePass) { $overallPass = $false }
     Write-Stage 'Native runtime harness' $(if ($runtimePass) { 'PASS' } else { 'FAIL' }) ("{0}s" -f $runtime.ElapsedSeconds)
+    Update-VerificationProgress 'Native runtime complete' 90 ("{0}s" -f $runtime.ElapsedSeconds)
 } else {
     Write-Stage 'CTest' 'SKIP' 'build failed'
     Write-Stage 'Level viewer smoke' 'SKIP' 'build failed'
@@ -335,8 +497,8 @@ if ($buildPass) {
 
 $runtimeStdoutSource = $null
 $runtimeStderrSource = $null
-$runtimeStdoutCopy = Join-Path $runDirectory 'runtime.stdout.log'
-$runtimeStderrCopy = Join-Path $runDirectory 'runtime.stderr.log'
+$runtimeStdoutLines = @()
+$runtimeStderrLines = @()
 $runtimeLines = @()
 
 if ($runtime) {
@@ -348,12 +510,12 @@ if ($runtime) {
     }
 
     if ($runtimeStdoutSource -and (Test-Path -LiteralPath $runtimeStdoutSource)) {
-        Copy-Item -LiteralPath $runtimeStdoutSource -Destination $runtimeStdoutCopy -Force
-        $runtimeLines += @(Get-Content -LiteralPath $runtimeStdoutSource)
+        $runtimeStdoutLines = @(Get-Content -LiteralPath $runtimeStdoutSource)
+        $runtimeLines += @($runtimeStdoutLines)
     }
     if ($runtimeStderrSource -and (Test-Path -LiteralPath $runtimeStderrSource)) {
-        Copy-Item -LiteralPath $runtimeStderrSource -Destination $runtimeStderrCopy -Force
-        $runtimeLines += @(Get-Content -LiteralPath $runtimeStderrSource)
+        $runtimeStderrLines = @(Get-Content -LiteralPath $runtimeStderrSource)
+        $runtimeLines += @($runtimeStderrLines)
     }
     $runtimeLines = @(Expand-TraceLines $runtimeLines)
 }
@@ -367,6 +529,25 @@ $runtimeRatchetAnimationLine = Get-LastLine $runtimeLines '^\[OpenRatchet:live:r
 $runtimeRatchetTransformLine = Get-LastLine $runtimeLines '^\[OpenRatchet:live:ratchet-transform\] '
 $runtimeReplacementBootstrapLine = Get-LastLine $runtimeLines '^\[OpenRatchet:native\] replacements stage=bootstrap '
 $runtimeReplacementRuntimeLine = Get-LastLine $runtimeLines '^\[OpenRatchet:native\] replacements stage=runtime '
+$runtimeOverlayLine = Get-LastLine $runtimeLines '^\[OpenRatchet:gameplay-overlay\] '
+$runtimeWad158OverlayAotLine = Get-LastLine $runtimeLines '^\[OpenRatchet:overlay-aot\] source=wad_158\.wad '
+$runtimeLevel0OverlayAotLine = Get-LastLine $runtimeLines '^\[OpenRatchet:overlay-aot\] source=level_00\.wad '
+$runtimeWad158OverlayAotIndex = -1
+$runtimeLevel0OverlayAotIndex = -1
+for ($i = 0; $i -lt $runtimeLines.Count; ++$i) {
+    if ($runtimeWad158OverlayAotIndex -lt 0 -and [string]$runtimeLines[$i] -match '^\[OpenRatchet:overlay-aot\] source=wad_158\.wad ') {
+        $runtimeWad158OverlayAotIndex = $i
+    }
+    if ($runtimeLevel0OverlayAotIndex -lt 0 -and [string]$runtimeLines[$i] -match '^\[OpenRatchet:overlay-aot\] source=level_00\.wad ') {
+        $runtimeLevel0OverlayAotIndex = $i
+    }
+}
+$runtimeOverlayGenerationOrderPass = (
+    $runtimeLevel0OverlayAotIndex -ge 0 -and
+    ($runtimeWad158OverlayAotIndex -lt 0 -or
+     $runtimeWad158OverlayAotIndex -lt $runtimeLevel0OverlayAotIndex)
+)
+$runtimeRatchetControlStateLine = Get-LastLine $runtimeLines '^\[OpenRatchet:live:ratchet-control-state\] '
 
 $viewerParityLine = if ($viewer) { Get-LastLine $viewer.Lines '^\[OpenRatchet:render:parity\] frontend=viewer ' } else { $null }
 $viewerSceneLine = if ($viewer) { Get-LastLine $viewer.Lines '^\[OpenRatchet:scene\] ' } else { $null }
@@ -383,10 +564,99 @@ $parityComparable = -not [string]::IsNullOrWhiteSpace($viewerHash) -and -not [st
 $parityMatch = $parityComparable -and ($viewerHash -eq $runtimeHash)
 if ($buildPass -and -not $parityMatch) { $overallPass = $false }
 
+$runtimeOverlayStatus = Get-Field $runtimeOverlayLine 'status'
+$runtimeOverlaySegments = Get-Field $runtimeOverlayLine 'segments'
+$runtimeOverlayPayloadBytes = Get-Field $runtimeOverlayLine 'payloadBytes'
+$runtimeOverlayMaterializedSegments = Get-Field $runtimeOverlayLine 'materializedSegments'
+$runtimeOverlayMaterializedBytes = Get-Field $runtimeOverlayLine 'materializedBytes'
+$runtimeOverlayFallbackEntries = Get-Field $runtimeOverlayLine 'fallbackEntries'
+$runtimeOverlayComparableEntries = Get-Field $runtimeOverlayLine 'comparableEntries'
+$runtimeOverlayConflictingEntries = Get-Field $runtimeOverlayLine 'conflictingEntries'
+$runtimeOverlayPass = (
+    -not [string]::IsNullOrWhiteSpace($runtimeOverlayLine) -and
+    $runtimeOverlaySegments -eq '7' -and
+    $runtimeOverlayPayloadBytes -eq '1645532' -and
+    $runtimeOverlayFallbackEntries -eq '17300' -and
+    $runtimeOverlayComparableEntries -eq '17300' -and
+    $runtimeOverlayConflictingEntries -eq '17300' -and
+    $runtimeOverlayStatus -eq 'stale-fallback-conflict-proved' -and
+    $runtimeOverlayMaterializedSegments -eq '7' -and
+    $runtimeOverlayMaterializedBytes -eq '1645532'
+)
+
+function Test-OverlayAotEvidence {
+    param(
+        [string]$Line,
+        [string]$ExpectedGenerationEntry
+    )
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $false }
+    $status = Get-Field $Line 'status'
+    $functions = Get-Field $Line 'functions'
+    $installed = Get-Field $Line 'installed'
+    return (
+        (Get-Field $Line 'generationEntry') -eq $ExpectedGenerationEntry -and
+        -not [string]::IsNullOrWhiteSpace($functions) -and
+        $functions -ne '0' -and
+        $functions -eq $installed -and
+        (Get-Field $Line 'tableBase') -eq '0x112380' -and
+        (Get-Field $Line 'tableEnd') -eq '0x2f0cd0' -and
+        $status -in @('activated', 'already-active')
+    )
+}
+
+$runtimeWad158OverlayAotPass = Test-OverlayAotEvidence $runtimeWad158OverlayAotLine '0x1e9658'
+$runtimeLevel0OverlayAotPass = Test-OverlayAotEvidence $runtimeLevel0OverlayAotLine '0x245c28'
+# Accepted Retail New Game -> Veldin evidence reaches the stable generation-call
+# boundary as Boot -> Level 0 directly. WAD158 remains a supported optional AOT
+# generation if Retail returns it on another path, but it is no longer a mandatory
+# outer-dispatch gate for Phase 12.
+$runtimeOverlayAotPass = $runtimeLevel0OverlayAotPass -and $runtimeOverlayGenerationOrderPass
+
+$runtimeWad158OverlayAotStatus = Get-Field $runtimeWad158OverlayAotLine 'status'
+$runtimeWad158OverlayAotFunctions = Get-Field $runtimeWad158OverlayAotLine 'functions'
+$runtimeWad158OverlayAotInstalled = Get-Field $runtimeWad158OverlayAotLine 'installed'
+$runtimeLevel0OverlayAotStatus = Get-Field $runtimeLevel0OverlayAotLine 'status'
+$runtimeLevel0OverlayAotGenerationEntry = Get-Field $runtimeLevel0OverlayAotLine 'generationEntry'
+$runtimeLevel0OverlayAotFunctions = Get-Field $runtimeLevel0OverlayAotLine 'functions'
+$runtimeLevel0OverlayAotInstalled = Get-Field $runtimeLevel0OverlayAotLine 'installed'
+$runtimeLevel0OverlayAotTableBase = Get-Field $runtimeLevel0OverlayAotLine 'tableBase'
+$runtimeLevel0OverlayAotTableEnd = Get-Field $runtimeLevel0OverlayAotLine 'tableEnd'
+
+$runtimeRatchetControlStateStatus = Get-Field $runtimeRatchetControlStateLine 'status'
+$runtimeRatchetControlStateCandidates = Get-Field $runtimeRatchetControlStateLine 'ratchetCandidates'
+$runtimeRatchetControlRatchet = Get-Field $runtimeRatchetControlStateLine 'ratchetMoby'
+$runtimeRatchetControlPVar = Get-Field $runtimeRatchetControlStateLine 'ratchetPVar'
+$runtimeRatchetControlState = Get-Field $runtimeRatchetControlStateLine 'state'
+$runtimeRatchetControlStateRatchet = Get-Field $runtimeRatchetControlStateLine 'stateRatchetMoby'
+$runtimeRatchetControlCompanion = Get-Field $runtimeRatchetControlStateLine 'companionMoby'
+$runtimeRatchetControlCompanionOClass = Get-Field $runtimeRatchetControlStateLine 'companionOClass'
+$runtimeRatchetControlCompanionLive = Get-Field $runtimeRatchetControlStateLine 'companionLive'
+$runtimeRatchetUpdateCallback = Get-Field $runtimeRatchetControlStateLine 'updateCallback'
+$runtimeRatchetControlBacklinkMatch = (
+    -not [string]::IsNullOrWhiteSpace($runtimeRatchetControlStateRatchet) -and
+    -not [string]::IsNullOrWhiteSpace($runtimeRatchetControlRatchet) -and
+    $runtimeRatchetControlStateRatchet -eq $runtimeRatchetControlRatchet
+)
+$runtimeRatchetControlStatePass = (
+    -not [string]::IsNullOrWhiteSpace($runtimeRatchetControlStateLine) -and
+    $runtimeRatchetControlStateStatus -eq 'ok' -and
+    $runtimeRatchetControlStateCandidates -eq '1' -and
+    -not [string]::IsNullOrWhiteSpace($runtimeRatchetControlRatchet) -and
+    $runtimeRatchetControlRatchet -ne '0x0' -and
+    -not [string]::IsNullOrWhiteSpace($runtimeRatchetControlPVar) -and
+    $runtimeRatchetControlPVar -ne '0x0' -and
+    -not [string]::IsNullOrWhiteSpace($runtimeRatchetControlState) -and
+    $runtimeRatchetControlState -ne '0x0' -and
+    $runtimeRatchetControlBacklinkMatch
+)
+
 if ($buildPass) {
     $runtimePass = (
         $runtimePass -and
+        $runtimeOverlayPass -and
+        $runtimeOverlayAotPass -and
         (Get-Field $runtimeOwnershipLine 'status') -eq 'ok' -and
+        (Get-Field $runtimeOwnershipLine 'owner') -eq 'native-level0' -and
         (Get-Field $runtimeFrameLine 'rendered') -eq '1' -and
         (Get-Field $runtimeFrameLine 'renderer') -eq 'ok' -and
         (Get-Field $runtimeFrameLine 'camera') -eq 'ok' -and
@@ -408,6 +678,12 @@ if ($buildPass) {
         $overallPass = $false
     }
     Write-Stage 'Native runtime evidence' $(if ($runtimePass) { 'PASS' } else { 'FAIL' })
+    Write-Stage 'Presentation ownership' $(if ((Get-Field $runtimeOwnershipLine 'owner') -eq 'native-level0') { 'PASS' } else { 'FAIL' }) $(if ($runtimeOwnershipLine) { $runtimeOwnershipLine } else { 'missing evidence' })
+    Write-Stage 'Retail overlay materialization' $(if ($runtimeOverlayPass) { 'PASS' } else { 'FAIL' }) $(if ($runtimeOverlayStatus) { $runtimeOverlayStatus } else { 'missing evidence' })
+    Write-Stage 'wad_158 overlay AOT dispatch' 'INFO' $(if ($runtimeWad158OverlayAotStatus) { $runtimeWad158OverlayAotStatus } else { 'not observed (allowed)' })
+    Write-Stage 'Level-0 overlay AOT dispatch' $(if ($runtimeLevel0OverlayAotPass) { 'PASS' } else { 'FAIL' }) $(if ($runtimeLevel0OverlayAotStatus) { $runtimeLevel0OverlayAotStatus } else { 'missing evidence' })
+    Write-Stage 'Overlay generation order' $(if ($runtimeOverlayGenerationOrderPass) { 'PASS' } else { 'FAIL' }) 'ELF -> [optional wad_158] -> level_00'
+    Write-Stage 'Ratchet lifecycle diagnostic' 'INFO' $(if ($runtimeRatchetControlStateStatus) { $runtimeRatchetControlStateStatus } else { 'missing evidence' })
     Write-Stage 'Viewer/runtime parity' $(if ($parityMatch) { 'PASS' } else { 'FAIL' }) $(if ($parityMatch) { $viewerHash } else { 'hash mismatch or missing evidence' })
 }
 
@@ -453,8 +729,6 @@ if (-not $gitAvailable) {
 } else {
     $gitLogLines += @($submoduleStatus | ForEach-Object { "  $_" })
 }
-$gitLogLines | Set-Content -LiteralPath $gitStatusLog -Encoding UTF8
-
 $ctestPassed = $null
 $ctestFailed = $null
 $ctestTotal = $null
@@ -473,6 +747,8 @@ if ($ctest) {
     }
 }
 
+Update-VerificationProgress 'Writing self-contained report' 95 'embedding all evidence into one Markdown file'
+
 $report = [System.Collections.Generic.List[string]]::new()
 Add-ReportLine $report '# OpenRatchet Native Verification'
 Add-ReportLine $report ''
@@ -482,22 +758,24 @@ Add-ReportLine $report ("Configuration: {0}" -f $Configuration)
 Add-ReportLine $report ("Level: {0}" -f $LevelIndex)
 Add-ReportLine $report ("Overall: **{0}**" -f $(if ($overallPass) { 'PASS' } else { 'FAIL' }))
 Add-ReportLine $report ''
+Add-ReportLine $report '> This report is self-contained. Build, test, viewer, runtime, runtime stdout/stderr, and repository evidence are embedded below; upload only this `.md` file for review.'
+Add-ReportLine $report ''
 
 Add-ReportLine $report '## Build'
 Add-ReportLine $report ''
 Add-ReportLine $report ("- Status: **{0}**" -f $(if ($buildPass) { 'PASS' } else { 'FAIL' }))
 Add-ReportLine $report ("- Exit code: {0}" -f $build.ExitCode)
 Add-ReportLine $report ("- Elapsed: {0} s" -f $build.ElapsedSeconds)
-Add-ReportLine $report ('- Raw log: `{0}`' -f (Get-RelativePath $buildLog))
+Add-ReportLine $report ("- Attempts: {0}" -f $build.Attempts)
+Add-ReportLine $report ("- Timed-out attempts automatically restarted: {0}" -f $build.TimedOutAttempts)
+Add-ReportLine $report ("- Build inactivity timeout: {0} s" -f $BuildHangSeconds)
 if (-not $buildPass) {
     Add-ReportLine $report ''
     Add-ReportLine $report '### Failure excerpt'
     Add-ReportLine $report ''
-    Add-ReportLine $report '```text'
-    foreach ($line in (Get-FailureExcerpt $build.Lines)) {
-        Add-ReportLine $report ([string]$line)
-    }
-    Add-ReportLine $report '```'
+    Add-ReportLine $report '````text'
+    foreach ($line in (Get-FailureExcerpt $build.Lines)) { Add-ReportLine $report ([string]$line) }
+    Add-ReportLine $report '````'
 }
 Add-ReportLine $report ''
 
@@ -510,10 +788,8 @@ if ($ctest) {
         Add-ReportLine $report ("- Failed: {0}" -f $ctestFailed)
     }
     if ($ctestTotalTime) { Add-ReportLine $report ("- CTest time: {0}" -f $ctestTotalTime) }
-    Add-ReportLine $report ('- Raw log: `{0}`' -f (Get-RelativePath $ctestLog))
 } elseif ($buildPass) {
     Add-ReportLine $report '- Status: **FAIL** (ctest was not found on PATH)'
-    Add-ReportLine $report ('- Raw log: `{0}`' -f (Get-RelativePath $ctestLog))
 } else {
     Add-ReportLine $report '- Status: **SKIPPED** (build failed)'
 }
@@ -539,7 +815,6 @@ if ($viewer) {
     Add-ReportLine $report ("- Moby skin execution: {0}" -f $(Get-Field $viewerSkinLine 'status'))
     Add-ReportLine $report ("- Ratchet animation: {0}" -f $(Get-Field $viewerRatchetAnimLine 'status'))
     Add-ReportLine $report ("- Ratchet skin execution: {0}" -f $(Get-Field $viewerRatchetSkinLine 'status'))
-    Add-ReportLine $report ('- Raw log: `{0}`' -f (Get-RelativePath $viewerLog))
 } else {
     Add-ReportLine $report '- Status: **SKIPPED** (build failed)'
 }
@@ -572,9 +847,18 @@ if ($runtime) {
     Add-ReportLine $report ("- Latest sky status: {0}" -f $(Get-Field $runtimeSkyLine 'status'))
     Add-ReportLine $report ("- Latest Ratchet animation status: {0}" -f $(Get-Field $runtimeRatchetAnimationLine 'status'))
     Add-ReportLine $report ("- Latest Ratchet transform status: {0}" -f $(Get-Field $runtimeRatchetTransformLine 'status'))
-    Add-ReportLine $report ('- Harness log: `{0}`' -f (Get-RelativePath $runtimeHarnessLog))
-    if (Test-Path -LiteralPath $runtimeStdoutCopy) { Add-ReportLine $report ('- Runtime stdout: `{0}`' -f (Get-RelativePath $runtimeStdoutCopy)) }
-    if (Test-Path -LiteralPath $runtimeStderrCopy) { Add-ReportLine $report ('- Runtime stderr: `{0}`' -f (Get-RelativePath $runtimeStderrCopy)) }
+    Add-ReportLine $report ("- Retail overlay materialization evidence: {0}" -f $(if ($runtimeOverlayPass) { 'ok' } else { 'invalid-or-missing' }))
+    Add-ReportLine $report ("- wad_158 overlay AOT dispatch: {0}; functions={1}; installed={2}" -f $(if ($runtimeWad158OverlayAotStatus) { $runtimeWad158OverlayAotStatus } else { '(missing)' }), $(if ($runtimeWad158OverlayAotFunctions) { $runtimeWad158OverlayAotFunctions } else { '(missing)' }), $(if ($runtimeWad158OverlayAotInstalled) { $runtimeWad158OverlayAotInstalled } else { '(missing)' }))
+    Add-ReportLine $report ("- Level-0 overlay AOT dispatch: {0}; generation={1}; functions={2}; installed={3}; table={4}..{5}" -f $(if ($runtimeLevel0OverlayAotStatus) { $runtimeLevel0OverlayAotStatus } else { '(missing)' }), $(if ($runtimeLevel0OverlayAotGenerationEntry) { $runtimeLevel0OverlayAotGenerationEntry } else { '(missing)' }), $(if ($runtimeLevel0OverlayAotFunctions) { $runtimeLevel0OverlayAotFunctions } else { '(missing)' }), $(if ($runtimeLevel0OverlayAotInstalled) { $runtimeLevel0OverlayAotInstalled } else { '(missing)' }), $(if ($runtimeLevel0OverlayAotTableBase) { $runtimeLevel0OverlayAotTableBase } else { '(missing)' }), $(if ($runtimeLevel0OverlayAotTableEnd) { $runtimeLevel0OverlayAotTableEnd } else { '(missing)' }))
+    Add-ReportLine $report ("- Overlay generation order ELF -> [optional wad_158] -> level_00: {0}" -f $(if ($runtimeOverlayGenerationOrderPass) { 'ok' } else { 'FAIL' }))
+    Add-ReportLine $report ("- Ratchet lifecycle-state diagnostic: {0}" -f $(if ($runtimeRatchetControlStateStatus) { $runtimeRatchetControlStateStatus } else { '(missing)' }))
+    Add-ReportLine $report ("- Ratchet lifecycle-state ratchet/pvar/state: {0}/{1}/{2}" -f $(if ($runtimeRatchetControlRatchet) { $runtimeRatchetControlRatchet } else { '(missing)' }), $(if ($runtimeRatchetControlPVar) { $runtimeRatchetControlPVar } else { '(missing)' }), $(if ($runtimeRatchetControlState) { $runtimeRatchetControlState } else { '(missing)' }))
+    Add-ReportLine $report ("- Ratchet lifecycle-state backlink: stateRatchetMoby={0}; match={1}" -f $(if ($runtimeRatchetControlStateRatchet) { $runtimeRatchetControlStateRatchet } else { '(missing)' }), $(if ($runtimeRatchetControlBacklinkMatch) { 'YES' } else { 'NO' }))
+    Add-ReportLine $report ("- Ratchet lifecycle-state companion/oClass/live/callback: {0}/{1}/{2}/{3}" -f $(if ($runtimeRatchetControlCompanion) { $runtimeRatchetControlCompanion } else { '(missing)' }), $(if ($runtimeRatchetControlCompanionOClass) { $runtimeRatchetControlCompanionOClass } else { '(missing)' }), $(if ($runtimeRatchetControlCompanionLive) { $runtimeRatchetControlCompanionLive } else { '(missing)' }), $(if ($runtimeRatchetUpdateCallback) { $runtimeRatchetUpdateCallback } else { '(missing)' }))
+    Add-ReportLine $report ("- Gameplay overlay status: {0}" -f $(if ($runtimeOverlayStatus) { $runtimeOverlayStatus } else { '(missing)' }))
+    Add-ReportLine $report ("- Gameplay overlay segments/payload: {0}/{1}" -f $(if ($runtimeOverlaySegments) { $runtimeOverlaySegments } else { '(missing)' }), $(if ($runtimeOverlayPayloadBytes) { $runtimeOverlayPayloadBytes } else { '(missing)' }))
+    Add-ReportLine $report ("- Gameplay overlay materialized: {0}/{1} segments; {2}/{3} bytes" -f $(if ($runtimeOverlayMaterializedSegments) { $runtimeOverlayMaterializedSegments } else { '(missing)' }), $(if ($runtimeOverlaySegments) { $runtimeOverlaySegments } else { '(missing)' }), $(if ($runtimeOverlayMaterializedBytes) { $runtimeOverlayMaterializedBytes } else { '(missing)' }), $(if ($runtimeOverlayPayloadBytes) { $runtimeOverlayPayloadBytes } else { '(missing)' }))
+    Add-ReportLine $report ("- Gameplay overlay static conflicts: {0}/{1}; fallback entries={2}" -f $(if ($runtimeOverlayConflictingEntries) { $runtimeOverlayConflictingEntries } else { '(missing)' }), $(if ($runtimeOverlayComparableEntries) { $runtimeOverlayComparableEntries } else { '(missing)' }), $(if ($runtimeOverlayFallbackEntries) { $runtimeOverlayFallbackEntries } else { '(missing)' }))
 } else {
     Add-ReportLine $report '- Status: **SKIPPED** (build failed)'
 }
@@ -595,27 +879,34 @@ if (-not $gitAvailable) {
     Add-ReportLine $report '- Repository: clean'
 } else {
     Add-ReportLine $report '- Repository: dirty'
-    Add-ReportLine $report '```text'
+    Add-ReportLine $report '````text'
     foreach ($line in $repoStatus) { Add-ReportLine $report $line }
-    Add-ReportLine $report '```'
+    Add-ReportLine $report '````'
 }
 Add-ReportLine $report ('- `third_party/PS2Recomp`: {0}' -f $(if (-not $gitAvailable) { 'unavailable' } elseif ($submoduleStatus.Count -eq 0) { 'clean' } else { 'modified' }))
-Add-ReportLine $report ('- Raw status: `{0}`' -f (Get-RelativePath $gitStatusLog))
 Add-ReportLine $report ''
 
-Add-ReportLine $report '## Raw Evidence Directory'
+Add-ReportLine $report '## Full Embedded Evidence'
 Add-ReportLine $report ''
-Add-ReportLine $report ('`{0}`' -f (Get-RelativePath $runDirectory))
+Add-ReportLine $report 'Every raw stream used by this verification run is embedded here so the report can be reviewed and searched without any companion files.'
 Add-ReportLine $report ''
-Add-ReportLine $report 'Send `build/native/verification/latest.md` for normal review. Send a raw log only when a specific failure requires deeper inspection.'
+Add-EmbeddedLogSection $report 'Build log' @($build.Lines)
+Add-EmbeddedLogSection $report 'CTest log' $(if ($ctest) { @($ctest.Lines) } elseif (Test-Path -LiteralPath $ctestLog) { @(Get-Content -LiteralPath $ctestLog) } else { @('(not run)') })
+Add-EmbeddedLogSection $report 'Level viewer log' $(if ($viewer) { @($viewer.Lines) } else { @('(not run)') })
+Add-EmbeddedLogSection $report 'Runtime harness log' $(if ($runtime) { @($runtime.Lines) } else { @('(not run)') })
+Add-EmbeddedLogSection $report 'Runtime stdout' @($runtimeStdoutLines)
+Add-EmbeddedLogSection $report 'Runtime stderr' @($runtimeStderrLines)
+Add-EmbeddedLogSection $report 'Git status' @($gitLogLines)
 
 $report | Set-Content -LiteralPath $reportPath -Encoding UTF8
-Copy-Item -LiteralPath $reportPath -Destination $latestReport -Force
+Remove-Item -LiteralPath $tempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+Update-VerificationProgress 'Complete' 100 $(if ($overallPass) { 'PASS' } else { 'FAIL' })
+Write-Progress -Id 1 -Activity 'OpenRatchet native verification' -Completed
 
 Write-Host ''
 Write-Host ("Verification: {0}" -f $(if ($overallPass) { 'PASS' } else { 'FAIL' }))
-Write-Host ("Report:       {0}" -f (Get-RelativePath $latestReport))
-Write-Host ("Raw evidence: {0}" -f (Get-RelativePath $runDirectory))
+Write-Host ("Report:       {0}" -f (Get-RelativePath $reportPath))
+Write-Host 'Upload this single Markdown file for review.'
 
 if (-not $overallPass) {
     exit 1

@@ -5,6 +5,7 @@
 #include "game/native_io.h"
 #include "game/native_platform_bootstrap.h"
 #include "game/rac1_native_input.h"
+#include "game/rac1_overlay_aot_dispatch.h"
 #include "game/rac1_native_stash.h"
 #include "guest_overrides.h"
 
@@ -19,6 +20,7 @@ void declareNativeReplacements(runtime::NativeReplacementRegistry& registry) {
     declareNativePlatformBootstrapReplacements(registry);
     declareRac1NativeStashReplacements(registry);
     declareRac1NativeInputReplacements(registry);
+    declareRac1OverlayAotReplacements(registry);
     declareNativeAudioBootstrapReplacements(registry);
     declareLegacyGuestCompatibilityReplacements(registry);
 }

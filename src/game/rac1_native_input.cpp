@@ -211,6 +211,8 @@ Rac1RetailParsedInputSnapshot inspectRac1RetailParsedInput(
     result.currentButtons = readGuestLe32(guestRdram, state + Layout::kCurrentButtonsOffset);
     result.pressedEdges = readGuestLe32(guestRdram, state + Layout::kPressedEdgesOffset);
     result.releasedEdges = readGuestLe32(guestRdram, state + Layout::kReleasedEdgesOffset);
+    result.processedPressedEdges =
+        readGuestLe32(guestRdram, state + Layout::kProcessedPressedEdgesOffset);
     result.status = Rac1RetailParsedInputStatus::Ok;
     return result;
 }

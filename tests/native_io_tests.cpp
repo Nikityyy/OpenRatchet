@@ -95,7 +95,10 @@ int main() {
   "wads": [ { "num": 0, "start": 1506, "length": 9 } ],
   "wads2": [ { "num": 0, "start": 100, "length": 2 } ],
   "video": [], "vags": [], "vags2": [],
-  "levels": [], "native_levels": []
+  "levels": [],
+  "native_levels": [
+    { "num": 0, "id": 0, "header": 200, "start": 200, "length": 4 }
+  ]
 })";
     }
 
@@ -105,6 +108,9 @@ int main() {
     writeBytes(root / "extracted" / "wads2" / "wad2_0.wad",
                0x22u,
                NativeVfs::kSectorBytes * 2u);
+    writeBytes(root / "extracted" / "levels" / "level_00.wad",
+               0x44u,
+               NativeVfs::kSectorBytes * 4u);
     {
         std::fstream boot(root / "extracted" / "wads2" / "wad2_0.wad",
                           std::ios::binary | std::ios::in | std::ios::out);
@@ -122,6 +128,12 @@ int main() {
 
     NativeReplacementRegistry registry;
     ratchet::game::declareNativeIoReplacements(registry);
+    const auto* asyncStart = findReplacement(registry, 0x216728u);
+    test.expect(asyncStart != nullptr && asyncStart->function != nullptr,
+                "0x216728 game async sector read is declared native");
+    test.expect(asyncStart != nullptr && asyncStart->fallbackStorage != nullptr,
+                "0x216728 retains an explicit fallback only for unresolved ranges");
+
     const auto* start = findReplacement(registry, 0x216788u);
     test.expect(start != nullptr && start->function != nullptr,
                 "0x216788 game sector start is declared native");
@@ -137,12 +149,54 @@ int main() {
     constexpr std::uint32_t kGuestRamBytes = 0x02000000u;
     constexpr std::uint32_t kDestination = 0x001aabc0u;
     constexpr std::uint32_t kManagerBase = 0x001516d0u;
+    constexpr std::uint32_t kLegacyAsyncRequestBase = 0x001313c0u;
+    constexpr std::uint32_t kGameAsyncReadStatusBase = 0x0015eebcu;
     std::vector<std::uint8_t> rdram(kGuestRamBytes, 0xa5u);
     // The native audio bootstrap leaves the 989snd transport manager inactive.
     // Keep that realistic precondition and verify the native sector wrapper
     // does not manufacture the transport's source/count/destination bookkeeping.
     std::array<std::uint8_t, 0x90> managerBefore{};
     std::fill_n(rdram.begin() + kManagerBase, managerBefore.size(), 0u);
+
+    if (asyncStart != nullptr && asyncStart->function != nullptr) {
+        std::array<std::uint8_t, 0x18> asyncRequestBefore{};
+        for (std::size_t i = 0u; i < asyncRequestBefore.size(); ++i) {
+            asyncRequestBefore[i] = static_cast<std::uint8_t>(0x60u + i);
+            rdram[kLegacyAsyncRequestBase + i] = asyncRequestBefore[i];
+        }
+        std::fill_n(rdram.begin() + kGameAsyncReadStatusBase, 8u, 0x5au);
+
+        R5900Context ctx;
+        SET_GPR_U32(&ctx, 4, kDestination);
+        SET_GPR_U32(&ctx, 5, 201u);
+        SET_GPR_U32(&ctx, 6, 2u);
+        SET_GPR_U32(&ctx, 31, 0x00123456u);
+        asyncStart->function(rdram.data(), &ctx, nullptr);
+
+        test.expect(getRegU32(&ctx, 2) == 1u,
+                    "0x216728 preserves Retail's unconditional submission-success return");
+        test.expect(ctx.pc == 0x00123456u,
+                    "0x216728 returns directly to the original guest caller");
+        test.expect(rdram[kDestination] == 0x44u &&
+                        rdram[kDestination + NativeVfs::kSectorBytes * 2u - 1u] == 0x44u,
+                    "0x216728 resolves a validated native-level sector range into guest RAM");
+        test.expect(std::all_of(rdram.begin() + kGameAsyncReadStatusBase,
+                                rdram.begin() + kGameAsyncReadStatusBase + 8u,
+                                [](std::uint8_t value) { return value == 0u; }),
+                    "0x216728 preserves Retail's two cleared game-visible load-status words");
+
+        bool asyncRequestUnchanged = true;
+        for (std::size_t i = 0u; i < asyncRequestBefore.size(); ++i) {
+            if (rdram[kLegacyAsyncRequestBase + i] != asyncRequestBefore[i]) {
+                asyncRequestUnchanged = false;
+                break;
+            }
+        }
+        test.expect(asyncRequestUnchanged,
+                    "native 0x216728 read does not synthesize the legacy async request manager");
+        test.expect(observedRead.count == 0u,
+                    "partial native-level reads do not fabricate complete indexed-asset identity");
+    }
 
     if (start != nullptr && start->function != nullptr) {
         R5900Context ctx;

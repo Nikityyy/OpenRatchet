@@ -19,12 +19,16 @@ namespace {
 constexpr std::uint32_t kGuestRamBytes = 0x02000000u;
 constexpr std::uint32_t kGameDiscTocBase = 0x00137b80u;
 constexpr std::uint32_t kLegacyBootTop = 0x01ff8000u;
+constexpr std::uint32_t kGameAsyncReadStatusBase = 0x0015eebcu;
 
+PS2Runtime::RecompiledFunction g_gameAsyncSectorReadFallback = nullptr;
 PS2Runtime::RecompiledFunction g_sectorReadFallback = nullptr;
 PS2Runtime::RecompiledFunction g_discTocFallback = nullptr;
 std::uint32_t g_nativeReadDiagnostics = 0u;
 std::uint32_t g_fallbackReadDiagnostics = 0u;
 std::uint32_t g_nativeTocDiagnostics = 0u;
+std::uint32_t g_gameAsyncSectorReadDiagnostics = 0u;
+std::uint32_t g_gameAsyncSectorReadFallbackDiagnostics = 0u;
 std::uint32_t g_gameSectorWrapperDiagnostics = 0u;
 std::uint32_t g_gameSectorWrapperFailureDiagnostics = 0u;
 std::uint32_t g_gameSectorStartDiagnostics = 0u;
@@ -198,6 +202,78 @@ void nativeGameSectorRead(std::uint8_t* rdram,
                              g_gameSectorWrapperFailureDiagnostics);
 }
 
+void nativeGameAsyncSectorRead(std::uint8_t* rdram,
+                               R5900Context* ctx,
+                               PS2Runtime* runtime) {
+    // FUN_00216728 exposes (destination, source sector, sector count), clears
+    // the two game-visible load-status words at 0x15EEBC/0x15EEC0, submits the
+    // old asynchronous CD request through FUN_00121450, and then returns 1
+    // unconditionally.  sub_00204428 advances its load state immediately and
+    // polls FUN_00121630 on later frames.  OpenRatchet already owns the disc
+    // bytes, so complete the read atomically at this game-facing boundary while
+    // preserving those two non-transport side effects.  Do not synthesize the
+    // private 0x121450 request/RPC manager: a successful native read leaves the
+    // legacy transport idle, exactly like the established 0x216788/0x216828
+    // replacements.
+    const std::uint32_t destination = GPR_U32(ctx, 4);
+    const std::uint32_t sourceSector = GPR_U32(ctx, 5);
+    const std::uint32_t sectorCount = GPR_U32(ctx, 6);
+
+    if (isRangeWithin(kGameAsyncReadStatusBase, 8u, kGuestRamBytes)) {
+        for (std::uint32_t offset = 0u; offset < 8u; ++offset) {
+            rdram[kGameAsyncReadStatusBase + offset] = 0u;
+        }
+    }
+
+    const NativeGameServices& services = nativeGameServices();
+    if (services.vfs != nullptr && services.vfs->ready() &&
+        tryNativeIndexedRead(rdram,
+                             ctx,
+                             *services.vfs,
+                             sourceSector,
+                             sectorCount,
+                             destination)) {
+        // Retail FUN_00216728 returns submission-success (1), not byte count.
+        SET_GPR_U32(ctx, 2, 1u);
+        ++g_gameAsyncSectorReadDiagnostics;
+        if (g_gameAsyncSectorReadDiagnostics <= 12u) {
+            std::cerr << "[OpenRatchet:VFS] game async sector read"
+                      << " address=0x216728"
+                      << " backend=native-vfs"
+                      << " source=0x" << std::hex << sourceSector
+                      << " sectors=0x" << sectorCount
+                      << " destination=0x" << destination
+                      << " bytes=0x"
+                      << (sectorCount * platform::NativeVfs::kSectorBytes)
+                      << std::dec
+                      << " completion=synchronous-retail-contract"
+                      << " legacyAsyncManager=untouched"
+                      << " status=ok\n";
+        }
+        return;
+    }
+
+    ++g_gameAsyncSectorReadFallbackDiagnostics;
+    if (g_gameAsyncSectorReadFallbackDiagnostics <= 8u) {
+        std::cerr << "[OpenRatchet:VFS] game async sector read"
+                  << " address=0x216728"
+                  << " backend=generated-fallback"
+                  << " source=0x" << std::hex << sourceSector
+                  << " sectors=0x" << sectorCount
+                  << " destination=0x" << destination << std::dec
+                  << " status=unresolved\n";
+    }
+
+    // Keep the generated path only for an as-yet-unindexed range. Every proved
+    // level range must resolve natively; verify-native treats any fallback on
+    // the Level-0 main-data request as a Step-12.3C failure.
+    if (g_gameAsyncSectorReadFallback != nullptr) {
+        g_gameAsyncSectorReadFallback(rdram, ctx, runtime);
+    } else {
+        returnToGuestCaller(ctx, 0u);
+    }
+}
+
 void nativeSectorRead(std::uint8_t* rdram,
                       R5900Context* ctx,
                       PS2Runtime* runtime) {
@@ -289,6 +365,12 @@ void nativeLoadDiscToc(std::uint8_t* rdram,
 } // namespace
 
 void declareNativeIoReplacements(runtime::NativeReplacementRegistry& registry) {
+    registry.add(0x216728u,
+                 "native.io.game-async-sector-read",
+                 runtime::NativeReplacementStage::Runtime,
+                 nativeGameAsyncSectorRead,
+                 &g_gameAsyncSectorReadFallback);
+
     registry.add(0x216788u,
                  "native.io.game-sector-read-start",
                  runtime::NativeReplacementStage::Runtime,

@@ -651,6 +651,49 @@ bool NativeVfs::readSectors(std::uint32_t startSector,
         return false;
     }
 
+    const std::uint64_t requestBegin = startSector;
+    const std::uint64_t requestEnd = requestBegin + sectorCount;
+
+    // Amalgamated R&C1 level files are exact raw disc-sector spans discovered
+    // from the validated 0x2434 level headers.  They intentionally live in a
+    // separate catalog because their spans overlap local WADs/resources and
+    // therefore cannot be merged into the ordinary non-overlapping TOC asset
+    // index.  Prefer the ordinary asset path whenever one asset covers the
+    // whole request; otherwise a request wholly contained in one native level
+    // span is read directly from that raw level image.  This is the missing
+    // ownership path used by Retail FUN_00216728 for the main level-data read.
+    const NativeAssetLocation* directAsset = findAssetContainingSector(startSector);
+    const bool directAssetCoversRequest =
+        directAsset != nullptr &&
+        requestEnd <= static_cast<std::uint64_t>(directAsset->startSector) +
+                          directAsset->sectorCount;
+
+    if (!directAssetCoversRequest) {
+        const auto levelIt = std::find_if(
+            levelAssets_.begin(), levelAssets_.end(),
+            [requestBegin, requestEnd](const NativeAssetLocation& level) {
+                const std::uint64_t levelBegin = level.startSector;
+                const std::uint64_t levelEnd = levelBegin + level.sectorCount;
+                return requestBegin >= levelBegin && requestEnd <= levelEnd;
+            });
+        if (levelIt != levelAssets_.end()) {
+            std::vector<std::uint8_t> staging(static_cast<std::size_t>(totalBytes64));
+            const std::uint64_t sectorOffset = requestBegin - levelIt->startSector;
+            const std::uint64_t byteOffset = sectorOffset * kSectorBytes;
+            if (!readFileRange(*levelIt,
+                               byteOffset,
+                               staging.data(),
+                               staging.size())) {
+                return false;
+            }
+            std::memcpy(destination, staging.data(), staging.size());
+            if (sourceDescription != nullptr) {
+                *sourceDescription = nativeAssetName(*levelIt);
+            }
+            return true;
+        }
+    }
+
     struct Segment {
         const NativeAssetLocation* asset = nullptr;
         std::uint32_t sectorOffset = 0u;

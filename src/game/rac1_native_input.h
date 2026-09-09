@@ -72,7 +72,11 @@ struct Rac1RetailParsedInputLayout {
     static constexpr std::uint32_t kCurrentButtonsOffset = 0x01a0u;
     static constexpr std::uint32_t kPressedEdgesOffset = 0x01a4u;
     static constexpr std::uint32_t kReleasedEdgesOffset = 0x01a8u;
-    static constexpr std::uint32_t kRequiredBytes = kReleasedEdgesOffset + 4u;
+    // FUN_00217328 mirrors the raw rising-edge word to +0x1C4 and then
+    // applies its Retail analog/directional post-processing there. Boot code
+    // reads this processed edge word at absolute 0x13CB04.
+    static constexpr std::uint32_t kProcessedPressedEdgesOffset = 0x01c4u;
+    static constexpr std::uint32_t kRequiredBytes = kProcessedPressedEdgesOffset + 4u;
 };
 
 enum class Rac1RetailParsedInputStatus {
@@ -85,6 +89,7 @@ struct Rac1RetailParsedInputSnapshot {
     std::uint32_t currentButtons = 0u;
     std::uint32_t pressedEdges = 0u;
     std::uint32_t releasedEdges = 0u;
+    std::uint32_t processedPressedEdges = 0u;
     float rightX = 0.0f;
     float rightY = 0.0f;
     float leftX = 0.0f;

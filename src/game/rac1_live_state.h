@@ -46,10 +46,18 @@ struct Rac1LiveMobyLayout final {
 
     // FUN_0020c5f0 writes the class-data pointer selected from
     // 0x001B3200[slot] at +0x24 and preserves the original oClass at +0xA6.
-    // It independently writes 0x001B3580[slot] at +0x74; that word is not the
-    // class-data pointer and its higher-level semantic role remains uninterpreted.
+    // It independently writes 0x001B3580[slot] at +0x74. sub_00212E28 later
+    // loads +0x74 and executes it with jalr using a0=moby when non-zero, proving
+    // that +0x74 is an optional Retail Moby update callback.
     static constexpr std::uint32_t kClassPointerOffset = 0x24u;
-    static constexpr std::uint32_t kRuntimeAuxPointerOffset = 0x74u;
+    static constexpr std::uint32_t kUpdateCallbackOffset = 0x74u;
+
+    // FUN_002240C8 loads +0x78 from the newly allocated oClass-0 Ratchet at
+    // 0x22420C, then stores its owning lifecycle state at word 0 of that
+    // per-instance block at 0x224248. Multiple Retail consumers independently
+    // dereference Moby+0x78 before consuming that private block.
+    static constexpr std::uint32_t kPVarPointerOffset = 0x78u;
+
     static constexpr std::uint32_t kOClassOffset = 0xa6u;
     static constexpr std::uint32_t kPoolIndexOffset = 0xacu;
 
@@ -74,7 +82,8 @@ struct Rac1LiveMobyLayout final {
 //   moby->class   = classDataPtr                         // moby+0x24
 //
 // The same constructor separately loads 0x001B3580[slot] and stores that word
-// at moby+0x74. It must not be confused with the +0x24 class-data pointer.
+// at moby+0x74. sub_00212E28 proves this second table supplies an optional Moby
+// update callback; it must not be confused with the +0x24 class-data pointer.
 // sub_001EA830 and FUN_00230F60 initialize the 0x800-byte oClass->slot table
 // to 0xFF, while sub_00203640 publishes loaded class-data pointers into
 // 0x001B3200. The +0x24/0x001B3200 equality is therefore the authoritative
@@ -84,7 +93,33 @@ struct Rac1LiveMobyClassRegistryLayout final {
     static constexpr std::uint32_t kOClassToSlotBytes = 0x800u;
     static constexpr std::uint8_t kUnregisteredSlot = 0xffu;
     static constexpr std::uint32_t kClassDataPointerTableAddress = 0x001b3200u;
-    static constexpr std::uint32_t kRuntimeAuxPointerTableAddress = 0x001b3580u;
+    static constexpr std::uint32_t kUpdateCallbackTableAddress = 0x001b3580u;
+};
+
+// FUN_002240C8 is a Retail lifecycle constructor whose a0 state object owns the
+// unique oClass==0 Moby at +0x44. After that allocation succeeds, Retail reads
+// Ratchet+0x78 and writes the same state pointer to word 0 of that per-instance
+// block. This gives a reciprocal identity contract that does not depend on a
+// guessed global or a whole-RDRAM pointer-frequency scan:
+//
+//   state+0x44       == ratchet
+//   ratchet+0x78     == ratchetPVar
+//   ratchetPVar+0x00 == state
+//
+// The constructor later attempts an oClass 0x259 allocation and unconditionally
+// stores its return value at state+0x48. Because the allocation is explicitly
+// allowed to return null, +0x48 is diagnostic only and is NOT required for
+// lifecycle-state identity.
+//
+// Ratchet's +0x74 slot is initialized to 0x00224B60 by this constructor; the
+// Retail ELF proves 0x00224B60 is only `jr ra; nop`, so that slot is lifecycle
+// plumbing rather than evidence of Ratchet movement.
+struct Rac1RatchetLifecycleStateLayout final {
+    static constexpr std::uint32_t kRatchetMobyOffset = 0x44u;
+    static constexpr std::uint32_t kCompanionMobyOffset = 0x48u;
+    static constexpr std::uint32_t kPVarOwnerStateOffset = 0x00u;
+    static constexpr std::int16_t kCompanionOClass = 0x0259;
+    static constexpr std::uint32_t kInitialRatchetCallback = 0x00224b60u;
 };
 
 enum class Rac1LiveMobyPoolStatus : std::uint8_t {
@@ -123,6 +158,7 @@ struct Rac1LiveMobyRecord {
     bool participatesInRetailTraversal = false;
 
     std::uint32_t classPointer = 0u;
+    std::uint32_t updateCallback = 0u;
     std::int16_t oClass = 0;
     std::uint32_t storedPoolIndex = 0u;
     Rac1LiveMobyWorldTransformState worldTransform;
@@ -169,6 +205,37 @@ struct Rac1LiveMobyClassRegistryEntry {
     }
 };
 
+
+enum class Rac1LiveRatchetControlStateStatus : std::uint8_t {
+    Ok,
+    PoolUnavailable,
+    RatchetNotUnique,
+    GuestMemoryTooSmall,
+    PVarUnavailable,
+    PVarOutOfRange,
+    StateUnavailable,
+    StateOutOfRange,
+    StateRatchetMismatch,
+};
+
+struct Rac1LiveRatchetControlStateSnapshot {
+    Rac1LiveRatchetControlStateStatus status =
+        Rac1LiveRatchetControlStateStatus::PoolUnavailable;
+    std::size_t ratchetCandidates = 0u;
+    std::uint32_t ratchetMoby = 0u;
+    std::uint32_t ratchetPVar = 0u;
+    std::uint32_t state = 0u;
+    std::uint32_t stateRatchetMoby = 0u;
+    std::uint32_t companionMoby = 0u;
+    std::int16_t companionOClass = 0;
+    bool companionLive = false;
+    std::uint32_t ratchetUpdateCallback = 0u;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return status == Rac1LiveRatchetControlStateStatus::Ok;
+    }
+};
+
 struct Rac1LiveMobyClassRegistrySnapshot {
     Rac1LiveMobyClassRegistryStatus status =
         Rac1LiveMobyClassRegistryStatus::PoolUnavailable;
@@ -196,10 +263,21 @@ struct Rac1LiveMobyClassRegistrySnapshot {
     std::span<const std::uint8_t> guestRdram,
     const Rac1LiveMobyPoolSnapshot& livePool);
 
+// Resolve the Retail lifecycle state created by FUN_002240C8 through the
+// constructor-proved reciprocal backlink: Ratchet+0x78 -> PVar+0 -> state, then
+// require state+0x44 to point back to the same unique live oClass==0 Ratchet.
+// state+0x48 is reported only as optional companion diagnostics because the
+// constructor stores a possibly-null oClass-0x259 allocation result there.
+[[nodiscard]] Rac1LiveRatchetControlStateSnapshot inspectRac1LiveRatchetControlState(
+    std::span<const std::uint8_t> guestRdram,
+    const Rac1LiveMobyPoolSnapshot& livePool);
+
 [[nodiscard]] const char* rac1LiveMobyPoolStatusName(Rac1LiveMobyPoolStatus status);
 [[nodiscard]] const char* rac1LiveMobyClassRegistryStatusName(
     Rac1LiveMobyClassRegistryStatus status) noexcept;
 [[nodiscard]] const char* rac1LiveMobyClassRegistryEntryStatusName(
     Rac1LiveMobyClassRegistryEntryStatus status) noexcept;
+[[nodiscard]] const char* rac1LiveRatchetControlStateStatusName(
+    Rac1LiveRatchetControlStateStatus status) noexcept;
 
 } // namespace ratchet::game

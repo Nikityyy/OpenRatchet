@@ -138,6 +138,7 @@ if ($VerboseSections) {
     Write-RecentMatches 'Native platform HLE' ($stdoutLines + $stderrLines) '\[OpenRatchet:platform\]' $TailLines
     Write-RecentMatches 'Native resource stash' ($stdoutLines + $stderrLines) '\[OpenRatchet:stash\]' $TailLines
     Write-RecentMatches 'Native host input' ($stdoutLines + $stderrLines) '\[OpenRatchet:input\]' $TailLines
+    Write-RecentMatches 'Retail generation chain' ($stdoutLines + $stderrLines) '\[OpenRatchet:(overlay-aot|gameplay-overlay)\]' $TailLines
     Write-RecentMatches 'Live Moby state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:moby\]' $TailLines
     Write-RecentMatches 'Live Ratchet animation' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-animation\]' $TailLines
     Write-RecentMatches 'Live Ratchet transform' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:ratchet-transform\]' $TailLines
@@ -148,6 +149,7 @@ if ($VerboseSections) {
     Write-RecentMatches 'Native WAD decompressor' ($stdoutLines + $stderrLines) '\[OpenRatchet:WAD\]' $TailLines
     Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|stub|error|failed' $TailLines
 } else {
+    Write-RecentMatches 'Latest Retail generation state' ($stdoutLines + $stderrLines) '\[OpenRatchet:(overlay-aot|gameplay-overlay)\]' 8
     Write-RecentMatches 'Latest native renderer state' ($stdoutLines + $stderrLines) '\[OpenRatchet:render:(ownership|level-map|scene-load|parity|frame)\]' 5
     Write-RecentMatches 'Latest live gameplay state' ($stdoutLines + $stderrLines) '\[OpenRatchet:live:(camera|sky|moby|ratchet-animation|ratchet-transform)\]' 8
     Write-RecentMatches 'Diagnostics' ($stdoutLines + $stderrLines) 'missing-target|unimplemented|error|failed' 8

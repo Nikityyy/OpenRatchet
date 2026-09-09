@@ -70,6 +70,8 @@ void Rac1RuntimeRenderer::unload() noexcept {
     unloadTextures(skyTextures_);
     unloadTextures(mobyTextures_);
     core_.clear();
+    levelOverlay_.clear();
+    levelOverlaySegments_.clear();
     mobySourceTextures_.clear();
     ratchetTopologyInstance_ = {};
     ratchetAnimationClass_ = {};
@@ -103,6 +105,8 @@ bool Rac1RuntimeRenderer::loadLevel(
         status_ = Rac1RuntimeRendererStatus::LevelLoadFailed;
         return false;
     }
+    levelOverlay_ = loaded.overlay;
+    levelOverlaySegments_ = loaded.overlaySegments;
 
     auto tfragTextures = assets::decodeRac1PaletteTextures(
         loaded.core,

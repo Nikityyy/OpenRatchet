@@ -132,10 +132,73 @@ bool renderOffsetFits(std::uint32_t offset, std::size_t coreBytes) noexcept {
 
 Rac1LevelCoreLoadResult fail(Rac1LevelInspectStatus status,
                              Rac1LevelSummary summary) noexcept {
-    return {status, summary, {}, {}, {}, {}};
+    Rac1LevelCoreLoadResult result{};
+    result.status = status;
+    result.summary = std::move(summary);
+    return result;
 }
 
 } // namespace
+
+Rac1LevelOverlayResult parseRac1LevelOverlay(std::span<const std::uint8_t> overlay) {
+    Rac1LevelOverlayResult result{};
+    result.status = Rac1LevelOverlayStatus::Ok;
+
+    std::size_t cursor = 0u;
+    while (cursor < overlay.size()) {
+        constexpr std::size_t kRecordHeaderBytes = 0x10u;
+        if (overlay.size() - cursor < kRecordHeaderBytes) {
+            result.status = Rac1LevelOverlayStatus::TruncatedHeader;
+            result.segments.clear();
+            result.payloadBytes = 0u;
+            return result;
+        }
+
+        Rac1LevelOverlaySegment segment{};
+        segment.destination = readLe32(overlay.data() + cursor + 0x00u);
+        segment.payloadSize = readLe32(overlay.data() + cursor + 0x04u);
+        segment.field8 = readLe32(overlay.data() + cursor + 0x08u);
+        segment.fieldC = readLe32(overlay.data() + cursor + 0x0cu);
+
+        const std::size_t payloadOffset = cursor + kRecordHeaderBytes;
+        if (static_cast<std::uint64_t>(segment.payloadSize) >
+            static_cast<std::uint64_t>(overlay.size() - payloadOffset)) {
+            result.status = Rac1LevelOverlayStatus::PayloadOutOfRange;
+            result.segments.clear();
+            result.payloadBytes = 0u;
+            return result;
+        }
+        if (segment.payloadSize >
+            std::numeric_limits<std::uint32_t>::max() - segment.destination) {
+            result.status = Rac1LevelOverlayStatus::DestinationOverflow;
+            result.segments.clear();
+            result.payloadBytes = 0u;
+            return result;
+        }
+        if (payloadOffset > std::numeric_limits<std::uint32_t>::max()) {
+            result.status = Rac1LevelOverlayStatus::PayloadOutOfRange;
+            result.segments.clear();
+            result.payloadBytes = 0u;
+            return result;
+        }
+
+        segment.payloadOffset = static_cast<std::uint32_t>(payloadOffset);
+        result.payloadBytes += segment.payloadSize;
+        result.segments.push_back(segment);
+        cursor = payloadOffset + static_cast<std::size_t>(segment.payloadSize);
+    }
+    return result;
+}
+
+const char* rac1LevelOverlayStatusName(Rac1LevelOverlayStatus status) noexcept {
+    switch (status) {
+    case Rac1LevelOverlayStatus::Ok: return "ok";
+    case Rac1LevelOverlayStatus::TruncatedHeader: return "truncated-header";
+    case Rac1LevelOverlayStatus::PayloadOutOfRange: return "payload-out-of-range";
+    case Rac1LevelOverlayStatus::DestinationOverflow: return "destination-overflow";
+    }
+    return "unknown";
+}
 
 const char* rac1LevelInspectStatusName(Rac1LevelInspectStatus status) noexcept {
     switch (status) {
@@ -153,6 +216,10 @@ const char* rac1LevelInspectStatusName(Rac1LevelInspectStatus status) noexcept {
         return "invalid-data-range";
     case Rac1LevelInspectStatus::InvalidLevelDataHeader:
         return "invalid-level-data-header";
+    case Rac1LevelInspectStatus::InvalidOverlayRange:
+        return "invalid-overlay-range";
+    case Rac1LevelInspectStatus::InvalidOverlayContainer:
+        return "invalid-overlay-container";
     case Rac1LevelInspectStatus::InvalidCoreIndexRange:
         return "invalid-core-index-range";
     case Rac1LevelInspectStatus::InvalidGsRamRange:
@@ -260,6 +327,10 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
     }
     summary.coreData = readByteRange(dataHeader, 0x50u);
 
+    if (summary.overlay.size != 0u &&
+        !byteRangeFits(summary.overlay.offset, summary.overlay.size, dataBytes)) {
+        return fail(Rac1LevelInspectStatus::InvalidOverlayRange, summary);
+    }
     if (summary.coreIndex.size < kLevelCoreHeaderBytes ||
         !byteRangeFits(summary.coreIndex.offset, summary.coreIndex.size, dataBytes)) {
         return fail(Rac1LevelInspectStatus::InvalidCoreIndexRange, summary);
@@ -271,6 +342,26 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
     if (summary.coreData.size < kWadHeaderBytes ||
         !byteRangeFits(summary.coreData.offset, summary.coreData.size, dataBytes)) {
         return fail(Rac1LevelInspectStatus::InvalidCoreDataRange, summary);
+    }
+
+    std::vector<std::uint8_t> overlay;
+    std::vector<Rac1LevelOverlaySegment> overlaySegments;
+    if (summary.overlay.size != 0u) {
+        std::uint64_t overlayFileOffset = 0u;
+        if (!checkedAdd(dataFileOffset, summary.overlay.offset, overlayFileOffset)) {
+            return fail(Rac1LevelInspectStatus::InvalidOverlayRange, summary);
+        }
+        overlay.resize(summary.overlay.size);
+        if (!readExact(input, overlayFileOffset, overlay)) {
+            return fail(Rac1LevelInspectStatus::InvalidOverlayRange, summary);
+        }
+        auto parsedOverlay = parseRac1LevelOverlay(overlay);
+        if (!parsedOverlay.ok()) {
+            return fail(Rac1LevelInspectStatus::InvalidOverlayContainer, summary);
+        }
+        summary.overlaySegmentCount = parsedOverlay.segments.size();
+        summary.overlayPayloadBytes = parsedOverlay.payloadBytes;
+        overlaySegments = std::move(parsedOverlay.segments);
     }
 
     std::uint64_t coreIndexFileOffset = 0u;
@@ -417,8 +508,16 @@ Rac1LevelCoreLoadResult loadRac1LevelCore(const std::filesystem::path& path,
         return fail(Rac1LevelInspectStatus::InvalidRenderOffsets, summary);
     }
 
-    return {Rac1LevelInspectStatus::Ok, summary, std::move(core),
-            std::move(coreIndex), std::move(gsRam), std::move(gameplay)};
+    Rac1LevelCoreLoadResult result{};
+    result.status = Rac1LevelInspectStatus::Ok;
+    result.summary = std::move(summary);
+    result.overlay = std::move(overlay);
+    result.overlaySegments = std::move(overlaySegments);
+    result.core = std::move(core);
+    result.coreIndex = std::move(coreIndex);
+    result.gsRam = std::move(gsRam);
+    result.gameplay = std::move(gameplay);
+    return result;
 }
 
 Rac1LevelInspectResult inspectRac1Level(const std::filesystem::path& path,

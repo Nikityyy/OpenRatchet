@@ -188,6 +188,27 @@ int main() {
                     source == "wads2/0..wads2/1",
                 "cross-asset read preserves physical disc order");
 
+    std::vector<std::uint8_t> levelRange(NativeVfs::kSectorBytes * 2u, 0u);
+    test.expect(vfs.readSectors(201u,
+                                2u,
+                                levelRange.data(),
+                                levelRange.size(),
+                                &source),
+                "read wholly inside a validated native level span succeeds");
+    test.expect(levelRange.front() == 0x44u && levelRange.back() == 0x44u &&
+                    source == "levels/0",
+                "native level-sector read comes from the exact amalgamated level image");
+
+    levelRange.assign(levelRange.size(), 0xa6u);
+    test.expect(!vfs.readSectors(203u,
+                                 2u,
+                                 levelRange.data(),
+                                 levelRange.size(),
+                                 &source),
+                "native level span cannot satisfy a request crossing its validated end");
+    test.expect(levelRange.front() == 0xa6u && levelRange.back() == 0xa6u,
+                "failed level-span resolution remains atomic");
+
     std::array<std::uint8_t, NativeVfs::kSectorBytes> untouched{};
     untouched.fill(0xa5u);
     test.expect(!vfs.readSectors(75u,

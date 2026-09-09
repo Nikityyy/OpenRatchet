@@ -8,22 +8,30 @@
 #include "game/rac1_live_sky.h"
 #include "game/rac1_live_transform.h"
 #include "game/rac1_native_input.h"
+#include "game/rac1_frontend_autopilot.h"
+#include "game/rac1_overlay_coherence.h"
+#include "game/rac1_overlay_aot_dispatch.h"
 #include "guest_overrides.h"
 #include "platform/native_vfs.h"
 #include "runtime/native_replacements.h"
 #include "render/rac1_render_bridge.h"
 #include "render/rac1_runtime_renderer.h"
+#include "render/rac1_presentation_ownership.h"
 
 #include <array>
 #include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <utility>
+#include <vector>
 
 #if defined(_M_X64) || defined(__SSE__)
 #include <immintrin.h>
@@ -36,6 +44,8 @@
 
 namespace ratchet {
 namespace {
+
+constexpr std::uint32_t kLevel0GenerationEntry = 0x00245C28u;
 
 void configureHostFloatingPoint() {
 #if defined(_MSC_VER) && defined(_M_X64)
@@ -141,10 +151,43 @@ bool sameParsedInputSnapshot(const game::Rac1RetailParsedInputSnapshot& lhs,
            lhs.currentButtons == rhs.currentButtons &&
            lhs.pressedEdges == rhs.pressedEdges &&
            lhs.releasedEdges == rhs.releasedEdges &&
+           lhs.processedPressedEdges == rhs.processedPressedEdges &&
            sameFloatBits(lhs.rightX, rhs.rightX) &&
            sameFloatBits(lhs.rightY, rhs.rightY) &&
            sameFloatBits(lhs.leftX, rhs.leftX) &&
            sameFloatBits(lhs.leftY, rhs.leftY);
+}
+
+bool sameBootOverlayLifecycle(const game::Rac1BootOverlayProgress& lhs,
+                              const game::Rac1BootOverlayProgress& rhs) noexcept {
+    // Keep this comparison independent of generated Retail source timestamps;
+    // only observed lifecycle values may trigger an immediate diagnostic record.
+    // Raw loader words are still printed on the periodic diagnostic sample, but
+    // they do not independently defeat throttling. Immediate records are reserved
+    // for lifecycle/branch changes that can alter the Boot -> first-generation path.
+    return lhs.status == rhs.status &&
+           lhs.processedPressedEdges == rhs.processedPressedEdges &&
+           lhs.bootExitFlag == rhs.bootExitFlag &&
+           lhs.state13CAE4 == rhs.state13CAE4 &&
+           lhs.branch2321A4Bypass == rhs.branch2321A4Bypass &&
+           lhs.branch2321B8Wait == rhs.branch2321B8Wait &&
+           lhs.branch2321C4EnterSetup == rhs.branch2321C4EnterSetup &&
+           lhs.state15F604 == rhs.state15F604 &&
+           lhs.callback2195OwnerPointer == rhs.callback2195OwnerPointer &&
+           lhs.callback2195TablePointer == rhs.callback2195TablePointer &&
+           lhs.callback2195TableReadable == rhs.callback2195TableReadable &&
+           lhs.callback2195NonNullObjects == rhs.callback2195NonNullObjects &&
+           lhs.callback2195ReadableObjects == rhs.callback2195ReadableObjects &&
+           lhs.callback2195NonNullTargets == rhs.callback2195NonNullTargets &&
+           lhs.callback2195Targets == rhs.callback2195Targets &&
+           lhs.callback21E7C8Present == rhs.callback21E7C8Present &&
+           lhs.callback21E7C8Slot == rhs.callback21E7C8Slot &&
+           lhs.sharedLoaderPointer == rhs.sharedLoaderPointer &&
+           lhs.sharedLoaderPrefixBytes == rhs.sharedLoaderPrefixBytes &&
+           lhs.firstGenerationStreamSignatureObserved == rhs.firstGenerationStreamSignatureObserved &&
+           lhs.wad158FirstRecordHeaderMatched == rhs.wad158FirstRecordHeaderMatched &&
+           lhs.firstRecordAddress == rhs.firstRecordAddress &&
+           lhs.firstGenerationEntry == rhs.firstGenerationEntry;
 }
 
 void logLiveParsedInput(const game::Rac1RetailParsedInputSnapshot& parsed) {
@@ -157,7 +200,8 @@ void logLiveParsedInput(const game::Rac1RetailParsedInputSnapshot& parsed) {
     if (parsed.ok()) {
         std::cerr << " buttons=0x" << std::hex << parsed.currentButtons
                   << " pressedEdges=0x" << parsed.pressedEdges
-                  << " releasedEdges=0x" << parsed.releasedEdges << std::dec
+                  << " releasedEdges=0x" << parsed.releasedEdges
+                  << " processedPressedEdges=0x" << parsed.processedPressedEdges << std::dec
                   << " rx=" << parsed.rightX
                   << " ry=" << parsed.rightY
                   << " lx=" << parsed.leftX
@@ -249,6 +293,33 @@ void logLiveMobySnapshot(const game::Rac1LiveMobyPoolSnapshot& snapshot) {
 
     std::cerr << " status=" << game::rac1LiveMobyPoolStatusName(snapshot.status)
               << '\n';
+}
+
+void logLiveRatchetControlState(
+    const game::Rac1LiveRatchetControlStateSnapshot& snapshot) {
+    // Build the gate evidence off-stream and publish it with one write. Runtime
+    // GS/debug output can originate on another thread; composing this line via
+    // many individual operator<< calls previously allowed evidence to be split.
+    std::ostringstream line;
+    line << "[OpenRatchet:live:ratchet-control-state]"
+         << " source=guest-rdram"
+         << " ratchetCandidates=" << snapshot.ratchetCandidates
+         << " ratchetMoby=0x" << std::hex << snapshot.ratchetMoby
+         << " ratchetPVar=0x" << snapshot.ratchetPVar
+         << " state=0x" << snapshot.state
+         << " stateRatchetMoby=0x" << snapshot.stateRatchetMoby
+         << " companionMoby=0x" << snapshot.companionMoby
+         << " companionOClass=0x"
+         << static_cast<std::uint16_t>(snapshot.companionOClass)
+         << std::dec
+         << " companionLive=" << (snapshot.companionLive ? 1 : 0)
+         << " updateCallback=0x" << std::hex << snapshot.ratchetUpdateCallback
+         << std::dec
+         << " status="
+         << game::rac1LiveRatchetControlStateStatusName(snapshot.status)
+         << '\n';
+    const std::string text = line.str();
+    std::cerr.write(text.data(), static_cast<std::streamsize>(text.size()));
 }
 
 void logLiveRatchetAnimation(
@@ -453,6 +524,11 @@ struct OpenRatchetRuntime::Impl {
     PS2Runtime eeFallback;
     runtime::NativeReplacementRegistry replacements;
     render::Rac1RuntimeRenderer nativeRenderer;
+    render::Rac1PresentationOwnership presentationOwnership;
+    game::Rac1FrontendAutopilot frontendAutopilot;
+    std::optional<game::Rac1FrontendAutopilotPulse> lastFrontendAutopilotPulse;
+    bool frontendAutopilotStopLogged = false;
+    std::optional<render::Rac1PresentationReadiness> lastPresentationReadiness;
     std::atomic<int> requestedNativeLevel{-1};
     std::atomic<int> requestedRuntimeWad2{-1};
     std::optional<int> rendererAttemptedLevel;
@@ -460,6 +536,13 @@ struct OpenRatchetRuntime::Impl {
     std::optional<NativeRenderAccountingSignature> lastRenderAccounting;
     std::optional<LiveMobySnapshotSignature> lastLiveMobySignature;
     std::optional<game::Rac1RetailParsedInputSnapshot> lastLoggedParsedInput;
+    game::Rac1StaticElfImage staticElfImage;
+    std::vector<std::uint32_t> staticFallbackAddresses;
+    std::vector<std::uint32_t> overlayFallbackAddresses;
+    std::optional<game::Rac1OverlayCoherenceResult> overlayCoherence;
+    std::optional<game::Rac1OverlayAotRuntimeState> lastOverlayAotState;
+    std::optional<game::Rac1BootOverlayProgress> lastBootOverlayProgress;
+    std::uint64_t overlayProgressPresentationCount = 0u;
     game::Rac1LiveRatchetAnimationResult liveRatchetAnimation;
     std::optional<game::Rac1LiveRatchetAnimationStatus> lastLoggedAnimationStatus;
     game::Rac1LiveRatchetTransformResult liveRatchetTransform;
@@ -474,6 +557,7 @@ struct OpenRatchetRuntime::Impl {
     std::uint64_t liveMobyPresentationCount = 0u;
     game::Rac1LiveMobyPoolSnapshot liveMobySnapshot;
     game::Rac1LiveMobyClassRegistrySnapshot liveMobyClassRegistry;
+    game::Rac1LiveRatchetControlStateSnapshot liveRatchetControlState;
     std::size_t liveMobyRecordCount = 0u;
     std::size_t liveMobyPoolUnaccounted = 0u;
     game::Rac1LiveMobyPoolStatus liveMobyPoolStatus =
@@ -519,6 +603,7 @@ struct OpenRatchetRuntime::Impl {
 
         game::Rac1LiveMobyPoolSnapshot snapshot;
         game::Rac1LiveMobyClassRegistrySnapshot classRegistry;
+        std::optional<game::Rac1LiveRatchetControlStateSnapshot> controlState;
         game::Rac1LiveRatchetAnimationResult animation;
         game::Rac1LiveRatchetTransformResult transform;
         game::Rac1LiveCameraResult camera;
@@ -538,6 +623,10 @@ struct OpenRatchetRuntime::Impl {
                 static_cast<std::size_t>(PS2_RAM_SIZE));
             snapshot = game::inspectRac1LiveMobyPool(guestRdram);
             classRegistry = game::inspectRac1LiveMobyClassRegistry(guestRdram, snapshot);
+            if (diagnosticTick) {
+                controlState = game::inspectRac1LiveRatchetControlState(
+                    guestRdram, snapshot);
+            }
             animation = game::inspectRac1LiveRatchetAnimation(guestRdram, snapshot);
             transform = game::inspectRac1LiveRatchetWorldTransform(snapshot);
             camera = game::inspectRac1LiveCamera(guestRdram);
@@ -590,6 +679,11 @@ struct OpenRatchetRuntime::Impl {
             }
         }
 
+        if (controlState) {
+            liveRatchetControlState = *controlState;
+            logLiveRatchetControlState(*controlState);
+        }
+
         if (diagnosticTick || animationStatusChanged) {
             lastLoggedAnimationStatus = animation.status;
             logLiveRatchetAnimation(animation);
@@ -611,28 +705,227 @@ struct OpenRatchetRuntime::Impl {
     }
 
     void initializeNativePresentation() {
+        presentationOwnership.reset();
+        frontendAutopilot.reset();
+        lastFrontendAutopilotPulse.reset();
+        frontendAutopilotStopLogged = false;
+        lastPresentationReadiness.reset();
         std::cerr << "[OpenRatchet:render:ownership]"
-                  << " owner=native"
-                  << " boundary=ps2runtime-post-gs-pre-enddrawing"
-                  << " gsFinalPresentation=0"
+                  << " owner=frontend-dev"
+                  << " bridge=phase12-temporary"
+                  << " gsPresentation=suppressed-known-broken"
+                  << " navigation=retail-parser-start-cross-autopilot"
+                  << " nativeTakeover=level0-aot+level-map+renderer+camera"
                   << " status=ok\n";
     }
 
     void shutdownNativePresentation() {
+        presentationOwnership.reset();
+        frontendAutopilot.reset();
+        lastFrontendAutopilotPulse.reset();
+        frontendAutopilotStopLogged = false;
+        lastPresentationReadiness.reset();
         nativeRenderer.unload();
         rendererAttemptedLevel.reset();
         rendererAttemptedRuntimeWad2.reset();
         liveRatchetFrame = {};
         liveMobySnapshot = {};
         liveMobyClassRegistry = {};
+        liveRatchetControlState = {};
         liveSky = {};
         lastLoggedSkyStatus.reset();
         lastLoggedParsedInput.reset();
+        overlayFallbackAddresses.clear();
+        overlayCoherence.reset();
+        lastOverlayAotState.reset();
+        lastBootOverlayProgress.reset();
+        overlayProgressPresentationCount = 0u;
         liveMobyRecordCount = 0u;
         liveMobyPoolUnaccounted = 0u;
         liveMobyPoolStatus = game::Rac1LiveMobyPoolStatus::GuestMemoryTooSmall;
         liveRatchetApplyStatus =
             render::Rac1RuntimeLiveRatchetApplyStatus::FrameNotMaterialized;
+    }
+
+    void snapshotStaticFallbackAddressSet() {
+        staticFallbackAddresses.clear();
+        staticFallbackAddresses.reserve(g_ps2RecompiledFunctionTableSlotCount);
+        for (std::uint32_t slot = 0u; slot < g_ps2RecompiledFunctionTableSlotCount; ++slot) {
+            if (g_ps2RecompiledFunctionTable[slot] == nullptr) continue;
+            const std::uint64_t pc64 =
+                static_cast<std::uint64_t>(g_ps2RecompiledFunctionTableBase) +
+                static_cast<std::uint64_t>(slot) * 4u;
+            if (pc64 >= g_ps2RecompiledFunctionTableEnd ||
+                pc64 > std::numeric_limits<std::uint32_t>::max()) {
+                continue;
+            }
+            staticFallbackAddresses.push_back(static_cast<std::uint32_t>(pc64));
+        }
+    }
+
+    void rebuildOverlayFallbackAddressSet() {
+        overlayFallbackAddresses.clear();
+        const auto segments = nativeRenderer.levelOverlaySegments();
+        for (const std::uint32_t pc : staticFallbackAddresses) {
+            for (const auto& segment : segments) {
+                const std::uint64_t begin = segment.destination;
+                const std::uint64_t end = begin + segment.payloadSize;
+                if (static_cast<std::uint64_t>(pc) >= begin &&
+                    static_cast<std::uint64_t>(pc) < end) {
+                    overlayFallbackAddresses.push_back(pc);
+                    break;
+                }
+            }
+        }
+    }
+
+    void inspectLevelOverlayCoherence(PS2Runtime& runtime) {
+        const auto overlay = nativeRenderer.levelOverlayBytes();
+        const auto segments = nativeRenderer.levelOverlaySegments();
+        if (overlay.empty() || segments.empty()) return;
+
+        const std::uint64_t presentation = overlayProgressPresentationCount++;
+        const bool diagnosticTick = presentation == 0u || (presentation % 60u) == 0u;
+        game::Rac1OverlayCoherenceResult coherence;
+        game::Rac1BootOverlayProgress bootProgress;
+        std::uint32_t guestPc = 0u;
+        std::uint32_t guestRa = 0u;
+        std::array<bool, game::Rac1BootOverlayProgress::kCallback2195SlotCount>
+            callback2195Dispatchable{};
+        std::size_t callback2195MissingSlots = 0u;
+        std::uint32_t callback2195FirstMissingTarget = 0u;
+        bool callback21E7C8Dispatchable = false;
+        {
+            PS2Runtime::GuestExecutionScope guestExecution(&runtime);
+            const std::span<const std::uint8_t> guestRdram(
+                runtime.memory().getRDRAM(),
+                static_cast<std::size_t>(PS2_RAM_SIZE));
+            coherence = game::inspectRac1OverlayCoherence(
+                guestRdram, overlay, segments, staticElfImage, overlayFallbackAddresses);
+            bootProgress = game::inspectRac1BootOverlayProgress(guestRdram);
+            guestPc = runtime.cpu().pc;
+            guestRa = getRegU32(&runtime.cpu(), 31);
+            for (std::size_t slot = 0u;
+                 slot < bootProgress.callback2195Targets.size(); ++slot) {
+                const std::uint32_t target = bootProgress.callback2195Targets[slot];
+                if (target == 0u) continue;
+                callback2195Dispatchable[slot] = runtime.hasFunction(target);
+                if (callback2195Dispatchable[slot]) continue;
+                if (callback2195MissingSlots == 0u) {
+                    callback2195FirstMissingTarget = target;
+                }
+                ++callback2195MissingSlots;
+            }
+            callback21E7C8Dispatchable = runtime.hasFunction(0x0021E7C8u);
+        }
+        const game::Rac1OverlayAotRuntimeState aotState =
+            game::inspectRac1OverlayAotRuntimeState();
+
+        const bool changed =
+            !overlayCoherence || overlayCoherence->status != coherence.status ||
+            overlayCoherence->materializedSegments != coherence.materializedSegments ||
+            overlayCoherence->conflictingFallbackEntries != coherence.conflictingFallbackEntries ||
+            !lastOverlayAotState || *lastOverlayAotState != aotState ||
+            !lastBootOverlayProgress ||
+            !sameBootOverlayLifecycle(*lastBootOverlayProgress, bootProgress);
+        overlayCoherence = coherence;
+        lastOverlayAotState = aotState;
+        lastBootOverlayProgress = bootProgress;
+        if (!changed && !diagnosticTick) return;
+
+        // This is a verification gate. Compose the complete record before the
+        // single stderr write so concurrent GS diagnostics cannot split fields.
+        std::ostringstream line;
+        line << "[OpenRatchet:gameplay-overlay]"
+             << " source=retail-level-data"
+             << " segments=" << coherence.segmentCount
+             << " payloadBytes=" << coherence.payloadBytes
+             << " materializedSegments=" << coherence.materializedSegments
+             << " materializedBytes=" << coherence.materializedBytes
+             << " fallbackEntries=" << coherence.registeredFallbackEntries
+             << " comparableEntries=" << coherence.comparableFallbackEntries
+             << " conflictingEntries=" << coherence.conflictingFallbackEntries
+             << " firstConflictPc=";
+        if (coherence.hasFirstConflictPc) {
+            line << "0x" << std::hex << coherence.firstConflictPc << std::dec;
+        } else {
+            line << "none";
+        }
+        line << " guestPc=0x" << std::hex << guestPc
+             << " guestRa=0x" << guestRa
+             << " lastBoundaryGeneration=0x" << aotState.lastMaterializerGenerationEntry
+             << " activeGeneration=0x" << aotState.activeGenerationEntry
+             << std::dec
+             << " materializerCalls=" << aotState.materializerCalls
+             << " successfulActivations=" << aotState.successfulActivations
+             << " activeFunctions=" << aotState.activeFunctionCount
+             << " touchedSlots=" << aotState.touchedSlotCount
+             << " processedPressedEdges=0x" << std::hex
+             << bootProgress.processedPressedEdges << std::dec
+             << " processedRightEdge=" << (bootProgress.processedRightEdge ? 1 : 0)
+             << " bootExitFlag=" << bootProgress.bootExitFlag
+             << " state13CAE4=0x" << std::hex << bootProgress.state13CAE4
+             << " state15ED84=0x" << std::hex << bootProgress.state15ED84
+             << " state15ED88=0x" << bootProgress.state15ED88
+             << " state15F600=0x" << bootProgress.state15F600
+             << " state15F604=0x" << bootProgress.state15F604
+             << " state15F618=0x" << bootProgress.state15F618
+             << " state13D364=0x" << bootProgress.state13D364
+             << " state13D36C=0x" << bootProgress.state13D36C << std::dec
+             << " branch2321A4Bypass=" << (bootProgress.branch2321A4Bypass ? 1 : 0)
+             << " branch2321B8Wait=" << (bootProgress.branch2321B8Wait ? 1 : 0)
+             << " branch2321C4EnterSetup=" << (bootProgress.branch2321C4EnterSetup ? 1 : 0)
+             << " callback2195Owner=0x" << std::hex << bootProgress.callback2195OwnerPointer
+             << " callback2195Table=0x" << bootProgress.callback2195TablePointer << std::dec
+             << " callback2195TableReadable=" << (bootProgress.callback2195TableReadable ? 1 : 0)
+             << " callback2195Objects=" << bootProgress.callback2195NonNullObjects
+             << " callback2195ReadableObjects=" << bootProgress.callback2195ReadableObjects
+             << " callback2195NonNullTargets=" << bootProgress.callback2195NonNullTargets
+             << " callback2195MissingSlots=" << callback2195MissingSlots
+             << " callback2195FirstMissing=";
+        if (callback2195FirstMissingTarget != 0u) {
+            line << "0x" << std::hex << callback2195FirstMissingTarget << std::dec;
+        } else {
+            line << "none";
+        }
+        line << " callback2195TargetList=[";
+        bool firstCallback2195Target = true;
+        for (std::size_t slot = 0u; slot < bootProgress.callback2195Targets.size(); ++slot) {
+            const std::uint32_t target = bootProgress.callback2195Targets[slot];
+            if (target == 0u) continue;
+            if (!firstCallback2195Target) line << ',';
+            firstCallback2195Target = false;
+            line << slot << ":0x" << std::hex << target << std::dec
+                 << ':' << (callback2195Dispatchable[slot] ? "dispatchable" : "missing");
+        }
+        line << "]"
+             << " callback21E7C8Present=" << (bootProgress.callback21E7C8Present ? 1 : 0)
+             << " callback21E7C8Slot=";
+        if (bootProgress.callback21E7C8Present) {
+            line << bootProgress.callback21E7C8Slot;
+        } else {
+            line << "none";
+        }
+        line << " callback21E7C8Dispatchable=" << (callback21E7C8Dispatchable ? 1 : 0)
+             << " sharedLoader=0x" << std::hex << bootProgress.sharedLoaderPointer
+             << " sharedPrefix=0x" << bootProgress.sharedLoaderPrefixBytes << std::dec
+             << " firstGenerationStreamSignature="
+             << (bootProgress.firstGenerationStreamSignatureObserved ? 1 : 0)
+             << " wad158FirstRecordHeaderMatched=" << (bootProgress.wad158FirstRecordHeaderMatched ? 1 : 0)
+             << " nextRecord=0x" << std::hex << bootProgress.firstRecordAddress
+             << " nextDestination=0x" << bootProgress.firstDestination
+             << " nextPayloadBytes=0x" << bootProgress.firstPayloadBytes
+             << " nextField8=0x" << bootProgress.firstField8
+             << " nextGeneration=0x" << bootProgress.firstGenerationEntry
+             << std::dec
+             << " bootProgress="
+             << game::rac1BootOverlayProgressStatusName(bootProgress.status)
+             << " ownership=retail-read-only"
+             << " conflictReference=boot-elf-aot"
+             << " status=" << game::rac1OverlayCoherenceStatusName(coherence.status)
+             << '\n';
+        const std::string text = line.str();
+        std::cerr.write(text.data(), static_cast<std::streamsize>(text.size()));
     }
 
     void ensureMappedLevelLoaded() {
@@ -662,11 +955,18 @@ struct OpenRatchetRuntime::Impl {
         }
 
         const bool loaded = nativeRenderer.loadLevel(*level, *runtimeWad);
+        overlayCoherence.reset();
+        lastOverlayAotState.reset();
+        lastBootOverlayProgress.reset();
+        overlayProgressPresentationCount = 0u;
+        rebuildOverlayFallbackAddressSet();
         const auto& summary = nativeRenderer.summary();
         std::cerr << "[OpenRatchet:render:scene-load]"
                   << " nativeLevel=" << requested
                   << " mapped=1"
                   << " materialized=" << (loaded ? 1 : 0)
+                  << " overlaySegments=" << nativeRenderer.levelOverlaySegments().size()
+                  << " overlayBytes=" << nativeRenderer.levelOverlayBytes().size()
                   << " terrainBatches=" << summary.terrainBatches
                   << " staticBatches=" << summary.staticBatches
                   << " terrainTriangles=" << summary.terrainTriangles
@@ -939,18 +1239,144 @@ struct OpenRatchetRuntime::Impl {
                   << " status=" << (accountingOk ? "ok" : "accounting-error") << '\n';
     }
 
-    void presentNativeFrame(PS2Runtime& runtime) {
-        game::publishRac1NativeInputSample(sampleNativeHostInput());
-        inspectLiveMobyState(runtime);
-
-        // PS2Runtime queued its compatibility DrawTexturePro before this callback.
-        // Flush it first, then clear it away so no delayed GS batch can regain
-        // final-frame ownership after OpenRatchet starts drawing.
+    void drawPhase12FrontendDevelopmentScreen(
+        const game::Rac1OverlayAotRuntimeState& aotState,
+        const render::Rac1PresentationReadiness& readiness,
+        const game::Rac1FrontendAutopilotFrame& autopilotFrame) {
         rlDrawRenderBatchActive();
         ClearBackground(BLACK);
 
+        constexpr int kLeft = 28;
+        constexpr int kTop = 28;
+        constexpr int kLine = 28;
+        DrawText("OpenRatchet - Phase 12", kLeft, kTop, 26, RAYWHITE);
+        DrawText("Retail frontend is running, but its PS2 GS fallback is intentionally hidden.",
+                 kLeft, kTop + kLine * 2, 18, LIGHTGRAY);
+        DrawText("Development bridge: navigating the unchanged Retail frontend input path.",
+                 kLeft, kTop + kLine * 3, 18, LIGHTGRAY);
+        DrawText("Your real controller remains merged and becomes fully manual on Veldin.",
+                 kLeft, kTop + kLine * 4, 18, LIGHTGRAY);
+
+        char generation[96]{};
+        std::snprintf(generation,
+                      sizeof(generation),
+                      "Retail generation: 0x%08X   materializer calls: %llu",
+                      static_cast<unsigned>(aotState.activeGenerationEntry),
+                      static_cast<unsigned long long>(aotState.materializerCalls));
+        DrawText(generation, kLeft, kTop + kLine * 6, 18, RAYWHITE);
+
+        char readinessLine[160]{};
+        std::snprintf(readinessLine,
+                      sizeof(readinessLine),
+                      "Level0 AOT:%d  map:%d  renderer:%d  camera:%d",
+                      readiness.level0GenerationActive ? 1 : 0,
+                      readiness.level0Mapped ? 1 : 0,
+                      readiness.nativeRendererReady ? 1 : 0,
+                      readiness.retailCameraReady ? 1 : 0);
+        DrawText(readinessLine, kLeft, kTop + kLine * 7, 18, RAYWHITE);
+
+        char inputLine[128]{};
+        std::snprintf(inputLine,
+                      sizeof(inputLine),
+                      "Frontend navigation: %s%s%s",
+                      autopilotFrame.active ? "automatic" : "complete",
+                      autopilotFrame.pulse == game::Rac1FrontendAutopilotPulse::None
+                          ? ""
+                          : " / pulse=",
+                      autopilotFrame.pulse == game::Rac1FrontendAutopilotPulse::None
+                          ? ""
+                          : game::rac1FrontendAutopilotPulseName(autopilotFrame.pulse));
+        DrawText(inputLine, kLeft, kTop + kLine * 9, 18, LIGHTGRAY);
+        DrawText("Waiting for authentic Level-0 activation (0x00245C28)...",
+                 kLeft, kTop + kLine * 11, 18, GRAY);
+    }
+
+    void presentNativeFrame(PS2Runtime& runtime) {
+        // Phase 12 must not resurrect the known-broken PS2Runtime GS fallback
+        // merely to expose an unfinished frontend. Instead, contribute ordinary
+        // Start/Cross host-pad pulses to the already proved native input path.
+        // The unchanged Retail controller parser remains the sole game-state
+        // authority; no guest memory, generation or menu state is injected.
+        const auto aotStateBeforeInput = game::inspectRac1OverlayAotRuntimeState();
+        const bool level0GenerationAlreadyActive =
+            aotStateBeforeInput.activeGenerationEntry == kLevel0GenerationEntry;
+        const auto autopilotFrame = frontendAutopilot.step(
+            level0GenerationAlreadyActive, sampleNativeHostInput());
+        game::publishRac1NativeInputSample(autopilotFrame.input);
+
+        if (autopilotFrame.active &&
+            autopilotFrame.pulse != game::Rac1FrontendAutopilotPulse::None &&
+            (!lastFrontendAutopilotPulse ||
+             *lastFrontendAutopilotPulse != autopilotFrame.pulse)) {
+            std::cerr << "[OpenRatchet:frontend-dev]"
+                      << " input=autopilot"
+                      << " pulse="
+                      << game::rac1FrontendAutopilotPulseName(autopilotFrame.pulse)
+                      << " frame=" << autopilotFrame.frame
+                      << " parser=retail-FUN_00217328"
+                      << " guestStateMutation=0"
+                      << " status=ok\n";
+        }
+        if (!autopilotFrame.active && !frontendAutopilotStopLogged) {
+            frontendAutopilotStopLogged = true;
+            std::cerr << "[OpenRatchet:frontend-dev]"
+                      << " input=autopilot active=0"
+                      << " reason=level0-generation-active"
+                      << " generationEntry=0x" << std::hex
+                      << aotStateBeforeInput.activeGenerationEntry << std::dec
+                      << " liveController=retained"
+                      << " status=ok\n";
+        }
+        lastFrontendAutopilotPulse = autopilotFrame.pulse;
+
+        inspectLiveMobyState(runtime);
         ensureMappedLevelLoaded();
+        inspectLevelOverlayCoherence(runtime);
         liveRatchetApplyStatus = nativeRenderer.applyLiveRatchetFrame(liveRatchetFrame);
+
+        const auto aotState = game::inspectRac1OverlayAotRuntimeState();
+        const int requested = requestedNativeLevel.load(std::memory_order_acquire);
+        const render::Rac1PresentationReadiness readiness{
+            aotState.activeGenerationEntry == kLevel0GenerationEntry,
+            requested == 0,
+            nativeRenderer.ready(),
+            liveCamera.ok(),
+        };
+        const auto transition = presentationOwnership.observe(readiness);
+        const bool readinessChanged =
+            !lastPresentationReadiness || *lastPresentationReadiness != readiness;
+        if (readinessChanged ||
+            transition == render::Rac1PresentationTransition::AcquiredNativeGameplay) {
+            lastPresentationReadiness = readiness;
+            std::cerr << "[OpenRatchet:render:ownership]"
+                      << " owner="
+                      << render::rac1PresentationOwnerName(presentationOwnership.owner())
+                      << " bridge=phase12-temporary"
+                      << " generationEntry=0x" << std::hex << aotState.activeGenerationEntry
+                      << std::dec
+                      << " level0Mapped=" << (readiness.level0Mapped ? 1 : 0)
+                      << " rendererReady=" << (readiness.nativeRendererReady ? 1 : 0)
+                      << " cameraReady=" << (readiness.retailCameraReady ? 1 : 0);
+            if (transition == render::Rac1PresentationTransition::AcquiredNativeGameplay) {
+                std::cerr << " transition=frontend-dev->native-level0";
+            }
+            std::cerr << " status=ok\n";
+        }
+
+        if (presentationOwnership.developmentFrontendVisible()) {
+            // PS2Runtime has already queued its compatibility framebuffer draw.
+            // Flush it, then erase it: Step 11.6 proved this legacy image is the
+            // fragmented/horizontal-line path that native presentation replaced.
+            // A host-only development screen makes progress observable without
+            // pretending to implement Phase-13/14 Retail UI.
+            drawPhase12FrontendDevelopmentScreen(aotState, readiness, autopilotFrame);
+            return;
+        }
+
+        // One-way ownership cut. Native gameplay can never fall back to GS.
+        rlDrawRenderBatchActive();
+        ClearBackground(BLACK);
+
         const auto skyMap = render::mapLiveSkyRenderState(
             nativeRenderer.nativeSkyShellIdentities(), liveSky);
         const bool sceneRendered = nativeRenderer.ready() && liveCamera.ok();
@@ -975,6 +1401,13 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
         return false;
     }
 
+    impl_->staticElfImage = game::loadRac1StaticElfImage(elf);
+    if (!impl_->staticElfImage.ok()) {
+        std::cerr << "[OpenRatchet:gameplay-overlay] static ELF parse failed status="
+                  << game::rac1StaticElfStatusName(impl_->staticElfImage.status) << '\n';
+        return false;
+    }
+
     const std::filesystem::path extractedRoot = elf.parent_path();
     const std::filesystem::path tocPath = extractedRoot.parent_path() / "toc.json";
     if (!impl_->vfs.initialize(extractedRoot, tocPath)) {
@@ -987,6 +1420,11 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
         impl_.get(),
     });
 
+    // Freeze the generated static function table before any OpenRatchet HLE
+    // replacement mutates its slots. Overlay coherence must reason about stale
+    // recompiled ELF entries, never about native replacements installed later.
+    impl_->snapshotStaticFallbackAddressSet();
+
     game::declareNativeReplacements(impl_->replacements);
 
     // Preserve the verified legacy ordering exactly: the two bootstrap guest
@@ -997,9 +1435,12 @@ bool OpenRatchetRuntime::initialize(const std::filesystem::path& elf) {
                  runtime::NativeReplacementStage::Bootstrap);
 
     // PS2Runtime still owns the fallback EE executor and creates the host
-    // window, but its post-GS/pre-EndDrawing callback is now the deliberate
-    // final presentation ownership cut. OpenRatchet flushes and supersedes the
-    // compatibility framebuffer there, using only proved native scene/live state.
+    // window, but its known-broken compatibility GS image is never restored as
+    // final presentation. Before Phase 13/14 provide native frontend/UI, this
+    // callback draws a host-only development status screen and feeds ordinary
+    // Start/Cross reports through the unchanged Retail controller parser. It
+    // performs a one-way native gameplay ownership cut only after authentic
+    // Level-0 AOT, mapping, renderer and Retail-camera readiness are all proved.
     impl_->eeFallback.setDebugUiCallbacks(
         [](PS2Runtime&, void* userData) {
             static_cast<Impl*>(userData)->initializeNativePresentation();

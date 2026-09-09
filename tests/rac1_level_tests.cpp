@@ -53,7 +53,25 @@ std::vector<std::uint8_t> makeFixture() {
         bytes[gameplayWad + 0x11u + i] = static_cast<std::uint8_t>(0x80u + i);
     }
 
-    // Level-data header: core index, raw GS RAM, then compressed core.
+    // Level-data header: exact overlay records, core index, raw GS RAM, then core.
+    writeRange(bytes, kDataOffset + 0x00u, 0x80u, 0x2cu);
+    const std::size_t overlay = kDataOffset + 0x80u;
+    writeLe32(bytes, overlay + 0x00u, 0x001000u);
+    writeLe32(bytes, overlay + 0x04u, 4u);
+    writeLe32(bytes, overlay + 0x08u, 1u);
+    writeLe32(bytes, overlay + 0x0cu, 0x11111111u);
+    bytes[overlay + 0x10u] = 0x10u;
+    bytes[overlay + 0x11u] = 0x20u;
+    bytes[overlay + 0x12u] = 0x30u;
+    bytes[overlay + 0x13u] = 0x40u;
+    writeLe32(bytes, overlay + 0x14u, 0x002000u);
+    writeLe32(bytes, overlay + 0x18u, 8u);
+    writeLe32(bytes, overlay + 0x1cu, 8u);
+    writeLe32(bytes, overlay + 0x20u, 0x22222222u);
+    for (std::size_t i = 0u; i < 8u; ++i) {
+        bytes[overlay + 0x24u + i] = static_cast<std::uint8_t>(0x50u + i);
+    }
+
     writeRange(bytes, kDataOffset + 0x10u, 0x100u, 0x1000u);
     writeRange(bytes, kDataOffset + 0x18u, 0x1100u, 0x200u);
     writeRange(bytes, kDataOffset + 0x50u, 0x1400u, 0x100u);
@@ -118,7 +136,14 @@ int main() {
                   << ratchet::assets::rac1LevelInspectStatusName(loaded.status) << '\n';
         return 1;
     }
-    if (loaded.coreIndex.size() != 0x1000u || loaded.gsRam.size() != 0x200u ||
+    if (loaded.overlay.size() != 0x2cu || loaded.overlaySegments.size() != 2u ||
+        loaded.overlaySegments[0].destination != 0x001000u ||
+        loaded.overlaySegments[0].payloadOffset != 0x10u ||
+        loaded.overlaySegments[0].payloadSize != 4u ||
+        loaded.overlaySegments[1].destination != 0x002000u ||
+        loaded.overlaySegments[1].payloadOffset != 0x24u ||
+        loaded.overlaySegments[1].payloadSize != 8u ||
+        loaded.coreIndex.size() != 0x1000u || loaded.gsRam.size() != 0x200u ||
         loaded.gsRam.front() != 0xa5u || loaded.core.size() != 32u ||
         loaded.gameplay.size() != 32u || loaded.gameplay.front() != 0x80u) {
         std::cerr << "rac1_level_tests: renderer-owned core/index/GS blobs mismatch\n";
@@ -136,6 +161,8 @@ int main() {
     if (s.levelId != 7u || s.headerSize != 0x2434u ||
         s.discHeaderSector != 102u ||
         s.data.startSector != 110u || s.data.sectorCount != 5u ||
+        s.overlay.offset != 0x80u || s.overlay.size != 0x2cu ||
+        s.overlaySegmentCount != 2u || s.overlayPayloadBytes != 12u ||
         s.coreIndex.offset != 0x100u || s.coreIndex.size != 0x1000u ||
         s.coreData.offset != 0x1400u || s.coreEncodedSize != 0x31u ||
         s.coreDecompressedBytes != 32u || s.gameplayEncodedSize != 0x31u ||
@@ -150,6 +177,38 @@ int main() {
         s.ratchetSequenceTableOffset != 0x9a0u ||
         s.coreHeader7c != 0xabcdefu) {
         std::cerr << "rac1_level_tests: parsed metadata mismatch\n";
+        return 1;
+    }
+
+    const auto emptyOverlay = ratchet::assets::parseRac1LevelOverlay({});
+    if (!emptyOverlay.ok() || !emptyOverlay.segments.empty() || emptyOverlay.payloadBytes != 0u) {
+        std::cerr << "rac1_level_tests: empty overlay must be valid and empty\n";
+        return 1;
+    }
+
+    std::vector<std::uint8_t> truncated(15u, 0u);
+    const auto truncatedOverlay = ratchet::assets::parseRac1LevelOverlay(truncated);
+    if (truncatedOverlay.status != ratchet::assets::Rac1LevelOverlayStatus::TruncatedHeader) {
+        std::cerr << "rac1_level_tests: truncated overlay accepted\n";
+        return 1;
+    }
+
+    std::vector<std::uint8_t> outOfRangePayload(16u, 0u);
+    writeLe32(outOfRangePayload, 0u, 0x001000u);
+    writeLe32(outOfRangePayload, 4u, 8u);
+    const auto outOfRangeOverlay = ratchet::assets::parseRac1LevelOverlay(outOfRangePayload);
+    if (outOfRangeOverlay.status != ratchet::assets::Rac1LevelOverlayStatus::PayloadOutOfRange) {
+        std::cerr << "rac1_level_tests: out-of-range overlay payload accepted\n";
+        return 1;
+    }
+
+    std::vector<std::uint8_t> overflowingDestination(24u, 0u);
+    writeLe32(overflowingDestination, 0u, 0xfffffffcu);
+    writeLe32(overflowingDestination, 4u, 8u);
+    const auto overflowingOverlay =
+        ratchet::assets::parseRac1LevelOverlay(overflowingDestination);
+    if (overflowingOverlay.status != ratchet::assets::Rac1LevelOverlayStatus::DestinationOverflow) {
+        std::cerr << "rac1_level_tests: overflowing overlay destination accepted\n";
         return 1;
     }
 

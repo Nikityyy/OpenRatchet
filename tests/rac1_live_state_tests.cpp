@@ -45,7 +45,7 @@ void setPoolGlobals(std::vector<std::uint8_t>& bytes, std::uint32_t base) {
 void testRetailTraversalAndAnimationLayout() {
     using L = ratchet::game::Rac1LiveMobyLayout;
     constexpr std::uint32_t base = 0x00180020u; // Deliberately not 0x100-aligned.
-    std::vector<std::uint8_t> ram(0x00190000u, 0u);
+    std::vector<std::uint8_t> ram(0x001e0000u, 0u);
     setPoolGlobals(ram, base);
 
     const auto slot = [&](std::size_t index) {
@@ -90,6 +90,7 @@ void testRetailTraversalAndAnimationLayout() {
     writeLe32(ram, slot(2) + L::kClassPointerOffset, 0x00128000u);
     writeLe16(ram, slot(2) + L::kOClassOffset, 0u);
     writeLe32(ram, slot(2) + L::kPoolIndexOffset, 2u);
+    writeLe32(ram, slot(2) + L::kUpdateCallbackOffset, 0x002212b8u);
     ram.at(slot(2) + L::kFrameAOffset) = 9u;
     ram.at(slot(2) + L::kFrameBOffset) = 0u;
     ram.at(slot(2) + L::kSequenceAOffset) = 0u;
@@ -149,9 +150,142 @@ void testRetailTraversalAndAnimationLayout() {
     assert(ratchet.participatesInRetailTraversal);
     assert(ratchet.oClass == 0);
     assert(ratchet.storedPoolIndex == 2u);
+    assert(ratchet.updateCallback == 0x002212b8u);
     assert(ratchet.animation.frameA == 9u);
     assert(ratchet.animation.frameB == 0u);
     assert(std::abs(ratchet.animation.interpolation - 0.625f) < 1.0e-7f);
+
+}
+
+void testRatchetLifecycleStateIdentity() {
+    using L = ratchet::game::Rac1LiveMobyLayout;
+    using State = ratchet::game::Rac1RatchetLifecycleStateLayout;
+    using Status = ratchet::game::Rac1LiveRatchetControlStateStatus;
+
+    constexpr std::uint32_t ratchetMoby = 0x00180000u;
+    constexpr std::uint32_t companionMoby = 0x00180100u;
+    constexpr std::uint32_t ratchetPVar = 0x00140000u;
+    constexpr std::uint32_t state = 0x00125000u;
+    std::vector<std::uint8_t> ram(0x00190000u, 0u);
+
+    ratchet::game::Rac1LiveMobyPoolSnapshot pool;
+    pool.status = ratchet::game::Rac1LiveMobyPoolStatus::Ok;
+    pool.ratchetCandidateCount = 1u;
+
+    ratchet::game::Rac1LiveMobyRecord ratchet;
+    ratchet.guestAddress = ratchetMoby;
+    ratchet.participatesInRetailTraversal = true;
+    ratchet.oClass = 0;
+    ratchet.updateCallback = 0u;
+    pool.records.push_back(ratchet);
+
+    ratchet::game::Rac1LiveMobyRecord companion;
+    companion.guestAddress = companionMoby;
+    companion.participatesInRetailTraversal = true;
+    companion.oClass = State::kCompanionOClass;
+    pool.records.push_back(companion);
+
+    // Exact reciprocal stores proved in FUN_002240C8:
+    //   state+0x44 = Ratchet
+    //   *(Ratchet+0x78)+0 = state
+    writeLe32(ram, ratchetMoby + L::kPVarPointerOffset, ratchetPVar);
+    writeLe32(ram, ratchetPVar + State::kPVarOwnerStateOffset, state);
+    writeLe32(ram, state + State::kRatchetMobyOffset, ratchetMoby);
+
+    // The oClass-0x259 allocation may return zero; FUN_002240C8 still stores
+    // that zero at state+0x48. A missing companion must therefore NOT invalidate
+    // the stronger reciprocal Ratchet/state identity.
+    writeLe32(ram, state + State::kCompanionMobyOffset, 0u);
+
+    // Decoy Ratchet references elsewhere in RDRAM are irrelevant now: there is
+    // no pointer-frequency scan in the identity path.
+    writeLe32(ram, 0x00110000u, ratchetMoby);
+    writeLe32(ram, 0x00110004u, ratchetMoby);
+
+    const auto withoutCompanion =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(withoutCompanion.ok());
+    assert(withoutCompanion.ratchetCandidates == 1u);
+    assert(withoutCompanion.ratchetMoby == ratchetMoby);
+    assert(withoutCompanion.ratchetPVar == ratchetPVar);
+    assert(withoutCompanion.state == state);
+    assert(withoutCompanion.stateRatchetMoby == ratchetMoby);
+    assert(withoutCompanion.companionMoby == 0u);
+    assert(withoutCompanion.companionOClass == 0);
+    assert(!withoutCompanion.companionLive);
+    assert(withoutCompanion.ratchetUpdateCallback == 0u);
+
+    // When the optional constructor companion exists in the live traversal,
+    // report it diagnostically without making it part of state identity.
+    writeLe32(ram, state + State::kCompanionMobyOffset, companionMoby);
+    const auto withCompanion =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(withCompanion.ok());
+    assert(withCompanion.companionMoby == companionMoby);
+    assert(withCompanion.companionOClass == State::kCompanionOClass);
+    assert(withCompanion.companionLive);
+
+    // A stale/inactive companion is still only diagnostics. The reciprocal
+    // Ratchet/PVar/state backlink remains the authoritative identity contract.
+    auto inactiveCompanionPool = pool;
+    inactiveCompanionPool.records[1].participatesInRetailTraversal = false;
+    const auto inactiveCompanion =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, inactiveCompanionPool);
+    assert(inactiveCompanion.ok());
+    assert(inactiveCompanion.companionMoby == companionMoby);
+    assert(inactiveCompanion.companionOClass == State::kCompanionOClass);
+    assert(!inactiveCompanion.companionLive);
+
+    // The reciprocal backlink must close exactly at state+0x44.
+    writeLe32(ram, state + State::kRatchetMobyOffset, companionMoby);
+    const auto mismatch =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(mismatch.status == Status::StateRatchetMismatch);
+    assert(mismatch.state == state);
+    assert(mismatch.stateRatchetMoby == companionMoby);
+    writeLe32(ram, state + State::kRatchetMobyOffset, ratchetMoby);
+
+    // Null PVar and null owner-state are distinct proved failure modes.
+    writeLe32(ram, ratchetMoby + L::kPVarPointerOffset, 0u);
+    const auto noPVar =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(noPVar.status == Status::PVarUnavailable);
+
+    writeLe32(ram, ratchetMoby + L::kPVarPointerOffset, ratchetPVar);
+    writeLe32(ram, ratchetPVar + State::kPVarOwnerStateOffset, 0u);
+    const auto noState =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(noState.status == Status::StateUnavailable);
+
+    // PVar and state pointers must remain wholly inside guest RDRAM.
+    writeLe32(ram, ratchetMoby + L::kPVarPointerOffset,
+              static_cast<std::uint32_t>(ram.size() - 2u));
+    const auto pvarOutOfRange =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(pvarOutOfRange.status == Status::PVarOutOfRange);
+
+    writeLe32(ram, ratchetMoby + L::kPVarPointerOffset, ratchetPVar);
+    writeLe32(ram, ratchetPVar + State::kPVarOwnerStateOffset,
+              static_cast<std::uint32_t>(ram.size() - 0x20u));
+    const auto stateOutOfRange =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, pool);
+    assert(stateOutOfRange.status == Status::StateOutOfRange);
+
+    // Restore the valid backlink before independent uniqueness/size gates.
+    writeLe32(ram, ratchetPVar + State::kPVarOwnerStateOffset, state);
+    auto nonUniquePool = pool;
+    nonUniquePool.ratchetCandidateCount = 2u;
+    auto secondRatchet = ratchet;
+    secondRatchet.guestAddress += 0x200u;
+    nonUniquePool.records.push_back(secondRatchet);
+    const auto nonUnique =
+        ratchet::game::inspectRac1LiveRatchetControlState(ram, nonUniquePool);
+    assert(nonUnique.status == Status::RatchetNotUnique);
+
+    const std::vector<std::uint8_t> tinyRam(3u, 0u);
+    const auto tiny =
+        ratchet::game::inspectRac1LiveRatchetControlState(tinyRam, pool);
+    assert(tiny.status == Status::GuestMemoryTooSmall);
 }
 
 void testPoolNotInitialized() {
@@ -231,8 +365,8 @@ void testRetailRuntimeClassRegistry() {
     // FUN_0020C5F0 also reads 0x1B3580[slot], but stores that independent word
     // at moby+0x74. A conflicting decoy here proves class identity is sourced
     // from 0x1B3200 rather than accidentally regressing to the auxiliary table.
-    writeLe32(ram, L::kRuntimeAuxPointerTableAddress + 3u * 4u, 0x00abc001u);
-    writeLe32(ram, L::kRuntimeAuxPointerTableAddress + 4u * 4u, 0x00abc002u);
+    writeLe32(ram, L::kUpdateCallbackTableAddress + 3u * 4u, 0x00abc001u);
+    writeLe32(ram, L::kUpdateCallbackTableAddress + 4u * 4u, 0x00abc002u);
 
     const auto registry = ratchet::game::inspectRac1LiveMobyClassRegistry(ram, pool);
     assert(registry.ok());
@@ -272,9 +406,12 @@ int main() {
     testMissingTerminatorHardFails();
     testOutOfRangePoolHardFails();
     testRetailRuntimeClassRegistry();
+    testRatchetLifecycleStateIdentity();
 
     assert(std::string_view(ratchet::game::rac1LiveMobyPoolStatusName(
                ratchet::game::Rac1LiveMobyPoolStatus::Ok)) == "ok");
+    assert(std::string_view(ratchet::game::rac1LiveRatchetControlStateStatusName(
+               ratchet::game::Rac1LiveRatchetControlStateStatus::Ok)) == "ok");
     std::cout << "R&C1 live Moby state contract tests passed\n";
     return 0;
 }

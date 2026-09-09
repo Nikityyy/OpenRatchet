@@ -47,6 +47,14 @@ touched again on every validation run. This preserves safe ZIP-based patching
 without repeatedly invalidating the PCH and rebuilding hundreds of generated
 `FUN_*` translation units.
 
+The generated Retail unity wrappers under
+`build/native/openratchet-generated-unity/` and the build-local dense dispatch
+table use the same content gate: equal bytes are not rewritten. Therefore a
+no-op configure/build keeps their timestamps stable; an ordinary native source
+change does not recompile Retail AOT wrappers, while a changed Retail input
+invalidates only its owning wrapper. The measured Windows regression is 255
+unchanged wrapper timestamps before the fix versus 0 after it.
+
 ## Current native boundary
 
 `src/runtime/openratchet_runtime.*` is the top-level host owner. Address-based
@@ -106,22 +114,20 @@ Normal Windows acceptance is now one command instead of four large console dumps
 
 The command runs the Release build, full CTest suite, an automated Level-0 viewer
 smoke run, the mandatory 20-second native runtime run, viewer/runtime render-parity
-comparison and repository/submodule status. The console shows only stage-level
-`RUN`/`PASS`/`FAIL` lines. Full raw evidence is retained under the ignored
-`build/native/verification/<timestamp>/` directory, while the compact handoff report
-is always written to:
+comparison and repository/submodule status. The console shows stage progress and build
+activity. Each run writes exactly one self-contained timestamped report directly under:
 
 ```text
-build/native/verification/latest.md
+build/native/verification/YYYY-MM-DD_HH-MM-SS.md
 ```
 
-For normal review, send only `latest.md`. A raw log is needed only when that report
-identifies a specific failing stage. The viewer smoke duration and runtime duration
-can be adjusted with `-ViewerSmokeSeconds` and `-RuntimeSeconds`; the defaults are
-3 and 20 seconds respectively. `tools/diagnose-native.ps1` is also concise by
-default now. Use `-VerboseSections` only for deep packet/register/resource triage;
-individual diagnostic lines are bounded so malformed or concatenated trace output
-cannot flood the terminal.
+Build, CTest, viewer, runtime stdout/stderr and repository evidence are embedded in that
+one Markdown file, so normal review requires only that file. The build stage also detects
+prolonged output inactivity and can automatically retry a hung build without hiding a
+real compiler failure. The viewer smoke duration and runtime duration can be adjusted
+with `-ViewerSmokeSeconds` and `-RuntimeSeconds`; `-BuildHangSeconds` and
+`-BuildRetries` tune hang recovery. `tools/diagnose-native.ps1` remains concise by
+default; use `-VerboseSections` only for deep packet/register/resource triage.
 
 ### Native level viewer
 
@@ -316,7 +322,10 @@ Retail `FUN_0020C5F0` proves the corrected oracle. It maps `oClass` through the
 0x800-byte table at `0x1B3AC0`, reads the class-data pointer from
 `0x1B3200[slot]`, and stores that pointer at `moby+0x24`. The separate
 `0x1B3580[slot]` word goes to `moby+0x74` and is not used as class identity.
-OpenRatchet now snapshots the `0x1B3200` path coherently with the live pool and
+Step 12.3C later proves that `moby+0x74` is an optional Retail Moby update callback
+slot; Level 0 relocates the corresponding callback registry, so `0x1B3580` remains
+an ELF-era address rather than a Level-0 runtime identity. OpenRatchet now snapshots
+the `0x1B3200` path coherently with the live pool and
 requires exact class-data pointer agreement. The Level-0 catalog remains a
 second-stage topology classification: 125 unique native classes = 14 renderable,
 7 intentionally invisible and 104 class-only. A registry-valid class outside
@@ -527,6 +536,156 @@ and live Mobys whose Retail state is not yet materialized remain explicitly defe
 next active Phase-12 work. Exact lighting, fog and special-material lighting remain
 Phase 21.
 
+Step 12.3C is now focused on the **Retail code-generation chain that reaches controllable
+Veldin**. The completed oracle corrected the old `overlay-not-materialized` interpretation:
+PCSX2 Veldin is already executing Level-0 overlay bytes, not the boot ELF. At `0x001EBA08`
+Retail has opcode `0x0040F809`, while `PS2_MAIN.ELF` has `0x0C085E84`; the Level-0
+executable payload `0x001EAA00..0x002F0CD0` matches oracle RAM byte-for-byte.
+
+Phase 12 deliberately does **not** restore the old PS2Runtime GS presentation. A Windows
+frontend-bridge attempt reproduced the same horizontal-line/fragmented fallback that Step 11.6
+already superseded, so compatibility GS remains suppressed. Until Phase 13/14 implement the real
+frontend/UI, OpenRatchet instead draws a host-native development status screen. A temporary
+Start/Cross autopilot contributes only ordinary host-pad bits to the existing native input sample;
+real controller input is merged and every report still goes through unchanged Retail
+`FUN_00217328`. The helper never writes guest state or forces a generation and stops permanently
+when authentic Level-0 AOT `0x245C28` becomes active. The runtime then performs the existing
+one-way `frontend-dev -> native-level0` ownership transfer once Level-0 mapping, renderer and
+Retail-camera readiness are also proved. Neither GS nor the development screen can regain final
+ownership after that cut. The development frontend/autopilot is removed when Phase 13/14 own the
+actual frontend.
+
+The Windows gate now proves this migration bridge itself: **36/36 CTests** pass, viewer parity
+remains `0xc1069aa5990831b0`, and the unchanged Retail parser consumes autopilot Start
+(`processedPressedEdges=0x8`) and Cross (`0x4000`) edges. Level-0 mapping, renderer and camera
+also become ready, but `bootExitFlag=0`, `materializerCalls=0` and `activeGeneration=0` remain.
+The Boot-exit oracle series has now closed the next boundary. The original breaking-write memcheck and
+v3 `onchange`/`log` attribution attempts are Windows-rejected, but the breakpoint-only v2/v4 path is
+accepted. Retail exits Boot with `0x15F5B0=1` and returns through `0x12DA00` **without ever executing
+`0x21E880`**, so the earlier Right-edge hypothesis is rejected. Generated Boot source distinguishes the
+real stores in `sub_0022E188`: `0x22E190` writes `0x15F600`, while `0x22E19C` returns with delay-slot
+`0x22E1A0: sw $v0,-0x7650($gp)`. The accepted v4 Retail capture proves live `$gp=0x166C00`, `$v0=1`,
+pre-write `0x15F5B0=0`, and `processedEdges=0`; therefore `0x22E1A0` writes exactly `1` to exactly
+`0x15F5B0`. Retail then reaches `0x1EBC2C` with the flag set and returns at `0x12DA00`.
+
+The v4 backtrace is now the authoritative next boundary: the authentic writer path passes through
+`sub_002192A8` at `0x2195F0`, then frame `0x223798` (entry `0x2235B8`), then `sub_0022E188` /
+`0x22E19C` / `0x22E1A0`. Writer discovery is complete. Phase 12 must next determine why OpenRatchet
+fails to reach this transient Retail Boot chain. The comparison must sample callback/owner/list state at
+this exact Boot moment; a later completed-Level-0 snapshot with `[0x1D5BF4]=0` does not rule out a
+transient callback state. Do not write `0x15F5B0`, synthesize the call chain, or force Level-0 AOT.
+
+`build/extracted/wads/wad_158.wad` is a real Retail seven-record overlay artifact with
+entry `0x001E9658`, **908,304 payload bytes** and executable
+`0x001E8D00..0x0023CD18`; it proves that reused guest PCs can contain a third distinct
+code generation and therefore remains supported by the AOT/materialization layer. However,
+the accepted fresh Retail New Game -> Veldin boundary trace supersedes the earlier inference
+that WAD158 is a mandatory outer dispatcher step. At stable generation-call `0x12D9F8`,
+Retail was observed exactly as **PS2_MAIN.ELF -> level_00.wad**. WAD158 may still be
+materialized/used on other paths, but Phase 12 no longer requires its activation before Level 0.
+
+The earlier 12.3C callback probe remains valid evidence for the sampled moments—OpenRatchet's live
+Boot sample had `callback2195Owner=0`, and the completed controllable-Veldin Retail oracle later has
+`[0x1D5BF4]=0` as well—but v4 changes the interpretation. The authentic Boot-exit backtrace passes
+through `sub_002192A8` at `0x2195F0` before reaching `0x223798` and the `0x22E1A0` writer. Therefore the
+completed-Level-0 zero owner does **not** close the transient Boot callback/lifecycle question. The next
+root-cause test must compare that owner/list and dispatch path at the writer boundary itself. Do not
+promote `0x21E7C8`, patch Boot state, or infer a missing callable merely from either zero-owner snapshot.
+
+Phase-12 Boot forensics now use one external first-divergence capture rather than serial state-word
+probes. With PCSX2 paused during the exact Retail Boot generation, run:
+
+```powershell
+.\tools\capture-retail-boot-chain.ps1 -OracleZip C:\path\to\RAC1_RETAIL_ORACLE_LEVEL0_2026-09-08_16-55-13.zip
+```
+
+The read-only tool uses no memory watchpoints. It arms only the stable dispatcher generation-call
+breakpoint at `0x12D9F8`; at each generation handoff it samples the already-proved loader state words
+in two compact read-only blocks, records one GPR snapshot, classifies the resident bytes, and resumes
+immediately. This avoids the stop storm produced by the rejected watchpoint-based capture. The accepted
+Retail trace observed **boot-elf -> level_00** directly. The tool still recognizes WAD158 if another path
+exposes it, but validation requires only Boot first and Level 0 last. If later analysis needs an exact
+writer PC, that is captured with a separate narrow breakpoint trace chosen from the first boundary-state
+divergence. PCSX2 and the oracle remain external evidence; OpenRatchet never loads the 32-MiB oracle
+snapshot at runtime.
+
+`tools/build-native.cmd -Configuration Release` validates/generates both secondary AOT
+modules before compiling OpenRatchet. `tools/rac1_overlay_aot.py` parses WAD158 directly
+as its raw sector-padded overlay stream and Level 0 from the proved `LevelDataHeader`,
+creates deterministic MIPS ELF inputs, runs the repository-owned headless Ghidra exporter,
+recompiles with the pinned patched PS2Recomp, namespaces the modules and writes them only
+under `build/generated/overlays/wad_158` and `build/generated/overlays/level_00`. The boot
+`generated/` output remains unchanged. Ghidra defaults to
+`C:\ghidra_12.1.2_PUBLIC_20260605\ghidra_12.1.2_PUBLIC`; override it through
+`tools/build-native.ps1 -GhidraDir ...` or `OPENRATCHET_GHIDRA_DIR`. Content/tool/output
+hashes make ordinary rebuilds cache hits.
+
+Completeness is structural rather than action-by-action. WAD158 proves **684 unique direct
+in-overlay JAL targets**; Level 0 proves **1,516** and additionally the `0x001EA300` Retail
+registry proves **107 records / 104 non-null callbacks / 75 unique callback PCs**. Those
+75 callback PCs are supplied explicitly to the Ghidra exporter; if Ghidra did not create a
+`Function` automatically, its own CFG/function-body analysis must derive the body from the
+Retail-proved entry or generation aborts. The Python post-gate independently checks the
+result, so OpenRatchet never guesses a callback boundary. Missing entries abort the build.
+The seven-scenario PCSX2 oracle therefore
+does not need to be repeated for every weapon or enemy: original gameplay arrives by
+executing the correct statically recompiled Retail generation.
+
+Runtime selection remains at Retail's own loader boundary. The first `jalr 0x1E9658`
+inside `sub_0012D9D8` is boot-ELF semantics. OpenRatchet calls the original
+`sub_0012D8F8` fallback unchanged and activates exactly the generation entry Retail returns.
+On the accepted normal New Game -> Veldin trace the next observed dispatcher generation is
+`0x245C28` (Level 0) directly. If a different Retail path returns `0x1E9658` after
+materialization, the existing WAD158 AOT module is still available. The original caller's
+`jalr` remains unchanged in either case.
+
+Replacement ownership is generation-relative **and follows Retail's copied record ranges**.
+A boot HLE is not pinned to a numerical PC that a later overlay reuses. For example, boot
+`0x216788` is the proved NativeVFS-backed sector-read wrapper, while Level-0 `0x216788` is
+a `jal 0x233BA0` inside unrelated gameplay code. Each AOT module therefore carries all
+seven exact materialized intervals. When Retail copies a generation, OpenRatchet clears
+every dispatch slot inside those intervals before installing only callable entries proved
+for the new bytes. Slots outside the copied ranges retain their prior owner because Retail
+did not overwrite those bytes. This also removes stale WAD code when a later Level-0
+**data** record covers the same address: `0x1E9128` is the concrete witness, while WAD158
+`0x1EA830` remains because it lies in a Level-0 record gap. An HLE may overlap a later generation only after
+that generation's own ABI has separately been proved. The stable `0x12D8F8` bridge lies
+outside both overlay executable ranges and therefore survives the switches without such a
+cross-generation rule.
+
+AOT fingerprint/protocol schema v8 adds the materialized ranges. Existing valid v7 caches use a
+fail-closed metadata-only upgrade when every semantic input hash is unchanged, so the
+range table is added without rerunning Ghidra/PS2Recomp or rewriting thousands of
+byte-identical generated function bodies.
+
+The accepted range-layered Windows runtime still showed Level 0 at **0/7 materialized
+segments / 0 bytes**, with **17,300/17,300** prospective boot-AOT conflicts. Crucially it
+also proved `materializerCalls=0` and zero activations/touched slots. The supplied generated
+WAD158 module confirms the sampled `0x1EB4F4` and `0x1F3564` PCs were still executing Boot
+semantics, so the blocker is now localized before `sub_0012D8F8`, not inside the AOT switch.
+
+Boot `sub_001EB798` publishes the preloaded overlay stream at `0x15EE4C` and loops while
+`0x15F5B0` remains zero. The unchanged Retail parser `FUN_00217328` writes a processed
+rising-edge word at controller-state offset `+0x1C4` (`0x13CB04`). Retail code at
+`0x21E7C8` is a concrete source-proved writer path that tests bit `0x20` of that processed
+edge word and, under its other Retail conditions, writes one to `0x15F5B0` and `-1` to
+`0x15F600`. The current Boot function CSV/registry does not expose that PC as a standalone
+callable entry, but OpenRatchet does not promote it on that fact alone. The relevant Retail
+consumer is `sub_002192A8` @ `0x2195AC..0x219600`: it walks exactly 14 object slots at
+`[0x1D5BF4]+0x44` and JALRs each non-null `object[0]`. The compact coherence line now samples
+that live target list and classifies every target as `dispatchable` or `missing`, with an
+explicit `0x21E7C8` presence/slot field, in addition to the processed edge word/Right edge,
+Boot exit flag, branch-state words, stream pointer/prefix and first pending record
+(`destination`, payload size, field8 and generation entry) alongside `guestPc`, `guestRa`
+and AOT lifecycle counters. This distinguishes missing preload, missing Boot-exit state, a
+Retail-reached missing callback and a later return/control-flow defect without modifying
+RDRAM.
+
+`tools/verify-native.ps1` now requires successful Level-0 activation at `0x245C28` and
+full Level-0 materialization (`7/7`, `1,645,532/1,645,532`). WAD158 activation is reported
+as optional evidence; if it appears, it must precede Level 0. Every observed activation must
+still install its exact generated functions and the dense table remains
+`0x112380..0x2F0CD0`. Viewer/runtime render parity remains a separate regression gate.
 
 Phase 11 has now promoted the controller and save bootstrap above SIF instead
 of extending the temporary RPC-response table. Retail WAD2/0 descriptor 17
@@ -598,7 +757,15 @@ game memory-card preflight selects its existing non-blocking result until Phase
 sound-bank wrapper is deferred to Phase 18. The asynchronous game-sector helper
 `FUN_00216788` (`0x216788`) now shares the same `NativeVfs::readSectors` ownership
 as synchronous wrapper `0x216828`; the decisive Level-0 request is exactly
-`wads2[69]` (`0x38F6`, `0x834` sectors, `0x41A000` bytes).
+`wads2[69]` (`0x38F6`, `0x834` sectors, `0x41A000` bytes). The later raw-level transition/reload path additionally uses the older async entry
+`FUN_00216728` (`0x216728`) as the proved transport boundary for the complete
+amalgamated Level-0 main-data read `0x1CC6D4/0x19A2`. OpenRatchet owns that boundary
+synchronously on the host while preserving the Retail caller contract (`v0=1` and
+cleared `0x15EEBC/0x15EEC0`) and leaving the private legacy async manager untouched.
+One proved initial-level branch bypasses this specific `0x216728` transition path, so
+absence of that read alone is not a transport failure. The Retail oracle nevertheless
+proves that controllable Veldin has the Level-0 overlay code generation resident; this
+branch must not be used to infer boot-ELF gameplay ownership.
 
 A separate PS2Recomp runtime defect was fixed at its owning runtime boundary:
 synchronous DMAC handlers previously used a synthetic top-of-RDRAM stack that
@@ -629,5 +796,21 @@ The matching `ghidra-emotionengine-reloaded` extension is detected from
 Ghidra's per-user extension directory under
 `%APPDATA%\ghidra\<version>\Extensions`.
 
-The build enables MSVC `/MP` and uses all detected processor cores by default.
-Override with `-Jobs N` if memory pressure becomes a problem.
+The native build enables MSVC `/MP` and invokes MSBuild with `/m`, so independent
+translation units use the available build workers by default. `openratchet` additionally
+aggregates PS2Recomp-generated Retail function sources into explicit build-local wrapper
+translation units bounded by 16 function files and 2 MiB of generated source text. The
+original Boot/WAD158/Level-0 `.cpp` files are included by those wrappers rather than added
+as individual Visual Studio `ClCompile` items; this avoids MSVC `MSB8027` object-name
+collisions when distinct Retail generations contain the same generated basename. Generated
+`register_functions.cpp` and each `openratchet_overlay_table.cpp` remain one source per
+translation unit, but are also compiled through uniquely named one-to-one wrappers so their
+file-scope registry/table state remains isolated. Native OpenRatchet sources remain normal
+translation units. The bounds are configurable through
+`OPENRATCHET_GENERATED_UNITY_BATCH_SIZE` and `OPENRATCHET_GENERATED_UNITY_MAX_BYTES`, and
+the optimization can be disabled for diagnostics with `OPENRATCHET_GENERATED_UNITY=OFF`.
+`tools/build-native.ps1` treats any `MSB8027` occurrence as a hard build failure because
+Microsoft explicitly warns that such collisions can produce an incorrect build result. The
+accepted Windows isolation run reported **3,949 function sources -> 252 bounded function
+TUs + 3 unique registry/table TUs = 255 generated compile TUs**, linked in **00:08:46.115**,
+emitted no `MSB8027`, and passed **33/33 CTest tests**.

@@ -89,6 +89,8 @@ Rac1LiveMobyPoolSnapshot inspectRac1LiveMobyPool(
         record.participatesInRetailTraversal = traversalState >= 0;
         record.classPointer = readLe32(
             guestRdram, address + Rac1LiveMobyLayout::kClassPointerOffset);
+        record.updateCallback = readLe32(
+            guestRdram, address + Rac1LiveMobyLayout::kUpdateCallbackOffset);
         record.oClass = static_cast<std::int16_t>(readLe16(
             guestRdram, address + Rac1LiveMobyLayout::kOClassOffset));
         record.storedPoolIndex = readLe32(
@@ -140,6 +142,96 @@ Rac1LiveMobyPoolSnapshot inspectRac1LiveMobyPool(
 
     out.slotsBeforeTerminator = Rac1LiveMobyLayout::kCapacity;
     out.status = Rac1LiveMobyPoolStatus::MissingTraversalTerminator;
+    return out;
+}
+
+Rac1LiveRatchetControlStateSnapshot inspectRac1LiveRatchetControlState(
+    std::span<const std::uint8_t> guestRdram,
+    const Rac1LiveMobyPoolSnapshot& livePool) {
+    Rac1LiveRatchetControlStateSnapshot out;
+    out.ratchetCandidates = livePool.ratchetCandidateCount;
+    if (livePool.status != Rac1LiveMobyPoolStatus::Ok) {
+        out.status = Rac1LiveRatchetControlStateStatus::PoolUnavailable;
+        return out;
+    }
+
+    const Rac1LiveMobyRecord* ratchet = nullptr;
+    for (const auto& record : livePool.records) {
+        if (!record.participatesInRetailTraversal || record.oClass != 0) continue;
+        if (ratchet != nullptr) {
+            out.status = Rac1LiveRatchetControlStateStatus::RatchetNotUnique;
+            return out;
+        }
+        ratchet = &record;
+    }
+    if (ratchet == nullptr || livePool.ratchetCandidateCount != 1u) {
+        out.status = Rac1LiveRatchetControlStateStatus::RatchetNotUnique;
+        return out;
+    }
+
+    out.ratchetMoby = ratchet->guestAddress;
+    out.ratchetUpdateCallback = ratchet->updateCallback;
+
+    constexpr std::uint32_t pvarOffset = Rac1LiveMobyLayout::kPVarPointerOffset;
+    if (out.ratchetMoby > std::numeric_limits<std::uint32_t>::max() - pvarOffset ||
+        !contains(guestRdram, out.ratchetMoby + pvarOffset, sizeof(std::uint32_t))) {
+        out.status = Rac1LiveRatchetControlStateStatus::GuestMemoryTooSmall;
+        return out;
+    }
+
+    out.ratchetPVar = readLe32(guestRdram, out.ratchetMoby + pvarOffset);
+    if (out.ratchetPVar == 0u) {
+        out.status = Rac1LiveRatchetControlStateStatus::PVarUnavailable;
+        return out;
+    }
+    if (!contains(guestRdram,
+                  out.ratchetPVar + Rac1RatchetLifecycleStateLayout::kPVarOwnerStateOffset,
+                  sizeof(std::uint32_t))) {
+        out.status = Rac1LiveRatchetControlStateStatus::PVarOutOfRange;
+        return out;
+    }
+
+    out.state = readLe32(
+        guestRdram,
+        out.ratchetPVar + Rac1RatchetLifecycleStateLayout::kPVarOwnerStateOffset);
+    if (out.state == 0u) {
+        out.status = Rac1LiveRatchetControlStateStatus::StateUnavailable;
+        return out;
+    }
+
+    constexpr std::uint32_t ratchetOffset =
+        Rac1RatchetLifecycleStateLayout::kRatchetMobyOffset;
+    constexpr std::uint32_t companionOffset =
+        Rac1RatchetLifecycleStateLayout::kCompanionMobyOffset;
+    static_assert(companionOffset == ratchetOffset + sizeof(std::uint32_t));
+    if (out.state > std::numeric_limits<std::uint32_t>::max() - companionOffset ||
+        !contains(guestRdram, out.state + ratchetOffset,
+                  companionOffset - ratchetOffset + sizeof(std::uint32_t))) {
+        out.status = Rac1LiveRatchetControlStateStatus::StateOutOfRange;
+        return out;
+    }
+
+    out.stateRatchetMoby = readLe32(guestRdram, out.state + ratchetOffset);
+    out.companionMoby = readLe32(guestRdram, out.state + companionOffset);
+
+    // +0x48 is optional by construction: FUN_002240C8 stores the return value
+    // of func_225490(0x259) even when allocation returned zero. Preserve it only
+    // as read-only diagnostics and never use it to manufacture state identity.
+    if (out.companionMoby != 0u) {
+        for (const auto& record : livePool.records) {
+            if (record.guestAddress != out.companionMoby) continue;
+            out.companionOClass = record.oClass;
+            out.companionLive = record.participatesInRetailTraversal;
+            break;
+        }
+    }
+
+    if (out.stateRatchetMoby != out.ratchetMoby) {
+        out.status = Rac1LiveRatchetControlStateStatus::StateRatchetMismatch;
+        return out;
+    }
+
+    out.status = Rac1LiveRatchetControlStateStatus::Ok;
     return out;
 }
 
@@ -228,6 +320,31 @@ const char* rac1LiveMobyPoolStatusName(Rac1LiveMobyPoolStatus status) {
         return "pool-last-slot-mismatch";
     case Rac1LiveMobyPoolStatus::MissingTraversalTerminator:
         return "missing-traversal-terminator";
+    }
+    return "unknown";
+}
+
+const char* rac1LiveRatchetControlStateStatusName(
+    Rac1LiveRatchetControlStateStatus status) noexcept {
+    switch (status) {
+    case Rac1LiveRatchetControlStateStatus::Ok:
+        return "ok";
+    case Rac1LiveRatchetControlStateStatus::PoolUnavailable:
+        return "pool-unavailable";
+    case Rac1LiveRatchetControlStateStatus::RatchetNotUnique:
+        return "ratchet-not-unique";
+    case Rac1LiveRatchetControlStateStatus::GuestMemoryTooSmall:
+        return "guest-memory-too-small";
+    case Rac1LiveRatchetControlStateStatus::PVarUnavailable:
+        return "pvar-unavailable";
+    case Rac1LiveRatchetControlStateStatus::PVarOutOfRange:
+        return "pvar-out-of-range";
+    case Rac1LiveRatchetControlStateStatus::StateUnavailable:
+        return "state-unavailable";
+    case Rac1LiveRatchetControlStateStatus::StateOutOfRange:
+        return "state-out-of-range";
+    case Rac1LiveRatchetControlStateStatus::StateRatchetMismatch:
+        return "state-ratchet-mismatch";
     }
     return "unknown";
 }
